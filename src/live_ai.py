@@ -12,7 +12,7 @@ class LiveAi:
         
         self.audio_in = AudioWrapper(model_path=config.audio_input.model_path)
         self.audio_out = AudioGenerator(model_path=config.audio_output.model_path)
-        self.logger.info("[🚀] Connecting to LLM Model ...")
+        self.logger.info("🚀 Connecting to LLM Model ...")
         self.lm_client = OpenAI(
             base_url=config.llm_model.url, 
             api_key=config.llm_model.api_key
@@ -22,7 +22,7 @@ class LiveAi:
         """
         Use OpenAI API to get a response from the LLM model.
         """
-        self.logger.info(f"[🤖: {self.config.llm_model.model}] Sending to the LLM Model ...")
+        self.logger.info(f"Sending to [🤖: {self.config.llm_model.model}] ...")
         self.logger.info(f"Prompt: {prompt}")
         resp = self.lm_client.chat.completions.create(
             model=self.config.llm_model.model,
@@ -37,20 +37,24 @@ class LiveAi:
         return answer
     
     def run(self):
-        self.logger.info("Ready. Press Enter to speak, or Ctrl+C to quit.")
+        self.logger.info("Ready. Press Ctrl+C to quit.")
         while True:
             try:
-                self.logger.info("[⏺] Press Enter to record...")
+                self.logger.info("▶️  Press Enter to record...")
                 input()
-                audio = self.audio_in.record_audio(duration=self.config.audio_input.record_seconds)
+                audio = self.audio_in.record_audio(
+                    duration=self.config.audio_input.record_seconds,
+                    silence_threshold=self.config.audio_input.silence_threshold,
+                    silence_timeout=self.config.audio_input.silence_timeout
+                )
                 if audio is None:
-                    self.logger.warning("[!] No audio captured.")
+                    self.logger.warning("⚠️ No audio captured.")
                     continue
                 prompt = self.audio_in.transcribe(save_audio_wav(audio))
                 if not prompt:
-                    self.logger.warning("[!] Empty transcription, skipping.")
+                    self.logger.warning("⚠️ Empty transcription, skipping.")
                     continue
                 self.audio_out.streaming_audio(self.llm_chat(prompt))
-            except KeyboardInterrupt:
-                self.logger.info("[👋] Exiting.")
+            except KeyboardInterrupt, EOFError:
+                self.logger.info("👋 Exiting.")
                 break

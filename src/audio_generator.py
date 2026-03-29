@@ -18,7 +18,7 @@ class AudioGenerator:
             raise FileNotFoundError(f"Voice model file not found: {model_path}")
         
         self.logger = getLogger(self.__class__.__name__)
-        self.logger.info("[🚀] Loading Piper model...")
+        self.logger.info(f"🚀 Loading Audio Generator model from {model_path} ...")
         self.voice = PiperVoice.load(model_path)
         self.syn_config = SynthesisConfig(
             volume=volume,
@@ -35,18 +35,18 @@ class AudioGenerator:
         
     def __exit__(self, exc_type, exc_value, traceback):
         if self.stream:
-            self.logger.info("[🧹] Closing audio output stream...")
+            self.logger.info("🧹 Closing audio output stream...")
             self.stream.close()
 
     def save_audio(self, text: str, file_path: Path):
         with wave.open(str(file_path), "wb") as wav_file:
             self.voice.synthesize_wav(text, wav_file, syn_config=self.syn_config)
-        self.logger.info(f"[💾] Audio saved to {file_path.name}")
+        self.logger.info(f"💾 Audio saved to {file_path.name}")
 
     def streaming_audio(self, text: str):
-        self.logger.info("[🔊] Streaming output audio ...")
+        self.logger.info("🔊 Streaming output audio ...")
         self.stream.start()
         for chunk in self.voice.synthesize(text, syn_config=self.syn_config):
             self.stream.write(chunk.audio_int16_bytes)
         self.stream.stop()
-        self.logger.info("[🔊] Finished streaming audio.")
+        self.logger.info("🔊 Finished streaming audio.")
