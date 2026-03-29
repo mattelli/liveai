@@ -22,7 +22,7 @@ class LiveAi:
         """
         Use OpenAI API to get a response from the LLM model.
         """
-        self.logger.info("[🤖] Sending to LLM Model ...")
+        self.logger.info(f"[🤖: {self.config.llm_model.model}] Sending to the LLM Model ...")
         self.logger.info(f"Prompt: {prompt}")
         resp = self.lm_client.chat.completions.create(
             model=self.config.llm_model.model,

@@ -80,7 +80,6 @@ class AudioWrapper:
         Record audio from microphone for a given duration [seconds].
         """
         self.logger.info(f"[🎤] Recording for {duration} seconds...")
-        self.logger.info("[⏹] Press Ctrl+C to stop early")
         audio = sd.rec(
             frames=int(duration * samplerate),
             samplerate=samplerate,
