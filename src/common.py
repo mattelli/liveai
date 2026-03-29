@@ -35,4 +35,3 @@ def load_config(config_path: Path) -> SimpleNamespace:
 
     return namespace_from_dict(data, config_dir)
 
-

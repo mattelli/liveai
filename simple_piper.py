@@ -1,39 +1,16 @@
-import wave
-import sounddevice as sd
-from piper import PiperVoice, SynthesisConfig
-from res import VOICES_DIR
+#!/usr/bin/env python3
+"""
+Simple example: generate audio from text with piper.
+"""
+import logging
+from pathlib import Path
+from src.audio_generator import AudioGenerator
+MODEL_PATH = "res/voices/en_US-hfc_female-medium.onnx"
 
-syn_config = SynthesisConfig(
-    volume=0.5,  # half as loud
-    length_scale=1.5,  # twice as slow
-    noise_scale=1.0,  # more audio variation
-    noise_w_scale=1.0,  # more speaking variation
-    normalize_audio=False, # use raw audio from voice
-)
-
-voice = PiperVoice.load(VOICES_DIR / "en_US-hfc_female-medium.onnx")
-
-stream = sd.RawOutputStream(
-    samplerate=22050,
-    channels=1,
-    dtype="int16"
-)
-
-
-def save_audio(text: str):
-    with wave.open("test.wav", "wb") as wav_file:
-        voice.synthesize_wav(text, wav_file, syn_config=syn_config)
-
-    
-def streaming_audio(text: str):
-    stream.start()
-    for chunk in voice.synthesize(text, syn_config=syn_config):
-        stream.write(chunk.audio_int16_bytes)
-    stream.stop()
-    stream.close()
-
+text = "Hello Jenilyn you are original!"
 
 if __name__ == "__main__":
-    text = "Hello Jenilyn you are original!"
-    save_audio(text)
-    # streaming_audio(text)
+    logging.basicConfig(level=logging.INFO)
+    audio_gen = AudioGenerator(model_path=Path(MODEL_PATH))
+    audio_gen.save_audio(text, file_path=Path("output.wav"))
+    audio_gen.streaming_audio(text)
