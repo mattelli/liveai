@@ -1,0 +1,21 @@
+[whisper] # Audio input settings
+model_path= "res/faster-whisper-medium"
+language = "en"
+samplerate = 22050
+channels = 1
+datatype = "int16"
+record_seconds = 3
+beam_size = 5
+
+[lm_studio] # Language model settings
+url = "http://localhost:1234/v1"
+model = "qwen3.5-0.8b"
+api_key = "lm-studio"
+temperature = 0.7
+system_prompt = "You are a helpful assistant. Answer the user's question concisely and accurately."
+
+[piper] # Audio output settings
+model_path = "res/voices/en_US-hfc_female-medium.onnx"
+samplerate = 22050
+channels = 1
+datatype = "int16"
