@@ -56,9 +56,9 @@ class LiveAi:
             self.audio_q.put(indata.copy())
         
         self.logger.info(f"[🎙] Recording for {seconds} seconds...")
-        self.audio_q.queue.clear()
+        self.audio_q = Queue()
         with sd.InputStream(
-            device=None,
+            device=1,
             samplerate=self.config.whisper.samplerate, 
             channels=self.config.whisper.channels, 
             callback=audio_callback

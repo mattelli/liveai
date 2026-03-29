@@ -6,9 +6,14 @@ import soundfile as sf
 import numpy as np
 from faster_whisper import WhisperModel
 
+sd.default.device = 1  # Set default input device (change index as needed)
+
 
 def list_devices():
-    """List available audio input devices."""
+    """
+    List available audio input devices.
+    Make sure App can use the mic under settings
+    """
     print("\n[🎤] Available input devices:")
     devices = sd.query_devices(kind='input')
     print(devices)
@@ -23,9 +28,9 @@ def record_audio(duration: float = 3.0, samplerate: int = 16000) -> np.ndarray:
     audio = sd.rec(
         frames=int(duration * samplerate),
         samplerate=samplerate,
-        channels=1,
+        channels=2,
         dtype='float32',
-        device=None  # Use default input device
+        device=1  # Use default input device
     )
     
     sd.wait()  # Wait until recording is finished
@@ -70,11 +75,11 @@ def main():
     SAMPLERATE = 16000  # Hz (lower = faster, 16k is fine for Whisper)
     
     # Step 1: List available devices
-    # list_devices()
+    list_devices()
     
     # Step 2: Record audio
-    # audio = record_audio(DURATION, SAMPLERATE)
-    audio = get_audio_tone(duration=DURATION, samplerate=SAMPLERATE, frequency=440.0)  # For testing with tone
+    audio = record_audio(DURATION, SAMPLERATE)
+    # audio = get_audio_tone(duration=DURATION, samplerate=SAMPLERATE, frequency=440.0)  # For testing with tone
     
     # Step 3: Save to temp file
     wav_path = save_temp_wav(audio, SAMPLERATE)
