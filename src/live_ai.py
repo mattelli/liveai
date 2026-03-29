@@ -1,6 +1,4 @@
-import subprocess
 import sys
-import tempfile
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
