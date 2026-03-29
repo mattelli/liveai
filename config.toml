@@ -2,10 +2,15 @@
 model_path= "res/faster-whisper-medium"
 record_seconds = 6
 
-[lm_studio] # Language model settings
-url = "http://localhost:1234/v1"
-model = "qwen3.5-0.8b"
-api_key = "lm-studio"
+[llm_model] # OpenAI API configuration
+url = "https://api.minimax.io/v1"
+model = "MiniMax-M2.5"
+api_key = "your_api_key_here"
+
+# url = "http://localhost:1234/v1"
+# model = "qwen3.5-0.8b"
+# api_key = "localhost"
+
 temperature = 0.7
 system_prompt = "You are a helpful assistant. Answer the user's question concisely and accurately."
 

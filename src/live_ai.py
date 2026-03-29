@@ -14,20 +14,23 @@ class LiveAi:
         self.audio_out = AudioGenerator(model_path=config.audio_output.model_path)
         self.logger.info("[🚀] Connecting to LLM Model ...")
         self.lm_client = OpenAI(
-            base_url=config.lm_studio.url, 
-            api_key=config.lm_studio.api_key
+            base_url=config.llm_model.url, 
+            api_key=config.llm_model.api_key
         )
     
-    def lm_studio_chat(self, prompt: str) -> str:
-        self.logger.info("[🤖] Sending to LM Studio...")
+    def llm_chat(self, prompt: str) -> str:
+        """
+        Use OpenAI API to get a response from the LLM model.
+        """
+        self.logger.info("[🤖] Sending to LLM Model ...")
         self.logger.info(f"Prompt: {prompt}")
         resp = self.lm_client.chat.completions.create(
-            model=self.config.lm_studio.model,
+            model=self.config.llm_model.model,
             messages=[
-                {"role": "system", "content": self.config.lm_studio.system_prompt},
+                {"role": "system", "content": self.config.llm_model.system_prompt},
                 {"role": "user", "content": prompt},
             ],
-            temperature=self.config.lm_studio.temperature,
+            temperature=self.config.llm_model.temperature,
         )
         answer = resp.choices[0].message.content.strip()
         self.logger.info(f"[LLM] {answer}")
@@ -47,7 +50,7 @@ class LiveAi:
                 if not prompt:
                     self.logger.warning("[!] Empty transcription, skipping.")
                     continue
-                self.audio_out.streaming_audio(self.lm_studio_chat(prompt))
+                self.audio_out.streaming_audio(self.llm_chat(prompt))
             except KeyboardInterrupt:
                 self.logger.info("[👋] Exiting.")
                 break
