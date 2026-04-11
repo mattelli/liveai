@@ -1,3 +1,4 @@
+import sys
 import time
 import sounddevice as sd
 import soundfile as sf
@@ -52,7 +53,13 @@ class AudioWrapper:
             silence_timeout: float = 1.5,
         ):
         self.logger = getLogger(self.__class__.__name__)
-        devices = sd.query_devices(kind='input')
+        try:
+            devices = sd.query_devices(kind='input')
+        except Exception as e:
+            self.logger.critical(f"{e}")
+            self.logger.info("Please check microphone settings and try again.")
+            sys.exit(1)
+        
         if devices and isinstance(devices, dict):
             devices = [devices]
         if len(devices) == 0:
