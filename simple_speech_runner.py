@@ -20,8 +20,8 @@ def main():
     sd = SpeechDetector(model_path=Path(MODEL_PATH))
     sg = SpeechGenerator(model_path=Path(VOICE_MODEL_PATH))
     
-    audio_in = sd.listen(duration=DURATION)
-    wav_path = audio_to_wav(audio=audio_in, samplerate=SAMPLERATE)
+    audio_in = sd.listen(duration_s=DURATION)
+    wav_path = audio_to_wav(audio=audio_in)
     text = sd.transcribe(wav_path)
     sg.speak(text)
 

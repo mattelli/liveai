@@ -10,8 +10,15 @@ class LiveAi:
         self.logger = getLogger(self.__class__.__name__)
         self.config = config
         
-        self.detector = SpeechDetector(model_path=config.speech_det.model_path)
-        self.speech = SpeechGenerator(model_path=config.speech_gen.model_path)
+        self.detector = SpeechDetector(
+            model_path=config.speech_det.model_path, 
+            silence_timeout_s=config.speech_det.silence_timeout,
+            language=config.speech_det.language
+            )
+        self.speech = SpeechGenerator(
+            model_path=config.speech_gen.model_path,
+            samplerate=config.speech_gen.samplerate
+        )
         self.logger.info("🚀 Connecting to LLM Model ...")
         self.lm_client = OpenAI(
             base_url=config.brain.url, 
@@ -41,12 +48,8 @@ class LiveAi:
         Listen for audio input, transcribe it and return the text prompt.
         """
         audio = self.detector.listen(
-            duration=self.config.speech_det.record_seconds,
-            silence_threshold=self.config.speech_det.silence_threshold,
-            silence_timeout=self.config.speech_det.silence_timeout
+            duration_s=self.config.speech_det.listen_time_s,
         )
-        if audio is None:
-            self.logger.warning("⚠️ No audio captured.")
         text = self.detector.transcribe(audio_to_wav(audio))
         return text
 

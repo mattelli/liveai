@@ -34,6 +34,22 @@ def audio_to_wav(
     return out_file
 
 
+def compute_silence_threshold(
+        device: InputAudioDevice,
+        rms_values_size: int = 10,
+        samplerate: int = 16000,
+        chunk_size_s: float = 0.1,
+    ) -> float:
+    chunk_frames = int(chunk_size_s * samplerate)
+    rms_values: list[float] = []
+    with sd.InputStream(samplerate=samplerate, channels=1, dtype='int16', device=device.index) as stream:
+        while len(rms_values) <= rms_values_size:
+            chunk, _ = stream.read(chunk_frames)
+            rms_values.append(np.sqrt(np.mean(chunk.astype(np.float32)**2)))
+    threshold = 1.5 * np.mean(rms_values)
+    return threshold
+
+
 class InputAudioDevice:
     
     def __init__(self):
@@ -44,14 +60,12 @@ class InputAudioDevice:
             self.logger.critical(f"{e}")
             self.logger.info("Please check microphone settings and try again.")
             sys.exit(1)
-            
         if devices and isinstance(devices, dict):
             devices = [devices]
         if len(devices) == 0:
             raise ValueError("No audio input devices found")
         else:
             self.logger.info(f"Found {len(devices)} audio input devices.")
-        
         self.name = str(devices[0].get("name", "Unknown Device"))
         self.index = int(devices[0].get("index", 0))
         self.default_samplerate = int(devices[0].get("default_samplerate", 16000))
@@ -64,8 +78,7 @@ class SpeechDetector:
             model_path: Path, 
             language: str = "en", 
             beam_size: int = 5,
-            silence_threshold: float = 0.02,
-            silence_timeout: float = 1.5,
+            silence_timeout_s: float = 1.5,
         ):
         if not model_path.exists():
             raise FileNotFoundError(f"Model file not found: {model_path}")
@@ -76,51 +89,52 @@ class SpeechDetector:
         self.model = WhisperModel(str(model_path), device="cpu", compute_type="int16")
         self.language = language
         self.beam_size = beam_size
-        self.silence_threshold = silence_threshold  # RMS level for silence detection
-        self.silence_timeout = silence_timeout      # Seconds of silence before considering speech ended
-
+        self.silence_timeout = silence_timeout_s
+        self.silence_threshold = compute_silence_threshold(self.device)
+        self.logger.info(f"✅ Model loaded. Silence threshold set to: {self.silence_threshold:.3f}")
+    
     def listen(
-        self,
-        duration: float,
-        samplerate: int = 16000,
-        channels: int = 1,
-        datatype: str = 'int16',
-        silence_threshold: float = 0.01,
-        silence_timeout: float = 1.5,
-        chunk_size: float = 0.1
-    ) -> np.ndarray:
+            self,
+            duration_s: float,
+            channels: int = 1,
+            samplerate: int = 16000,
+            chunk_size_s: float = 0.1,
+            datatype: str = 'int16',
+        ) -> np.ndarray:
         """
         Record audio until:
         - duration is reached, OR
         - RMS stays below silence_threshold for > silence_timeout seconds.
         Non-blocking, chunk-based recording.
         """
-        self.logger.info(f"🎤 Recording up to {duration} seconds...")
-        chunk_frames = int(chunk_size * samplerate)
-        recorded_chunks = []
-        silence_start = None
+        self.logger.info(f"🎤 Recording up to {duration_s} seconds...")
+        chunk_frames = int(chunk_size_s * samplerate)
+        recorded_chunks: list[np.ndarray] = []
+        silence_start: float | None = None
+        
         start_time = time.time()
-
-        with sd.InputStream(
-            samplerate=samplerate, channels=channels, dtype=datatype, device=self.device.index) as stream:
+        with sd.InputStream(samplerate=samplerate, channels=channels, dtype=datatype, device=self.device.index) as stream:
             while True:
                 chunk, _ = stream.read(chunk_frames)
                 recorded_chunks.append(chunk)
                 rms = np.sqrt(np.mean(chunk.astype(np.float32)**2))
-                print(f"\rIN-Audio RMS: {rms:.4f}", end="")
-                if rms < silence_threshold:
+                print(f"\rIN-Audio RMS: {rms:.3f} | threshold: {self.silence_threshold:.3f} ", end="")
+                if rms < self.silence_threshold:
                     if silence_start is None:
                         silence_start = time.time()
-                    elif time.time() - silence_start >= silence_timeout:
-                        self.logger.info(f" ⏹️  Stopping due to silence timeout: {silence_timeout} s")
+                    elif time.time() - silence_start >= self.silence_timeout:
+                        self.logger.info(f" ⏹️  Stopping due to silence timeout: {self.silence_timeout} s")
                         break
                 else:
                     silence_start = None
-                if time.time() - start_time >= duration:
-                    self.logger.info(f" ⏹️  Max duration reached: {duration} s")
+                if time.time() - start_time >= duration_s:
+                    self.logger.info(f" ⏹️  Max duration reached: {duration_s} s")
                     break
+        
         audio = np.concatenate(recorded_chunks, axis=0)
         self.logger.info(f"✅ Recorded {len(audio)} samples")
+        if np.sqrt(np.mean(audio.astype(np.float32)**2)) < self.silence_threshold:
+            audio = np.array([], dtype=audio.dtype)
         return audio
         
     def transcribe(self, wav_path: Path) -> str:
