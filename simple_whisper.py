@@ -3,7 +3,7 @@
 Simple example: record audio and transcribe with faster-whisper.
 """
 import logging
-from src.audio_wrapper import save_audio_wav, AudioWrapper
+from src.audio_wrapper import save_audio_wav, SpeechDetector
 
 
 def main():
@@ -11,17 +11,13 @@ def main():
     DURATION = 3.0  # seconds
     SAMPLERATE = 16000 
     MODEL_PATH = "res/faster-whisper-medium"
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%H:%M:%S"
-    )
+    logging.basicConfig(level=logging.INFO)
     
     # Initialize audio wrapper
-    audio_wrapper = AudioWrapper(model_path=MODEL_PATH)
-    audio = audio_wrapper.record_audio(duration=DURATION)
+    sd = SpeechDetector(model_path=MODEL_PATH)
+    audio = sd.record_audio(duration=DURATION)
     wav_path = save_audio_wav(audio=audio, samplerate=SAMPLERATE)
-    text = audio_wrapper.transcribe(wav_path)
+    text = sd.transcribe(wav_path)
 
     print(f"\n{'='*50}")
     print(f"[📢] Transcription:")

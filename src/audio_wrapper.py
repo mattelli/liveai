@@ -4,7 +4,6 @@ import sounddevice as sd
 import soundfile as sf
 import numpy as np
 from pathlib import Path
-from dataclasses import dataclass
 from logging import getLogger
 from faster_whisper import WhisperModel
 
@@ -35,15 +34,31 @@ def save_audio_wav(
     return out_file
 
 
-@dataclass
 class InputAudioDevice:
-    name: str
-    index: int
-    default_samplerate: int
-    max_channels: int
+    
+    def __init__(self):
+        self.logger = getLogger(self.__class__.__name__)
+        try:
+            devices = sd.query_devices(kind='input')
+        except Exception as e:
+            self.logger.critical(f"{e}")
+            self.logger.info("Please check microphone settings and try again.")
+            sys.exit(1)
+            
+        if devices and isinstance(devices, dict):
+            devices = [devices]
+        if len(devices) == 0:
+            raise ValueError("No audio input devices found")
+        else:
+            self.logger.info(f"Found {len(devices)} audio input devices.")
+        
+        self.name = str(devices[0].get("name", "Unknown Device"))
+        self.index = int(devices[0].get("index", 0))
+        self.default_samplerate = int(devices[0].get("default_samplerate", 16000))
+        self.max_channel = int(devices[0].get("max_input_channels", 1))
 
 
-class AudioWrapper:
+class SpeechDetector:
     def __init__(
             self, 
             model_path: str, 
@@ -53,62 +68,15 @@ class AudioWrapper:
             silence_timeout: float = 1.5,
         ):
         self.logger = getLogger(self.__class__.__name__)
-        try:
-            devices = sd.query_devices(kind='input')
-        except Exception as e:
-            self.logger.critical(f"{e}")
-            self.logger.info("Please check microphone settings and try again.")
-            sys.exit(1)
-        
-        if devices and isinstance(devices, dict):
-            devices = [devices]
-        if len(devices) == 0:
-            raise ValueError("No audio input devices found")
-        else:
-            self.logger.info(f"Found {len(devices)} audio input devices.")
-            
-        self.device = InputAudioDevice(
-            name=devices[0].get("name", "Unknown Device"),
-            index=int(devices[0].get("index", 0)),
-            default_samplerate=int(devices[0].get("default_samplerate", 16000)),
-            max_channels=int(devices[0].get("max_input_channels", 1))
-        )
+        self.device = InputAudioDevice()
         self.logger.info(f"⚙️  Using audio input device: {self.device.name} (index {self.device.index})")
         self.logger.info(f"🚀 Loading Audio to Text model from {model_path} ...")
         self.model = WhisperModel(str(model_path), device="cpu", compute_type="int16")
         self.language = language
         self.beam_size = beam_size
-        
-        # Voice command detection settings
         self.silence_threshold = silence_threshold  # RMS level for silence detection
         self.silence_timeout = silence_timeout      # Seconds of silence before considering speech ended
-    
-    def _rms_level(self, audio: np.ndarray) -> float:
-        """Calculate RMS (Root Mean Square) level of audio."""
-        return np.sqrt(np.mean(audio.astype(float) ** 2))
 
-    def record_audio_wait(
-            self, 
-            duration: float, 
-            samplerate: int = 16000,
-            channels: int = 1, 
-            datatype: str = 'int16'
-        ) -> np.ndarray:
-        """
-        Record audio from microphone for a given duration [seconds].
-        """
-        self.logger.info(f"🎤 Recording for {duration} seconds...")
-        audio = sd.rec(
-            frames=int(duration * samplerate),
-            samplerate=samplerate,
-            channels=channels,
-            dtype=datatype,
-            device=self.device.index
-        )
-        sd.wait()  # Wait until recording is finished
-        self.logger.info(f"✅ Recorded {len(audio)} samples")
-        return audio
-    
     def record_audio(
         self,
         duration: float,
@@ -131,13 +99,7 @@ class AudioWrapper:
         silence_start = None
         start_time = time.time()
 
-        with sd.InputStream(
-            samplerate=samplerate,
-            channels=channels,
-            dtype=datatype,
-            device=self.device.index
-        ) as stream:
-
+        with sd.InputStream(samplerate, channels, dtype=datatype, device=self.device.index) as stream:
             while True:
                 chunk, _ = stream.read(chunk_frames)
                 recorded_chunks.append(chunk)
@@ -147,12 +109,12 @@ class AudioWrapper:
                     if silence_start is None:
                         silence_start = time.time()
                     elif time.time() - silence_start >= silence_timeout:
-                        self.logger.info(f"⏹️  Stopping due to silence timeout: {silence_timeout} s")
+                        self.logger.info(f" ⏹️  Stopping due to silence timeout: {silence_timeout} s")
                         break
                 else:
                     silence_start = None
                 if time.time() - start_time >= duration:
-                    self.logger.info(f"⏹️  Max duration reached: {duration} s")
+                    self.logger.info(f" ⏹️  Max duration reached: {duration} s")
                     break
         audio = np.concatenate(recorded_chunks, axis=0)
         self.logger.info(f"✅ Recorded {len(audio)} samples")
