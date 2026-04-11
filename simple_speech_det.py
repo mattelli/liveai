@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-Simple example: record audio and transcribe with faster-whisper.
+Simple example: detect speech and transcribe it.
 """
 import logging
-from src.audio_wrapper import save_audio_wav, SpeechDetector
+from pathlib import Path
+from src.audio_wrapper import audio_to_wav, SpeechDetector
 
 
 def main():
@@ -14,10 +15,10 @@ def main():
     logging.basicConfig(level=logging.INFO)
     
     # Initialize audio wrapper
-    sd = SpeechDetector(model_path=MODEL_PATH)
-    audio = sd.record_audio(duration=DURATION)
-    wav_path = save_audio_wav(audio=audio, samplerate=SAMPLERATE)
-    text = sd.transcribe(wav_path)
+    detector = SpeechDetector(model_path=Path(MODEL_PATH))
+    audio = detector.listen(duration=DURATION)
+    wav_path = audio_to_wav(audio=audio, samplerate=SAMPLERATE)
+    text = detector.transcribe(wav_path)
 
     print(f"\n{'='*50}")
     print(f"[📢] Transcription:")

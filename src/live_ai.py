@@ -1,6 +1,6 @@
 from openai import OpenAI
 from logging import getLogger
-from src.audio_wrapper import SpeechDetector, save_audio_wav
+from src.audio_wrapper import SpeechDetector, audio_to_wav
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
 
@@ -10,8 +10,8 @@ class LiveAi:
         self.logger = getLogger(self.__class__.__name__)
         self.config = config
         
-        self.audio_in = SpeechDetector(model_path=config.audio_input.model_path)
-        self.audio_out = SpeechGenerator(model_path=config.audio_output.model_path)
+        self.detector = SpeechDetector(model_path=config.audio_input.model_path)
+        self.speech = SpeechGenerator(model_path=config.audio_output.model_path)
         self.logger.info("🚀 Connecting to LLM Model ...")
         self.lm_client = OpenAI(
             base_url=config.llm_model.url, 
@@ -36,25 +36,31 @@ class LiveAi:
         self.logger.info(f"[LLM] {answer}")
         return answer
     
+    def listen_and_respond(self) -> str:
+        """
+        Listen for audio input, transcribe it and return the text prompt.
+        """
+        audio = self.detector.listen(
+            duration=self.config.audio_input.record_seconds,
+            silence_threshold=self.config.audio_input.silence_threshold,
+            silence_timeout=self.config.audio_input.silence_timeout
+        )
+        if audio is None:
+            self.logger.warning("⚠️ No audio captured.")
+        text = self.detector.transcribe(audio_to_wav(audio))
+        return text
+
     def run(self):
         self.logger.info("Ready. Press Ctrl+C to quit.")
         while True:
             try:
                 self.logger.info("▶️  Press Enter to record...")
                 input()
-                audio = self.audio_in.record_audio(
-                    duration=self.config.audio_input.record_seconds,
-                    silence_threshold=self.config.audio_input.silence_threshold,
-                    silence_timeout=self.config.audio_input.silence_timeout
-                )
-                if audio is None:
-                    self.logger.warning("⚠️ No audio captured.")
-                    continue
-                prompt = self.audio_in.transcribe(save_audio_wav(audio))
+                prompt = self.listen_and_respond()
                 if not prompt:
                     self.logger.warning("⚠️ Empty transcription, skipping.")
                     continue
-                self.audio_out.streaming_audio(self.llm_chat(prompt))
+                self.speech.speak(self.llm_chat(prompt))
             except KeyboardInterrupt, EOFError:
                 self.logger.info("👋 Exiting.")
                 break

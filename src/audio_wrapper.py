@@ -21,7 +21,7 @@ def get_audio_tone(
     return audio.astype('int16')
 
 
-def save_audio_wav(
+def audio_to_wav(
         audio: np.ndarray, 
         out_file: Path="input_audio.wav", 
         samplerate: int = 16000
@@ -61,12 +61,14 @@ class InputAudioDevice:
 class SpeechDetector:
     def __init__(
             self, 
-            model_path: str, 
+            model_path: Path, 
             language: str = "en", 
             beam_size: int = 5,
             silence_threshold: float = 0.02,
             silence_timeout: float = 1.5,
         ):
+        if not model_path.exists():
+            raise FileNotFoundError(f"Model file not found: {model_path}")
         self.logger = getLogger(self.__class__.__name__)
         self.device = InputAudioDevice()
         self.logger.info(f"⚙️  Using audio input device: {self.device.name} (index {self.device.index})")
@@ -77,7 +79,7 @@ class SpeechDetector:
         self.silence_threshold = silence_threshold  # RMS level for silence detection
         self.silence_timeout = silence_timeout      # Seconds of silence before considering speech ended
 
-    def record_audio(
+    def listen(
         self,
         duration: float,
         samplerate: int = 16000,
@@ -99,7 +101,8 @@ class SpeechDetector:
         silence_start = None
         start_time = time.time()
 
-        with sd.InputStream(samplerate, channels, dtype=datatype, device=self.device.index) as stream:
+        with sd.InputStream(
+            samplerate=samplerate, channels=channels, dtype=datatype, device=self.device.index) as stream:
             while True:
                 chunk, _ = stream.read(chunk_frames)
                 recorded_chunks.append(chunk)

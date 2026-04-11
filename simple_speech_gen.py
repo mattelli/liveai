@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Simple example: generate audio from text with piper.
+Simple example: generate speech from text.
 """
 import logging
 from pathlib import Path
@@ -12,6 +12,6 @@ text = "Hello Jenilyn you are original!"
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    audio_gen = SpeechGenerator(model_path=Path(MODEL_PATH))
-    audio_gen.save_audio(text, file_path=Path("output.wav"))
-    audio_gen.streaming_audio(text)
+    speech = SpeechGenerator(model_path=Path(MODEL_PATH))
+    speech.to_wav(text, file_path=Path("output.wav"))
+    speech.speak(text)

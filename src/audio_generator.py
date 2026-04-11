@@ -38,12 +38,12 @@ class SpeechGenerator:
             self.logger.info("🧹 Closing audio output stream...")
             self.stream.close()
 
-    def save_audio(self, text: str, file_path: Path):
+    def to_wav(self, text: str, file_path: Path):
         with wave.open(str(file_path), "wb") as wav_file:
             self.voice.synthesize_wav(text, wav_file, syn_config=self.syn_config)
         self.logger.info(f"💾 Audio saved to {file_path.name}")
 
-    def streaming_audio(self, text: str):
+    def speak(self, text: str):
         self.logger.info("🔊 Streaming output audio ...")
         self.stream.start()
         for chunk in self.voice.synthesize(text, syn_config=self.syn_config):
