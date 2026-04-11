@@ -4,7 +4,7 @@ from pathlib import Path
 from logging import getLogger
 from piper import PiperVoice, SynthesisConfig
 
-class AudioGenerator:
+class SpeechGenerator:
     def __init__(
         self, 
         model_path: Path,

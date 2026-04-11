@@ -1,7 +1,7 @@
 from openai import OpenAI
 from logging import getLogger
 from src.audio_wrapper import SpeechDetector, save_audio_wav
-from src.audio_generator import AudioGenerator
+from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
 
 class LiveAi:
@@ -11,7 +11,7 @@ class LiveAi:
         self.config = config
         
         self.audio_in = SpeechDetector(model_path=config.audio_input.model_path)
-        self.audio_out = AudioGenerator(model_path=config.audio_output.model_path)
+        self.audio_out = SpeechGenerator(model_path=config.audio_output.model_path)
         self.logger.info("🚀 Connecting to LLM Model ...")
         self.lm_client = OpenAI(
             base_url=config.llm_model.url, 
