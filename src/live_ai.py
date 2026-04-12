@@ -21,15 +21,13 @@ class Brain:
         """
         self.logger.info(f"Sending to [🤖: {self.config.brain.model}] ...")
         self.logger.info(f"Prompt: {prompt}")
-        resp = self.lm_client.chat.completions.create(
+        resp = self.lm_client.responses.create(
             model=self.config.brain.model,
-            messages=[
-                {"role": "system", "content": self.config.brain.system_prompt},
-                {"role": "user", "content": prompt},
-            ],
+            input=prompt,
+            instructions=self.config.brain.system_prompt,
             temperature=self.config.brain.temperature,
         )
-        answer = resp.choices[0].message.content.strip()
+        answer = resp.output_text.strip()
         self.logger.info(f"[LLM] {answer}")
         return answer
 
