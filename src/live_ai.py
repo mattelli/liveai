@@ -1,6 +1,6 @@
 from openai import OpenAI
 from logging import getLogger
-from src.audio_wrapper import SpeechDetector, audio_to_wav
+from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
 
@@ -42,22 +42,14 @@ class LiveAi:
         answer = resp.choices[0].message.content.strip()
         self.logger.info(f"[LLM] {answer}")
         return answer
-    
-    def listen_and_transcribe(self) -> str:
-        """
-        Listen for audio input, transcribe it and return the text prompt.
-        """
-        audio = self.detector.listen(
-            duration_s=self.config.speech_det.listen_time_s,
-        )
-        text = self.detector.transcribe(audio_to_wav(audio))
-        return text
 
     def run(self):
         self.logger.info("Ready. Press Ctrl+C to quit.")
         while True:
             try:
-                prompt = self.listen_and_transcribe()
+                prompt = self.detector.listen_and_transcribe(
+                    duration_s=self.config.speech_det.listen_time_s
+                )
                 if not prompt:
                     self.logger.info("Empty transcription, skipping.")
                     continue

@@ -147,3 +147,8 @@ class SpeechDetector:
         text = "".join(seg.text for seg in segments).strip()
         self.logger.debug(f"Text Length: {len(text)}")
         return text
+    
+    def listen_and_transcribe(self, duration_s: float) -> str:
+        audio = self.listen(duration_s=duration_s)
+        text = self.transcribe(audio_to_wav(audio))
+        return text
