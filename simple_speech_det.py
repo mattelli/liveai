@@ -10,7 +10,7 @@ from src.audio_wrapper import audio_to_wav, SpeechDetector
 def main():
     TIMEOUT_S = 1.5
     MODEL_PATH = "res/faster-whisper-medium"
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     detector = SpeechDetector(model_path=Path(MODEL_PATH))
     
     print("Ready. Press Ctrl+C to quit.")

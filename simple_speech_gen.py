@@ -11,7 +11,7 @@ MODEL_PATH = "res/voices/en_US-hfc_female-medium.onnx"
 text = "Hello Jenilyn you are original!"
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     speech = SpeechGenerator(model_path=Path(MODEL_PATH))
     speech.to_wav(text, file_path=Path("output.wav"))
     speech.speak(text)
