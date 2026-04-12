@@ -1,7 +1,6 @@
 [speech_det]
 model_path= "res/faster-whisper-medium"
-listen_time_s = 20.0
-silence_timeout = 2.0
+silence_timeout_s = 2.0
 language = "en"
 
 [brain] # OpenAI API configuration
@@ -10,7 +9,7 @@ language = "en"
 # api_key = "your_api_key_here"
 
 url = "http://localhost:1234/v1"
-model = "llama-3.2-1b-instruct"
+model = "qwen3.5-0.8b"
 api_key = "localhost"
 
 temperature = 0.7

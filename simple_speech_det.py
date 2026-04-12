@@ -8,15 +8,15 @@ from src.audio_wrapper import audio_to_wav, SpeechDetector
 
 
 def main():
-    DURATION = 20.0  # seconds
+    TIMEOUT_S = 1.5
     MODEL_PATH = "res/faster-whisper-medium"
     logging.basicConfig(level=logging.INFO)
-    detector = SpeechDetector(model_path=Path(MODEL_PATH), silence_timeout_s=2.0)
+    detector = SpeechDetector(model_path=Path(MODEL_PATH))
     
     print("Ready. Press Ctrl+C to quit.")
     while True:
         try:
-            audio = detector.listen(duration_s=DURATION)
+            audio = detector.listen(silence_timeout_s=TIMEOUT_S)
             text = detector.transcribe(audio_to_wav(audio))
             if not text:
                 detector.logger.warning("⚠️  Empty transcription, skipping.")

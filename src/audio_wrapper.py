@@ -39,7 +39,7 @@ def compute_silence_threshold(
         samplerate: int = 16000,
         chunk_time_s: float = 0.1,
         chunks: int = 20,
-        guard_factor: float = 5.0
+        guard_factor: float = 1.5
     ) -> float:
     chunk_rms_values: list[float] = []
     chunk_size = int(chunk_time_s * samplerate)
@@ -47,8 +47,10 @@ def compute_silence_threshold(
         while len(chunk_rms_values) <= chunks:
             chunk, _ = stream.read(chunk_size)
             chunk_rms_values.append(np.sqrt(np.mean(chunk.astype(np.float32)**2)))
-    threshold = guard_factor * np.mean(chunk_rms_values)
-    return threshold
+    mean_rms = np.mean(chunk_rms_values)
+    std_rms = np.std(chunk_rms_values)
+    threshold = guard_factor * (mean_rms + 2 * std_rms)
+    return threshold, mean_rms, std_rms
 
 
 class InputAudioDevice:
@@ -79,7 +81,6 @@ class SpeechDetector:
             model_path: Path, 
             language: str = "en", 
             beam_size: int = 5,
-            silence_timeout_s: float = 1.5,
         ):
         if not model_path.exists():
             raise FileNotFoundError(f"Model file not found: {model_path}")
@@ -91,29 +92,30 @@ class SpeechDetector:
         self.logger.info(f"✅ Model loaded.")
         self.language = language
         self.beam_size = beam_size
-        self.silence_timeout = silence_timeout_s
         self.logger.info("🎬 Calibrating silence threshold...")
-        self.silence_threshold = compute_silence_threshold(self.device)
-        self.logger.info(f"✅ Silence threshold set to: {self.silence_threshold:.3f}")
+        self.silence_threshold, mean_rms, std_rms = compute_silence_threshold(self.device)
+        self.logger.info(f"✅ Silence threshold set to: {self.silence_threshold:.3f}, (Mean RMS: {mean_rms:.3f}, Std RMS: {std_rms:.3f})")
     
     def listen(
             self,
-            duration_s: float,
+            silence_timeout_s: float = 1.5,
             channels: int = 1,
             samplerate: int = 16000,
             chunk_time_s: float = 0.1,
             datatype: str = 'int16',
+            clear_timeout_s: float = 30.0
         ) -> np.ndarray:
         """
-        Record audio until:
-        - duration is reached, OR
-        - RMS stays below silence_threshold for > silence_timeout after speech is detected.
+        Record audio from the microphone until silence timeout is detected based on RMS values.
         Non-blocking, chunk-based recording.
         """
-        self.logger.info(f"🎤 Listening up to {duration_s} seconds...")
+        self.logger.info(f"🎤 Listening ... (Silence timeout: {silence_timeout_s} s). Press Ctrl+C to quit.")
         chunk_size = int(chunk_time_s * samplerate)
+        timeout_chunks = int(silence_timeout_s / chunk_time_s)
         chunks: list[np.ndarray] = []
-        silence_start: float | None = None
+        chunk_rms_values: list[float] = []
+        speech_start: float | None = None
+        start_chunk: int = 0
         
         start_time = time.time()
         with sd.InputStream(samplerate=samplerate, channels=channels, dtype=datatype, device=self.device.index) as stream:
@@ -121,19 +123,32 @@ class SpeechDetector:
                 chunk, _ = stream.read(chunk_size)
                 chunks.append(chunk)
                 chunk_rms = np.sqrt(np.mean(chunk.astype(np.float32)**2))
-                print(f"\rIN-Audio RMS: {chunk_rms:.3f} | Silence threshold: {self.silence_threshold:.3f} ", end="")
-                if chunk_rms < self.silence_threshold:
-                    if silence_start is None:
-                        silence_start = time.time()
-                    elif time.time() - silence_start >= self.silence_timeout:
-                        self.logger.info(f" ⏹️  Stopping due to silence timeout: {self.silence_timeout} s")
+                chunk_rms_values.append(chunk_rms)
+                audio_rms = np.mean(chunk_rms_values)
+                print(f"\rIN-Audio RMS: {audio_rms:.3f} | Silence threshold [{self.silence_threshold:.3f}] ", end="")
+                if audio_rms > self.silence_threshold:
+                    if speech_start is None:
+                        speech_start = time.time()
+                        start_chunk = int((speech_start - start_time) / chunk_time_s)
+                    elif np.mean(chunk_rms_values[-timeout_chunks:]) < self.silence_threshold:
+                        print()
+                        self.logger.info(f" ⏹️  Silence timeout detected after speech. Stopping listening.")
                         break
-                else:
-                    silence_start = None
-                if time.time() - start_time >= duration_s:
-                    self.logger.info(f" ⏹️  Max duration reached: {duration_s} s")
-                    break
-        audio = np.concatenate(chunks, axis=0)
+                if time.time() - start_time > clear_timeout_s:
+                    self.logger.debug(f"No speech detected for {clear_timeout_s} s. Clearing buffer.")
+                    chunks.clear()
+                    chunk_rms_values.clear()
+                    speech_start = None
+                    start_chunk = 0
+                    start_time = time.time()
+        
+        tolerance = int(timeout_chunks / 2)
+        start_chunk = start_chunk - tolerance if start_chunk > tolerance else 0
+        end_chunk = len(chunks) - tolerance if len(chunks) > tolerance else len(chunks)
+        if start_chunk >= end_chunk:
+            audio = np.concatenate(chunks, axis=0)
+        else:
+            audio = np.concatenate(chunks[start_chunk:end_chunk], axis=0)
         if np.sqrt(np.mean(audio.astype(np.float32)**2)) < self.silence_threshold:
             audio = np.array([], dtype=audio.dtype)
         self.logger.debug(f"Recorded {len(audio)} samples")
@@ -150,7 +165,7 @@ class SpeechDetector:
         self.logger.debug(f"Text Length: {len(text)}")
         return text
     
-    def listen_and_transcribe(self, duration_s: float) -> str:
-        audio = self.listen(duration_s=duration_s)
+    def listen_and_transcribe(self, silence_timeout_s: float) -> str:
+        audio = self.listen(silence_timeout_s=silence_timeout_s)
         text = self.transcribe(audio_to_wav(audio))
         return text

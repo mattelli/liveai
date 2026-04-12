@@ -10,8 +10,7 @@ from src.audio_generator import SpeechGenerator
 
 def main():
     # Settings
-    DURATION = 3.0  # seconds
-    SAMPLERATE = 16000 
+    TIMEOUT_S = 1.5
     MODEL_PATH = "res/faster-whisper-medium"
     VOICE_MODEL_PATH = "res/voices/en_US-hfc_female-medium.onnx"
     logging.basicConfig(level=logging.INFO)
@@ -20,7 +19,7 @@ def main():
     sd = SpeechDetector(model_path=Path(MODEL_PATH))
     sg = SpeechGenerator(model_path=Path(VOICE_MODEL_PATH))
     
-    audio_in = sd.listen(duration_s=DURATION)
+    audio_in = sd.listen(silence_timeout_s=TIMEOUT_S)
     wav_path = audio_to_wav(audio=audio_in)
     text = sd.transcribe(wav_path)
     sg.speak(text)

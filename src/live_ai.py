@@ -40,9 +40,8 @@ class LiveAi:
         
         self.detector = SpeechDetector(
             model_path=config.speech_det.model_path, 
-            silence_timeout_s=config.speech_det.silence_timeout,
             language=config.speech_det.language
-            )
+        )
         self.speech = SpeechGenerator(
             model_path=config.speech_gen.model_path,
             samplerate=config.speech_gen.samplerate
@@ -54,7 +53,7 @@ class LiveAi:
         while True:
             try:
                 prompt = self.detector.listen_and_transcribe(
-                    duration_s=self.config.speech_det.listen_time_s
+                    silence_timeout_s=self.config.speech_det.silence_timeout_s,
                 )
                 if not prompt:
                     self.logger.info("Empty transcription, skipping.")
