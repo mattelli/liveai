@@ -118,7 +118,7 @@ class SpeechDetector:
                 chunk, _ = stream.read(chunk_frames)
                 recorded_chunks.append(chunk)
                 rms = np.sqrt(np.mean(chunk.astype(np.float32)**2))
-                print(f"\rIN-Audio RMS: {rms:.3f} | threshold: {self.silence_threshold:.3f} ", end="")
+                print(f"\rIN-Audio RMS: {rms:.3f} | Silence threshold: {self.silence_threshold:.3f} ", end="")
                 if rms < self.silence_threshold:
                     if silence_start is None:
                         silence_start = time.time()
@@ -132,18 +132,18 @@ class SpeechDetector:
                     break
         
         audio = np.concatenate(recorded_chunks, axis=0)
-        self.logger.info(f"✅ Recorded {len(audio)} samples")
+        self.logger.debug(f"Recorded {len(audio)} samples")
         if np.sqrt(np.mean(audio.astype(np.float32)**2)) < self.silence_threshold:
             audio = np.array([], dtype=audio.dtype)
         return audio
         
     def transcribe(self, wav_path: Path) -> str:
-        self.logger.info("🧠 Transcribing with Whisper...")
+        self.logger.debug("🧠 Transcribing with Whisper...")
         segments, _ = self.model.transcribe(
             audio=str(wav_path),
             language=self.language,
             beam_size=self.beam_size
         )
         text = "".join(seg.text for seg in segments).strip()
-        self.logger.info(f"Text Length: {len(text)}")
+        self.logger.debug(f"Text Length: {len(text)}")
         return text
