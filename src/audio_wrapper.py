@@ -36,17 +36,18 @@ def audio_to_wav(
 
 def compute_silence_threshold(
         device: InputAudioDevice,
-        rms_values_size: int = 10,
         samplerate: int = 16000,
-        chunk_size_s: float = 0.1,
+        chunk_time_s: float = 0.1,
+        chunks: int = 20,
+        guard_factor: float = 1.5
     ) -> float:
-    chunk_frames = int(chunk_size_s * samplerate)
-    rms_values: list[float] = []
+    chunk_rms_values: list[float] = []
+    chunk_size = int(chunk_time_s * samplerate)
     with sd.InputStream(samplerate=samplerate, channels=1, dtype='int16', device=device.index) as stream:
-        while len(rms_values) <= rms_values_size:
-            chunk, _ = stream.read(chunk_frames)
-            rms_values.append(np.sqrt(np.mean(chunk.astype(np.float32)**2)))
-    threshold = 1.5 * np.mean(rms_values)
+        while len(chunk_rms_values) <= chunks:
+            chunk, _ = stream.read(chunk_size)
+            chunk_rms_values.append(np.sqrt(np.mean(chunk.astype(np.float32)**2)))
+    threshold = guard_factor * np.mean(chunk_rms_values)
     return threshold
 
 
@@ -87,18 +88,20 @@ class SpeechDetector:
         self.logger.info(f"⚙️  Using audio input device: {self.device.name} (index {self.device.index})")
         self.logger.info(f"🚀 Loading Audio to Text model from {model_path} ...")
         self.model = WhisperModel(str(model_path), device="cpu", compute_type="int16")
+        self.logger.info(f"✅ Model loaded.")
         self.language = language
         self.beam_size = beam_size
         self.silence_timeout = silence_timeout_s
+        self.logger.info("🎬 Calibrating silence threshold...")
         self.silence_threshold = compute_silence_threshold(self.device)
-        self.logger.info(f"✅ Model loaded. Silence threshold set to: {self.silence_threshold:.3f}")
+        self.logger.info(f"✅ Silence threshold set to: {self.silence_threshold:.3f}")
     
     def listen(
             self,
             duration_s: float,
             channels: int = 1,
             samplerate: int = 16000,
-            chunk_size_s: float = 0.1,
+            chunk_time_s: float = 0.1,
             datatype: str = 'int16',
         ) -> np.ndarray:
         """
@@ -108,18 +111,18 @@ class SpeechDetector:
         Non-blocking, chunk-based recording.
         """
         self.logger.info(f"🎤 Recording up to {duration_s} seconds...")
-        chunk_frames = int(chunk_size_s * samplerate)
-        recorded_chunks: list[np.ndarray] = []
+        chunk_size = int(chunk_time_s * samplerate)
+        chunks: list[np.ndarray] = []
         silence_start: float | None = None
         
         start_time = time.time()
         with sd.InputStream(samplerate=samplerate, channels=channels, dtype=datatype, device=self.device.index) as stream:
             while True:
-                chunk, _ = stream.read(chunk_frames)
-                recorded_chunks.append(chunk)
-                rms = np.sqrt(np.mean(chunk.astype(np.float32)**2))
-                print(f"\rIN-Audio RMS: {rms:.3f} | Silence threshold: {self.silence_threshold:.3f} ", end="")
-                if rms < self.silence_threshold:
+                chunk, _ = stream.read(chunk_size)
+                chunks.append(chunk)
+                chunk_rms = np.sqrt(np.mean(chunk.astype(np.float32)**2))
+                print(f"\rIN-Audio RMS: {chunk_rms:.3f} | Silence threshold: {self.silence_threshold:.3f} ", end="")
+                if chunk_rms < self.silence_threshold:
                     if silence_start is None:
                         silence_start = time.time()
                     elif time.time() - silence_start >= self.silence_timeout:
@@ -131,7 +134,7 @@ class SpeechDetector:
                     self.logger.info(f" ⏹️  Max duration reached: {duration_s} s")
                     break
         
-        audio = np.concatenate(recorded_chunks, axis=0)
+        audio = np.concatenate(chunks, axis=0)
         self.logger.debug(f"Recorded {len(audio)} samples")
         if np.sqrt(np.mean(audio.astype(np.float32)**2)) < self.silence_threshold:
             audio = np.array([], dtype=audio.dtype)
