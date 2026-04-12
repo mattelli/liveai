@@ -57,11 +57,9 @@ class LiveAi:
         self.logger.info("Ready. Press Ctrl+C to quit.")
         while True:
             try:
-                self.logger.info("▶️  Press Enter to record...")
-                input()
                 prompt = self.listen_and_transcribe()
                 if not prompt:
-                    self.logger.warning("⚠️ Empty transcription, skipping.")
+                    self.logger.info("Empty transcription, skipping.")
                     continue
                 self.speech.speak(self.llm_chat(prompt))
             except KeyboardInterrupt, EOFError:
