@@ -39,7 +39,7 @@ def compute_silence_threshold(
         samplerate: int = 16000,
         chunk_time_s: float = 0.1,
         chunks: int = 20,
-        guard_factor: float = 1.5
+        guard_factor: float = 5.0
     ) -> float:
     chunk_rms_values: list[float] = []
     chunk_size = int(chunk_time_s * samplerate)
@@ -107,10 +107,10 @@ class SpeechDetector:
         """
         Record audio until:
         - duration is reached, OR
-        - RMS stays below silence_threshold for > silence_timeout seconds.
+        - RMS stays below silence_threshold for > silence_timeout after speech is detected.
         Non-blocking, chunk-based recording.
         """
-        self.logger.info(f"🎤 Recording up to {duration_s} seconds...")
+        self.logger.info(f"🎤 Listening up to {duration_s} seconds...")
         chunk_size = int(chunk_time_s * samplerate)
         chunks: list[np.ndarray] = []
         silence_start: float | None = None
@@ -133,11 +133,10 @@ class SpeechDetector:
                 if time.time() - start_time >= duration_s:
                     self.logger.info(f" ⏹️  Max duration reached: {duration_s} s")
                     break
-        
         audio = np.concatenate(chunks, axis=0)
-        self.logger.debug(f"Recorded {len(audio)} samples")
         if np.sqrt(np.mean(audio.astype(np.float32)**2)) < self.silence_threshold:
             audio = np.array([], dtype=audio.dtype)
+        self.logger.debug(f"Recorded {len(audio)} samples")
         return audio
         
     def transcribe(self, wav_path: Path) -> str:

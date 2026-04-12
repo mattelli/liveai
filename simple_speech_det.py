@@ -19,7 +19,7 @@ def main():
             audio = detector.listen(duration_s=DURATION)
             text = detector.transcribe(audio_to_wav(audio))
             if not text:
-                detector.logger.warning("⚠️ Empty transcription, skipping.")
+                detector.logger.warning("⚠️  Empty transcription, skipping.")
                 continue
             print(f"\n{'='*50}")
             print(f"[📢] Transcription:")
