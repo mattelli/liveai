@@ -4,28 +4,18 @@ from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
 
-class LiveAi:
-    
+
+class Brain:
     def __init__(self, config: SimpleNamespace):
         self.logger = getLogger(self.__class__.__name__)
         self.config = config
-        
-        self.detector = SpeechDetector(
-            model_path=config.speech_det.model_path, 
-            silence_timeout_s=config.speech_det.silence_timeout,
-            language=config.speech_det.language
-            )
-        self.speech = SpeechGenerator(
-            model_path=config.speech_gen.model_path,
-            samplerate=config.speech_gen.samplerate
-        )
         self.logger.info("🚀 Connecting to LLM Model ...")
         self.lm_client = OpenAI(
             base_url=config.brain.url, 
             api_key=config.brain.api_key
         )
     
-    def llm_chat(self, prompt: str) -> str:
+    def get_response(self, prompt: str) -> str:
         """
         Use OpenAI API to get a response from the LLM model.
         """
@@ -43,6 +33,24 @@ class LiveAi:
         self.logger.info(f"[LLM] {answer}")
         return answer
 
+
+class LiveAi:
+    
+    def __init__(self, config: SimpleNamespace):
+        self.logger = getLogger(self.__class__.__name__)
+        self.config = config
+        
+        self.detector = SpeechDetector(
+            model_path=config.speech_det.model_path, 
+            silence_timeout_s=config.speech_det.silence_timeout,
+            language=config.speech_det.language
+            )
+        self.speech = SpeechGenerator(
+            model_path=config.speech_gen.model_path,
+            samplerate=config.speech_gen.samplerate
+        )
+        self.brain = Brain(config=config)
+
     def run(self):
         self.logger.info("Ready. Press Ctrl+C to quit.")
         while True:
@@ -53,7 +61,7 @@ class LiveAi:
                 if not prompt:
                     self.logger.info("Empty transcription, skipping.")
                     continue
-                self.speech.speak(self.llm_chat(prompt))
+                self.speech.speak(self.brain.get_response(prompt))
             except KeyboardInterrupt, EOFError:
                 self.logger.info("👋 Exiting.")
                 break
