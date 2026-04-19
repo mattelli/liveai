@@ -30,7 +30,7 @@ class Brain:
     
     def stream_response(self, prompt: str) -> PredictionStream:
         self.logger.info(f"Sending to [🤖: {self.config.brain.model}] ...")
-        self.logger.info(f"Prompt:\n{prompt}")
+        self.logger.debug(f"Prompt:\n{prompt}")
         self.chat.add_user_message(prompt)
         resp_stream = self.model.respond_stream(
             self.chat,
@@ -43,7 +43,7 @@ class Brain:
         resp_stream = self.stream_response(prompt)
         answer:list[str] = [fragment.content for fragment in resp_stream]
         response = " ".join(answer).strip()
-        self.logger.info(f"Response:\n{response}")
+        self.logger.debug(f"Response:\n{response}")
         return response
 
 
@@ -64,7 +64,7 @@ class LiveAi:
         self.brain = Brain(config=config)
 
     def run(self):
-        self.logger.info("Ready. Press Ctrl+C to quit.")
+        print("\nReady. Press Ctrl+C to quit.")
         while True:
             try:
                 prompt = self.detector.listen_and_transcribe(
@@ -73,8 +73,11 @@ class LiveAi:
                 if not prompt:
                     self.logger.info("Empty transcription, skipping.")
                     continue
+                print(f"\nYou: {prompt}")
                 response = self.brain.get_response(prompt)
+                print(f"\n🤖 [{self.config.brain.model}]: {response}")
                 self.speech.speak(response)
+                print("\n---\n")
             except KeyboardInterrupt:
-                self.logger.info("👋 Exiting.")
+                print("\n👋 Exiting.")
                 break
