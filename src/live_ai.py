@@ -1,4 +1,5 @@
 import lmstudio as lms
+from lmstudio.sync_api import PredictionStream
 from logging import getLogger
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
@@ -11,7 +12,7 @@ class Brain:
         self.config = config
         self.logger.info(f"🚀 Connecting to LLM Model '{config.brain.model}' ...")
         if str(config.brain.api_key).lower() != "local":
-            lms.configure_default_client(api_token=config.brain.api_key)
+            lms.configure_default_client(api_host=config.brain.api_key)
         else:
             llm_only = lms.list_downloaded_models("llm")
             for model in llm_only:
@@ -20,20 +21,14 @@ class Brain:
             else:
                 raise ValueError(f"The configured Model '{config.brain.model}' is not available.")
         self.model = lms.llm(config.brain.model)
-        self.chat = lms.Chat(
-            initial_prompt=self.config.brain.system_prompt
-        )
+        self.chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
         self._chat_cfg = {
             "temperature": self.config.brain.temperature,
             "maxTokens": self.config.brain.max_tokens,
         }
         self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
-
     
-    def get_response(self, prompt: str) -> str:
-        """
-        Use LMStudio API to get a response from the LLM model.
-        """
+    def stream_response(self, prompt: str) -> PredictionStream:
         self.logger.info(f"Sending to [🤖: {self.config.brain.model}] ...")
         self.logger.info(f"Prompt:\n{prompt}")
         self.chat.add_user_message(prompt)
@@ -42,6 +37,10 @@ class Brain:
             on_message=self.chat.append,
             config=self._chat_cfg
         )
+        return resp_stream
+    
+    def get_response(self, prompt: str) -> str:
+        resp_stream = self.stream_response(prompt)
         answer:list[str] = [fragment.content for fragment in resp_stream]
         response = " ".join(answer).strip()
         self.logger.info(f"Response:\n{response}")
