@@ -10,7 +10,8 @@ language = "en"
 
 url = "http://localhost:1234/v1"
 model = "qwen3.5-0.8b"
-api_key = "localhost"
+api_key = "local"
+max_tokens = 1000
 
 temperature = 0.7
 system_prompt = "You are a helpful assistant. Answer the user's question concisely and accurately. If you don't know the answer, say 'I don't know.'"

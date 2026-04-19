@@ -1,4 +1,4 @@
-from openai import OpenAI
+import lmstudio as lms
 from logging import getLogger
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
@@ -9,27 +9,43 @@ class Brain:
     def __init__(self, config: SimpleNamespace):
         self.logger = getLogger(self.__class__.__name__)
         self.config = config
-        self.logger.info("🚀 Connecting to LLM Model ...")
-        self.lm_client = OpenAI(
-            base_url=config.brain.url, 
-            api_key=config.brain.api_key
+        self.logger.info(f"🚀 Connecting to LLM Model '{config.brain.model}' ...")
+        if str(config.brain.api_key).lower() != "local":
+            lms.configure_default_client(api_token=config.brain.api_key)
+        else:
+            llm_only = lms.list_downloaded_models("llm")
+            for model in llm_only:
+                if config.brain.model == model.model_key:
+                    break
+            else:
+                raise ValueError(f"The configured Model '{config.brain.model}' is not available.")
+        self.model = lms.llm(config.brain.model)
+        self.chat = lms.Chat(
+            initial_prompt=self.config.brain.system_prompt
         )
+        self._chat_cfg = {
+            "temperature": self.config.brain.temperature,
+            "maxTokens": self.config.brain.max_tokens,
+        }
+        self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
+
     
     def get_response(self, prompt: str) -> str:
         """
-        Use OpenAI API to get a response from the LLM model.
+        Use LMStudio API to get a response from the LLM model.
         """
         self.logger.info(f"Sending to [🤖: {self.config.brain.model}] ...")
-        self.logger.info(f"Prompt: {prompt}")
-        resp = self.lm_client.responses.create(
-            model=self.config.brain.model,
-            input=prompt,
-            instructions=self.config.brain.system_prompt,
-            temperature=self.config.brain.temperature,
+        self.logger.info(f"Prompt:\n{prompt}")
+        self.chat.add_user_message(prompt)
+        resp_stream = self.model.respond_stream(
+            self.chat,
+            on_message=self.chat.append,
+            config=self._chat_cfg
         )
-        answer = resp.output_text.strip()
-        self.logger.info(f"[LLM] {answer}")
-        return answer
+        answer:list[str] = [fragment.content for fragment in resp_stream]
+        response = " ".join(answer).strip()
+        self.logger.info(f"Response:\n{response}")
+        return response
 
 
 class LiveAi:
@@ -58,7 +74,8 @@ class LiveAi:
                 if not prompt:
                     self.logger.info("Empty transcription, skipping.")
                     continue
-                self.speech.speak(self.brain.get_response(prompt))
-            except KeyboardInterrupt, EOFError:
+                response = self.brain.get_response(prompt)
+                self.speech.speak(response)
+            except KeyboardInterrupt:
                 self.logger.info("👋 Exiting.")
                 break
