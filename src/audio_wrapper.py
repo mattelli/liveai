@@ -7,6 +7,27 @@ from pathlib import Path
 from logging import getLogger
 from faster_whisper import WhisperModel
 
+class InputAudioDevice:
+    
+    def __init__(self):
+        self.logger = getLogger(self.__class__.__name__)
+        try:
+            devices = sd.query_devices(kind='input')
+        except Exception as e:
+            self.logger.critical(f"{e}")
+            self.logger.info("Please check microphone settings and try again.")
+            sys.exit(1)
+        if devices and isinstance(devices, dict):
+            devices = [devices]
+        if len(devices) == 0:
+            raise ValueError("No audio input devices found")
+        else:
+            self.logger.info(f"Found {len(devices)} audio input devices.")
+        self.name = str(devices[0].get("name", "Unknown Device"))
+        self.index = int(devices[0].get("index", 0))
+        self.default_samplerate = int(devices[0].get("default_samplerate", 16000))
+        self.max_channel = int(devices[0].get("max_input_channels", 1))
+
 
 def get_audio_tone(
         duration: float = 2.0,    # seconds
@@ -51,28 +72,6 @@ def compute_silence_threshold(
     std_rms = np.std(chunk_rms_values)
     threshold = guard_factor * (mean_rms + 2 * std_rms)
     return threshold, mean_rms, std_rms
-
-
-class InputAudioDevice:
-    
-    def __init__(self):
-        self.logger = getLogger(self.__class__.__name__)
-        try:
-            devices = sd.query_devices(kind='input')
-        except Exception as e:
-            self.logger.critical(f"{e}")
-            self.logger.info("Please check microphone settings and try again.")
-            sys.exit(1)
-        if devices and isinstance(devices, dict):
-            devices = [devices]
-        if len(devices) == 0:
-            raise ValueError("No audio input devices found")
-        else:
-            self.logger.info(f"Found {len(devices)} audio input devices.")
-        self.name = str(devices[0].get("name", "Unknown Device"))
-        self.index = int(devices[0].get("index", 0))
-        self.default_samplerate = int(devices[0].get("default_samplerate", 16000))
-        self.max_channel = int(devices[0].get("max_input_channels", 1))
 
 
 class SpeechDetector:

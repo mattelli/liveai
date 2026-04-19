@@ -25,7 +25,7 @@ def main():
             print(f"[📢] Transcription:")
             print(f"{text}")
             print(f"{'='*50}")
-        except KeyboardInterrupt, EOFError:
+        except KeyboardInterrupt:
             detector.logger.info("👋 Exiting.")
             break
 

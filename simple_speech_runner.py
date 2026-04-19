@@ -32,7 +32,7 @@ def main():
             print(f"{text}")
             print(f"{'='*50}")
             sg.speak(text)
-        except KeyboardInterrupt, EOFError:
+        except KeyboardInterrupt:
             sd.logger.info("👋 Exiting.")
             break
 
