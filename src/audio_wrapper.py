@@ -85,13 +85,13 @@ class SpeechDetector:
             raise FileNotFoundError(f"Model file not found: {model_path}")
         self.logger = getLogger(self.__class__.__name__)
         self.device = InputAudioDevice()
-        self.logger.info(f"⚙️  Using audio input device: {self.device.name} (index {self.device.index})")
+        self.logger.info(f"ℹ️  Using audio input device: {self.device.name} (index {self.device.index})")
         self.logger.info(f"🚀 Loading Audio to Text model from {model_path} ...")
         self.model = WhisperModel(str(model_path), device="cpu", compute_type="int16")
         self.logger.info(f"✅ Model loaded.")
         self.language = language
         self.beam_size = beam_size
-        self.logger.info("🎬 Calibrating silence threshold...")
+        self.logger.info("⚙️  Calibrating silence threshold...")
         self.silence_threshold, mean_rms, std_rms = compute_silence_threshold(self.device)
         self.logger.info(f"✅ Silence threshold set to: {self.silence_threshold:.3f}, (Mean RMS: {mean_rms:.3f}, Std RMS: {std_rms:.3f})")
     
