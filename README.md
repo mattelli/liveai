@@ -33,7 +33,7 @@ python3 -m piper.download_voices en_US-hfc_female-medium
 ## Setup (Python 3.12.10)
 
 ```
-pip install numpy sounddevice soundfile faster-whisper lmstudio piper-tts
+pip install numpy sounddevice soundfile faster-whisper lmstudio piper-tts opencv-python
 ```
 
 
