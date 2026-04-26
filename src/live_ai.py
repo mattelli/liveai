@@ -20,6 +20,15 @@ class Brain:
                     break
             else:
                 raise ValueError(f"The configured Model '{config.brain.model}' is not available.")
+        try:
+            current_model = lms.llm()
+            current_model_info = current_model.get_info()
+            if current_model_info.model_key != config.brain.model:
+                self.logger.info(f"Unloading Model [{current_model_info.model_key}]")
+                current_model.unload()
+        except lms.LMStudioClientError:
+            pass
+            
         self.model = lms.llm(config.brain.model)
         self.chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
         self._chat_cfg = {
