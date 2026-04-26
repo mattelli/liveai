@@ -1,9 +1,18 @@
 import lmstudio as lms
 from lmstudio.sync_api import PredictionStream
+from typing import Callable
 from logging import getLogger
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
+from src.tools import current_date_time, web_search
+
+
+def print_fragment(fragment, round_index=0):
+    # .act() supplies the round index as the second parameter
+    # Setting a default value means the callback is also
+    # compatible with .complete() and .respond().
+    print(fragment.content, end="", flush=True)
 
 
 class Brain:
@@ -35,25 +44,38 @@ class Brain:
             "temperature": self.config.brain.temperature,
             "maxTokens": self.config.brain.max_tokens,
         }
+        self.tools:list[Callable] = [current_date_time]
         self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
     
-    def stream_response(self, prompt: str) -> PredictionStream:
-        self.logger.info(f"Sending to [🤖: {self.config.brain.model}] ...")
+    def model_stream_response(self, prompt: str) -> PredictionStream:
+        self.logger.info(f"Sending to Model [🤖: {self.config.brain.model}] ...")
         self.logger.debug(f"Prompt:\n{prompt}")
         self.chat.add_user_message(prompt)
         resp_stream = self.model.respond_stream(
             self.chat,
             on_message=self.chat.append,
-            config=self._chat_cfg
+            config=self._chat_cfg,
         )
         return resp_stream
     
-    def get_response(self, prompt: str) -> str:
-        resp_stream = self.stream_response(prompt)
+    def model_response(self, prompt: str) -> str:
+        resp_stream = self.model_stream_response(prompt)
         answer:list[str] = [fragment.content for fragment in resp_stream]
         response = " ".join(answer).strip()
         self.logger.debug(f"Response:\n{response}")
         return response
+    
+    def agent_response(self, prompt: str):
+        self.logger.info(f"Sending to Agent [🤖: {self.config.brain.model}] ...")
+        self.logger.debug(f"Prompt:\n{prompt}")
+        self.chat.add_user_message(prompt)
+        self.model.act(
+            self.chat,
+            self.tools,
+            on_message=self.chat.append,
+            config=self._chat_cfg,
+            on_prediction_fragment=print_fragment,
+        )
 
 
 class LiveAi:
@@ -83,7 +105,7 @@ class LiveAi:
                     self.logger.info("Empty transcription, skipping.")
                     continue
                 print(f"\nYou: {prompt}")
-                response = self.brain.get_response(prompt)
+                response = self.brain.model_response(prompt)
                 print(f"\n🤖 [{self.config.brain.model}]: {response}")
                 self.speech.speak(response)
                 print("\n---\n")

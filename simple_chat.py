@@ -1,7 +1,9 @@
 import logging
 from pathlib import Path
 from src.common import load_config
-from src.live_ai import Brain
+from src.live_ai import Brain, print_fragment
+
+USE_AGENT:bool = True
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -21,10 +23,14 @@ while True:
         print()
         break
     if not user_input:
-        print("Bye!")
+        print("Bye! 👋")
         break
-    response = brain.stream_response(user_input)
+    
     print(f"🤖 [{config.brain.model}]: ", end="", flush=True)
-    for fragment in response:
-        print(fragment.content, end="", flush=True)
+    if USE_AGENT:
+        brain.agent_response(user_input)
+    else:
+        response = brain.model_stream_response(user_input)
+        for f in response:
+            print_fragment(f)
     print()
