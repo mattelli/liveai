@@ -5,7 +5,7 @@ from logging import getLogger
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
-from src.tools import current_date_time, web_search
+from src.tools import current_date_time, extract_news
 
 
 def print_fragment(fragment, round_index=0):
@@ -44,7 +44,7 @@ class Brain:
             "temperature": self.config.brain.temperature,
             "maxTokens": self.config.brain.max_tokens,
         }
-        self.tools:list[Callable] = [current_date_time]
+        self.tools:list[Callable] = [self.model_handle_image, current_date_time, extract_news]
         self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
     
     def model_stream_response(self, prompt: str) -> PredictionStream:
@@ -57,6 +57,14 @@ class Brain:
             config=self._chat_cfg,
         )
         return resp_stream
+    
+    def model_handle_image(self, prompt:str, image:str) -> str:
+        """Handle images to text"""
+        print("calling: model_handle_image")
+        image_handle = lms.prepare_image(image)
+        self.chat.add_user_message(prompt, images=[image_handle])
+        prediction  = self.model.respond(self.chat)
+        return prediction.content
     
     def model_response(self, prompt: str) -> str:
         resp_stream = self.model_stream_response(prompt)
