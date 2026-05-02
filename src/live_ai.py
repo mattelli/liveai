@@ -44,7 +44,7 @@ class Brain:
             "maxTokens": self.context_window,
         }
         self.tools:list[Callable] = [
-            self.model_handle_image, 
+            self.image_response, 
             current_date_time,  read_text_file, write_text_file, run_command,
             extract_headlines, capture_image, save_financial_chart
         ]
@@ -72,10 +72,10 @@ class Brain:
         )
         return resp_stream
     
-    def model_handle_image(self, prompt:str, image:str) -> str:
+    def image_response(self, prompt:str, image:str) -> str:
         """
-        Handle images to text, this allow to take an image as input and process it.
-        Useful when user asks for getting a description of the input image. 
+        Provide text response form an input image.
+        Useful when user asks for getting a description of the input image content. 
         """
         print("calling: model_handle_image")
         if not self.info.vision:
