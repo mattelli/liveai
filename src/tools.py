@@ -58,9 +58,12 @@ def write_text_file(file: str, content: str) -> str:
 
 def run_command(cmd: str) -> str:
     """
-    Run a command with a subprocess and wait for it. 
+    Run a command with a subprocess and wait for it to terminate. 
     It returns either the command output or error as string.
-    Useful when user asks to work with files, directories, or execute commands.
+    Useful when user asks to work with files, directories, 
+    or to execute commands for example: 
+        git, wget, curl, cd, mkdir, mv, cp, find, grep, python, ping 
+    and so on so fourth.
     """
     print(f"calling: run_command >> {cmd}")
     cmd_list = cmd.split()
