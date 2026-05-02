@@ -7,10 +7,8 @@ from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
 from src.tools import (
     CAPTURED_IMAGE,
-    current_date_time, create_dir, create_file,
-    extract_news, 
-    capture_image, 
-    save_financial_chart,
+    current_date_time, read_text_file, write_text_file, run_command,
+    extract_headlines, capture_image, save_financial_chart,
 )
 
 class Brain:
@@ -47,10 +45,8 @@ class Brain:
         }
         self.tools:list[Callable] = [
             self.model_handle_image, 
-            current_date_time, create_dir, create_file,
-            extract_news, 
-            capture_image,
-            save_financial_chart
+            current_date_time,  read_text_file, write_text_file, run_command,
+            extract_headlines, capture_image, save_financial_chart
         ]
         self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
         
@@ -77,7 +73,10 @@ class Brain:
         return resp_stream
     
     def model_handle_image(self, prompt:str, image:str) -> str:
-        """Handle images to text, this allow to process an image such as describe it"""
+        """
+        Handle images to text, this allow to take an image as input and process it.
+        Useful when user asks for getting a description of the input image. 
+        """
         print("calling: model_handle_image")
         if not self.info.vision:
             return "Cannot handle images"

@@ -1,5 +1,6 @@
 import cv2
 import requests
+import subprocess
 import pandas as pd
 import yfinance as yf
 import matplotlib
@@ -12,20 +13,41 @@ from datetime import datetime, timezone
 from typing import Literal
 
 CAPTURED_IMAGE:str = "captured_image.jpg"
-ValidPeriod = Literal['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
-ValidInterval = Literal['1m', '2m', ' 5m', '15m', '30m', '60m', '90m', '1h', '4h', '1d', '5d', '1wk', '1mo', '3mo']
 
+class ValidYF:
+    period = Literal['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
+    interval = Literal['1m', '2m', ' 5m', '15m', '30m', '60m', '90m', '1h', '4h', '1d', '5d', '1wk', '1mo', '3mo']
 
 def current_date_time() -> str:
-    """Returns the current date and time. Useful when user asks for time, date, or 'what day is it?'"""
+    """
+    Returns the current date and time. 
+    Useful when user asks for time, date, or 'what day is it?'
+    """
     print("calling: current_date_time")
     now = datetime.now(tz=timezone.utc)
     return now.strftime("%A, %B %d, %Y at %I:%M %p, %Z")
 
-def create_file(dest: str, content: str) -> str:
-    """Create a file with the given path and content."""
-    print("calling: create_file")
-    dest_path = Path(dest).resolve()
+def read_text_file(file: str) -> str:
+    """
+    Read a text file and return its contents as a string.
+    Useful when user asks for content description.
+    """
+    print(f"calling: read_text_file({file})")
+    file_path = Path(file).resolve()
+    if file_path.exists() and file_path.is_file():
+        try:
+            return file_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            return f"Error: {exc!r}"
+    return f"Unable to read '{file}'"
+
+def write_text_file(file: str, content: str) -> str:
+    """
+    Write a text file with the given its path and string content.
+    Useful when user asks for content generation, e.g. code generation.
+    """
+    print(f"calling: write_text_file({file})")
+    dest_path = Path(file).resolve()
     if dest_path.exists and dest_path.is_file():
         return "File already exists."
     try:
@@ -34,23 +56,35 @@ def create_file(dest: str, content: str) -> str:
         return f"Error: {exc!r}"
     return f"File created at '{dest_path.resolve()}'"
 
-def create_dir(dest: str, mode:int=551) -> str:
-    """Create a directory with the given path."""
-    print("calling: create_dir")
-    dest_path = Path(dest).resolve()
-    if dest_path.exists and dest_path.is_dir():
-        return "Directory already exists."
-    try:
-        dest_path.mkdir(mode)
-    except Exception as exc:
-        return f"Error: {exc!r}"
-    return f"File created at '{dest_path.resolve()}'"
+def run_command(cmd: str) -> str:
+    """
+    Run a command with a subprocess and wait for it. 
+    It returns either the command output or error as string.
+    Useful when user asks to work with files, directories, or execute commands.
+    """
+    print(f"calling: run_command >> {cmd}")
+    cmd_list = cmd.split()
+    process = subprocess.Popen(
+        cmd_list,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=Path.cwd(),
+        text=True,
+        shell=True,
+    )
+    rcode = process.wait()
+    stdout, stderr = process.communicate()
+    if rcode != 0:
+        return f"Return code [{rcode}]: {stderr}"
+    return stdout
 
-def extract_news(
-        url: str = "https://www.ansa.it/english/", text_length:int=5, timeout_s:int=10
-    ) -> str:
-    """Automatic extraction of headlines from a URL."""
-    print("calling: extract_news")
+def extract_headlines(url: str = "", text_length:int=5, timeout_s:int=10) -> str:
+    """
+    Automatic extraction of headlines from a URL. Returns headlines as string.
+    Useful when user is asking to summarize the content of a webpage given its URL.
+    """
+    url = url if url else "https://www.ansa.it/english/"
+    print(f"calling: extract_headlines({url})")
     headers:list[str] = ["h1", "h2"]
     try:
         r = requests.get(url, timeout=timeout_s)
@@ -65,9 +99,12 @@ def extract_news(
             headlines.append(text)
     return f"\nFrom [{url}]\n"+"\n".join(headlines)
 
-def capture_image(camera_index:int=0, out_file:str = CAPTURED_IMAGE) -> str:
-    """Capture a frame from a camera and save it as an image file"""
-    print("calling: capture_image")
+def capture_image(camera_index:int=0, out_file:str=CAPTURED_IMAGE) -> str:
+    """
+    Captures a frame from a camera and saves it as an image file.
+    Useful when user asks for taking a picture.
+    """
+    print(f"calling: capture_image({camera_index})")
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         return f"Webcam '{camera_index}' not available"
@@ -79,16 +116,18 @@ def capture_image(camera_index:int=0, out_file:str = CAPTURED_IMAGE) -> str:
         return f"Unable to save image '{out_file}'"
     return str(Path(out_file).resolve())
 
-def save_financial_chart(symbol: str, interval:ValidInterval, period:ValidPeriod) -> str:
+def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.period) -> str:
     """
-    Saves a plot of the closing price over time with all dates displayed on the x-axis.
+    Fetch closing price of a stock symbol within a time period with a time interval.
+    The closing price are plotted in a chart that is saved as image.
+    Useful when user asks for getting financial info of a financial product given its symbol. 
     """
-    print("calling: save_financial_chart")
+    print(f"calling: save_financial_chart({symbol})")
     
     def fetch_data(
             symbol: str,
-            interval: ValidInterval = '3mo',
-            period: ValidPeriod = 'max',
+            interval: ValidYF.interval = '1mo',
+            period: ValidYF.period = '1y',
             start_date: str = None,  # YYYY-MM-DD
             end_date: str = None  # YYYY-MM-DD
     ) -> pd.DataFrame:
@@ -150,4 +189,4 @@ def save_financial_chart(symbol: str, interval:ValidInterval, period:ValidPeriod
     
     
 if __name__ == "__main__":
-    print(save_financial_chart('STLA', "1mo", "10y"))
+    print(read_text_file("src/common.py"))
