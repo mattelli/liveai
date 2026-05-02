@@ -5,7 +5,12 @@ from logging import getLogger
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
-from src.tools import current_date_time, extract_news, capture_image
+from src.tools import (
+    current_date_time, 
+    extract_news, 
+    capture_image, 
+    save_financial_chart
+)
 
 
 def print_fragment(fragment, round_index=0):
@@ -48,7 +53,8 @@ class Brain:
             self.model_handle_image, 
             current_date_time, 
             extract_news, 
-            capture_image
+            capture_image,
+            save_financial_chart
         ]
         self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
     
