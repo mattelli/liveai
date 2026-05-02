@@ -56,6 +56,14 @@ def write_text_file(file: str, content: str) -> str:
         return f"Error: {exc!r}"
     return f"File created at '{dest_path.resolve()}'"
 
+def get_working_directory() -> str:
+    """
+    Returns the current working directory.
+    Useful when user asks for getting current directory files and directories, 
+    or when user asks for launching commands.
+    """
+    return str(Path.cwd().resolve())
+
 def run_command(cmd: str) -> str:
     """
     Run a command with a subprocess and wait for it to terminate. 
