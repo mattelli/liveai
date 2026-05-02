@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from typing import Literal
 
+CAPTURED_IMAGE:str = "captured_image.jpg"
 ValidPeriod = Literal['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
 ValidInterval = Literal['1m', '2m', ' 5m', '15m', '30m', '60m', '90m', '1h', '4h', '1d', '5d', '1wk', '1mo', '3mo']
 
@@ -20,6 +21,30 @@ def current_date_time() -> str:
     print("calling: current_date_time")
     now = datetime.now(tz=timezone.utc)
     return now.strftime("%A, %B %d, %Y at %I:%M %p, %Z")
+
+def create_file(dest: str, content: str) -> str:
+    """Create a file with the given path and content."""
+    print("calling: create_file")
+    dest_path = Path(dest).resolve()
+    if dest_path.exists and dest_path.is_file():
+        return "File already exists."
+    try:
+        dest_path.write_text(content, encoding="utf-8")
+    except Exception as exc:
+        return f"Error: {exc!r}"
+    return f"File created at '{dest_path.resolve()}'"
+
+def create_dir(dest: str, mode:int=551) -> str:
+    """Create a directory with the given path."""
+    print("calling: create_dir")
+    dest_path = Path(dest).resolve()
+    if dest_path.exists and dest_path.is_dir():
+        return "Directory already exists."
+    try:
+        dest_path.mkdir(mode)
+    except Exception as exc:
+        return f"Error: {exc!r}"
+    return f"File created at '{dest_path.resolve()}'"
 
 def extract_news(
         url: str = "https://www.ansa.it/english/", text_length:int=5, timeout_s:int=10
@@ -40,7 +65,7 @@ def extract_news(
             headlines.append(text)
     return f"\nFrom [{url}]\n"+"\n".join(headlines)
 
-def capture_image(camera_index:int=0, out_file:str = "captured_image.jpg") -> str:
+def capture_image(camera_index:int=0, out_file:str = CAPTURED_IMAGE) -> str:
     """Capture a frame from a camera and save it as an image file"""
     print("calling: capture_image")
     cap = cv2.VideoCapture(camera_index)

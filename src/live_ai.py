@@ -6,10 +6,11 @@ from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
 from src.tools import (
-    current_date_time, 
+    CAPTURED_IMAGE,
+    current_date_time, create_dir, create_file,
     extract_news, 
     capture_image, 
-    save_financial_chart
+    save_financial_chart,
 )
 
 class Brain:
@@ -46,7 +47,7 @@ class Brain:
         }
         self.tools:list[Callable] = [
             self.model_handle_image, 
-            current_date_time, 
+            current_date_time, create_dir, create_file,
             extract_news, 
             capture_image,
             save_financial_chart
@@ -78,8 +79,12 @@ class Brain:
     def model_handle_image(self, prompt:str, image:str) -> str:
         """Handle images to text, this allow to process an image such as describe it"""
         print("calling: model_handle_image")
+        if not self.info.vision:
+            return "Cannot handle images"
         if not prompt:
             prompt = "describe the image"
+        if not image:
+            image = CAPTURED_IMAGE
         image_handle = lms.prepare_image(image)
         self.chat.add_user_message(prompt, images=[image_handle])
         prediction  = self.model.respond(self.chat)
