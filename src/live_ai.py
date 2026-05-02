@@ -12,14 +12,6 @@ from src.tools import (
     save_financial_chart
 )
 
-
-def print_fragment(fragment, round_index=0):
-    # .act() supplies the round index as the second parameter
-    # Setting a default value means the callback is also
-    # compatible with .complete() and .respond().
-    print(fragment.content, end="", flush=True)
-
-
 class Brain:
     def __init__(self, config: SimpleNamespace):
         self.logger = getLogger(self.__class__.__name__)
@@ -44,10 +36,13 @@ class Brain:
             pass
             
         self.model = lms.llm(config.brain.model)
+        self.info = self.model.get_info()
+        self.context_window = int(float(self.config.brain.context_ratio)*self.info.context_length)
         self.chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
+        
         self._chat_cfg = {
             "temperature": self.config.brain.temperature,
-            "maxTokens": self.config.brain.max_tokens,
+            "maxTokens": self.context_window,
         }
         self.tools:list[Callable] = [
             self.model_handle_image, 
@@ -57,6 +52,17 @@ class Brain:
             save_financial_chart
         ]
         self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
+        
+    @staticmethod
+    def print_fragment(fragment, round_index=0):
+        print(fragment.content, end="", flush=True)
+    
+    def context_usage(self, round_index=0):
+        formatted = self.model.apply_prompt_template(self.chat)
+        token_count = len(self.model.tokenize(formatted))
+        context_usage = float(token_count/self.context_window) * 100
+        context_usage_msg = f" [context: {context_usage:.2f} %]"
+        print(context_usage_msg, end="", flush=True)
     
     def model_stream_response(self, prompt: str) -> PredictionStream:
         self.logger.info(f"Sending to Model [🤖: {self.config.brain.model}] ...")
@@ -95,7 +101,8 @@ class Brain:
             self.tools,
             on_message=self.chat.append,
             config=self._chat_cfg,
-            on_prediction_fragment=print_fragment,
+            on_prediction_fragment=self.print_fragment,
+            on_round_end=self.context_usage
         )
 
 

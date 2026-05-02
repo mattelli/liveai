@@ -15,7 +15,7 @@ model = "qwen3.5-0.8b"
 # model = "liquid/lfm2.5-1.2b"
 
 api_key = "local"
-max_tokens = 1000
+context_ratio = 1.0
 
 temperature = 0.7
 system_prompt = "You are a helpful assistant. Answer the user's question concisely and accurately. If you don't know the answer, say 'I don't know.'"

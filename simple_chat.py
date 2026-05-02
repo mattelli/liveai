@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 from src.common import load_config
-from src.live_ai import Brain, print_fragment
+from src.live_ai import Brain
 
 USE_AGENT:bool = True
 
@@ -32,5 +32,5 @@ while True:
     else:
         response = brain.model_stream_response(user_input)
         for f in response:
-            print_fragment(f)
+            brain.print_fragment(f)
     print()
