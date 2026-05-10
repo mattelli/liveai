@@ -9,10 +9,11 @@ language = "en"
 # api_key = "your_api_key_here"
 
 url = "http://localhost:1234/v1"
-# model = "llama-3.2-1b-instruct"
-model = "qwen3.5-0.8b"
-# model = "qwen3.5-2b-qwen3.6-plus-distilled"
+# model = "google/gemma-4-e4b"
+# model = "qwen3.5-0.8b"
+model = "qwen/qwen3.5-4b"
 # model = "liquid/lfm2.5-1.2b"
+# model = "zai-org/glm-4.6v-flash"
 
 api_key = "local"
 context_ratio = 1.0

@@ -1,3 +1,4 @@
+import platform
 import cv2
 import requests
 import subprocess
@@ -17,6 +18,20 @@ CAPTURED_IMAGE:str = "captured_image.jpg"
 class ValidYF:
     period = Literal['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
     interval = Literal['1m', '2m', ' 5m', '15m', '30m', '60m', '90m', '1h', '4h', '1d', '5d', '1wk', '1mo', '3mo']
+
+def system_info() -> str:
+    """
+    Returns system information such as OS, CPU.
+    Useful when user asks for system status or performance.
+    """
+    print("calling: system_info")
+    try:
+        os_info = platform.platform()
+        processor_info = platform.processor()
+        platform_info = platform.uname()
+        return f"{platform_info.system} {platform_info.release} ({os_info}), Processor: {processor_info}"
+    except Exception as e:
+        return f"Error fetching system info: {e}"
 
 def current_date_time() -> str:
     """
@@ -89,13 +104,12 @@ def run_command(cmd: str) -> str:
         return f"Return code [{rcode}]: {stderr}"
     return stdout
 
-def extract_headlines(url: str = "", text_length:int=5, timeout_s:int=10) -> str:
+def webpage_headlines(url: str = "https://www.ansa.it/english/", text_length:int=5, timeout_s:int=10) -> str:
     """
     Automatic extraction of headlines from a URL. Returns headlines as string.
     Useful when user is asking to summarize the content of a webpage given its URL.
     """
-    url = url if url else "https://www.ansa.it/english/"
-    print(f"calling: extract_headlines({url})")
+    print(f"calling: webpage_headlines({url})")
     headers:list[str] = ["h1", "h2"]
     try:
         r = requests.get(url, timeout=timeout_s)
@@ -200,4 +214,4 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
     
     
 if __name__ == "__main__":
-    print(read_text_file("src/common.py"))
+    print(system_info())

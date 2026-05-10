@@ -7,8 +7,8 @@ from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
 from src.tools import (
     CAPTURED_IMAGE,
-    current_date_time, read_text_file, write_text_file, get_working_directory, run_command, 
-    extract_headlines, capture_image, save_financial_chart,
+    system_info, current_date_time, read_text_file, write_text_file, get_working_directory, run_command, 
+    webpage_headlines, capture_image, save_financial_chart,
 )
 
 class Brain:
@@ -45,8 +45,8 @@ class Brain:
         }
         self.tools:list[Callable] = [
             self.image_response, 
-            current_date_time,  read_text_file, write_text_file, get_working_directory, run_command,
-            extract_headlines, capture_image, save_financial_chart
+            system_info, current_date_time,  read_text_file, write_text_file, get_working_directory, run_command,
+            webpage_headlines, capture_image, save_financial_chart
         ]
         self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
         
@@ -72,18 +72,14 @@ class Brain:
         )
         return resp_stream
     
-    def image_response(self, prompt:str, image:str) -> str:
+    def image_response(self, prompt:str = "describe the image", image:str = CAPTURED_IMAGE) -> str:
         """
         Provide text response form an input image.
         Useful when user asks for getting a description of the input image content. 
         """
-        print("calling: image_response")
+        print(f"calling: image_response [{prompt}, {image}]")
         if not self.info.vision:
             return "Cannot handle images"
-        if not prompt:
-            prompt = "describe the image"
-        if not image:
-            image = CAPTURED_IMAGE
         image_handle = lms.prepare_image(image)
         self.chat.add_user_message(prompt, images=[image_handle])
         prediction  = self.model.respond(self.chat)

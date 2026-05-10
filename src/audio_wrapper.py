@@ -60,7 +60,7 @@ def compute_silence_threshold(
         samplerate: int = 16000,
         chunk_time_s: float = 0.1,
         chunks: int = 20,
-        guard_factor: float = 1.5
+        guard_factor: float = 1.0
     ) -> float:
     chunk_rms_values: list[float] = []
     chunk_size = int(chunk_time_s * samplerate)
@@ -87,7 +87,7 @@ class SpeechDetector:
         self.device = InputAudioDevice()
         self.logger.info(f"ℹ️  Using audio input device: {self.device.name} (index {self.device.index})")
         self.logger.info(f"🚀 Loading Audio to Text model from {model_path} ...")
-        self.model = WhisperModel(str(model_path), device="cpu", compute_type="int16")
+        self.model = WhisperModel(str(model_path), device="auto", compute_type="int8")
         self.logger.info(f"✅ Model loaded.")
         self.language = language
         self.beam_size = beam_size
