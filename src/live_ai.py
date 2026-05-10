@@ -69,6 +69,7 @@ class Agent(Brain):
 
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
+        self.end_round_response:str = ""
         self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' initialized. Setting up tools ...")
         self.tools:list[Callable] = [
             self.image_response, 
@@ -87,6 +88,8 @@ class Agent(Brain):
         context_usage = float(token_count/self.context_window) * 100
         context_usage_msg = f" [context: {context_usage:.2f} %]"
         print(context_usage_msg, end="", flush=True)
+        if formatted and "</think>\n\n" in formatted and not self.end_round_response:
+            self.end_round_response = formatted.split("</think>")[-1].strip()
 
     def image_response(self, prompt:str = "describe the image", image:str = CAPTURED_IMAGE) -> str:
         """
@@ -100,8 +103,8 @@ class Agent(Brain):
         self.chat.add_user_message(prompt, images=[image_handle])
         prediction  = self.model.respond(self.chat)
         return prediction.content
-    
-    def tools_response(self, prompt: str):
+
+    def call_tools(self, prompt: str):
         self.logger.info(f"Sending to Agent [🤖: {self.config.brain.model}] ...")
         self.logger.debug(f"Prompt:\n{prompt}")
         self.chat.add_user_message(prompt)
@@ -113,6 +116,12 @@ class Agent(Brain):
             on_prediction_fragment=self.print_fragment,
             on_round_end=self.context_usage
         )
+
+    def tools_response(self, prompt:str) -> str:
+        self.call_tools(prompt)
+        response = self.end_round_response
+        self.end_round_response = ""
+        return response
 
 
 class LiveAi:
@@ -129,7 +138,7 @@ class LiveAi:
             model_path=config.speech_gen.model_path,
             samplerate=config.speech_gen.samplerate
         )
-        self.brain = Brain(config=config)
+        self.agent = Agent(config=config)
 
     def run(self):
         print("\nReady. Press Ctrl+C to quit.")
@@ -142,7 +151,7 @@ class LiveAi:
                     self.logger.info("Empty transcription, skipping.")
                     continue
                 print(f"\nYou: {prompt}")
-                response = self.brain.model_response(prompt)
+                response = self.agent.tools_response(prompt)
                 print(f"\n🤖 [{self.config.brain.model}]: {response}")
                 self.speech.speak(response)
                 print("\n---\n")

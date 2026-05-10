@@ -28,7 +28,7 @@ while True:
     
     print(f"🤖 [{config.brain.model}]: ", end="", flush=True)
     if USE_TOOLS:
-        agent.tools_response(user_input)
+        agent.call_tools(user_input)
     else:
         response = agent.stream_response(user_input)
         for f in response:
