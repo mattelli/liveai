@@ -19,6 +19,15 @@ class ValidYF:
     period = Literal['1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max']
     interval = Literal['1m', '2m', ' 5m', '15m', '30m', '60m', '90m', '1h', '4h', '1d', '5d', '1wk', '1mo', '3mo']
 
+
+def exit_gracefully():
+    """
+    Exits the program gracefully.
+    Useful when user asks to quit or exit the application.
+    """
+    print("\nExiting gracefully. Bye! 👋")
+    exit(0)
+
 def system_info() -> str:
     """
     Returns system information such as OS, CPU.

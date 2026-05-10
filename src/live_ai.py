@@ -7,7 +7,7 @@ from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace
 from src.tools import (
     CAPTURED_IMAGE,
-    system_info, current_date_time, read_text_file, write_text_file, get_working_directory, run_command, 
+    exit_gracefully, system_info, current_date_time, read_text_file, write_text_file, get_working_directory, run_command, 
     webpage_headlines, capture_image, save_financial_chart,
 )
 
@@ -69,17 +69,22 @@ class Agent(Brain):
 
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
-        self.end_round_response:str = ""
+        self._end_round_response:str = ""
+        self._fragment_buffer:list[str] = []
         self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' initialized. Setting up tools ...")
         self.tools:list[Callable] = [
             self.image_response, 
-            system_info, current_date_time,  read_text_file, write_text_file, get_working_directory, run_command,
+            exit_gracefully, system_info, current_date_time,  read_text_file, write_text_file, get_working_directory, run_command,
             webpage_headlines, capture_image, save_financial_chart
         ]
         self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' is ready with [{len(self.tools)}] tools.")
 
     @staticmethod
     def print_fragment(fragment, round_index=0):
+        print(fragment.content, end="", flush=True)
+
+    def handle_fragment(self, fragment, round_index=0):
+        self._fragment_buffer.append(fragment.content)
         print(fragment.content, end="", flush=True)
     
     def context_usage(self, round_index=0):
@@ -88,8 +93,8 @@ class Agent(Brain):
         context_usage = float(token_count/self.context_window) * 100
         context_usage_msg = f" [context: {context_usage:.2f} %]"
         print(context_usage_msg, end="", flush=True)
-        if formatted and "</think>\n\n" in formatted and not self.end_round_response:
-            self.end_round_response = formatted.split("</think>")[-1].strip()
+        if formatted and not self._end_round_response:
+            self._end_round_response = " ".join(self._fragment_buffer).strip()
 
     def image_response(self, prompt:str = "describe the image", image:str = CAPTURED_IMAGE) -> str:
         """
@@ -113,14 +118,15 @@ class Agent(Brain):
             self.tools,
             on_message=self.chat.append,
             config=self._chat_cfg,
-            on_prediction_fragment=self.print_fragment,
+            on_prediction_fragment=self.handle_fragment,
             on_round_end=self.context_usage
         )
 
     def tools_response(self, prompt:str) -> str:
         self.call_tools(prompt)
-        response = self.end_round_response
-        self.end_round_response = ""
+        response = self._end_round_response
+        self._end_round_response = ""
+        self._fragment_buffer = []
         return response
 
 
