@@ -74,7 +74,7 @@ class Agent(Brain):
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
         self._end_round_response:str = ""
-        self._fragment_buffer:list[str] = []
+        self._fragments_buffer:list[str] = []
         self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' initialized. Setting up tools ...")
         self.tools:list[Callable] = [
             self.image_response, 
@@ -84,17 +84,17 @@ class Agent(Brain):
         self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' is ready with [{len(self.tools)}] tools.")
 
     def handle_fragment(self, fragment, round_index=0):
-        self._fragment_buffer.append(fragment.content)
+        self._fragments_buffer.append(fragment.content)
         print(fragment.content, end="", flush=True)
     
     def context_usage(self, round_index=0):
+        self._end_round_response = " ".join(self._fragments_buffer).strip()
         formatted = self.model.apply_prompt_template(self.chat)
         token_count = len(self.model.tokenize(formatted))
         context_usage = float(token_count/self.context_window) * 100
         context_usage_msg = f" [context: {context_usage:.2f} %]"
         print(context_usage_msg, end="", flush=True)
-        if formatted and not self._end_round_response:
-            self._end_round_response = " ".join(self._fragment_buffer).strip()
+        
 
     def image_response(self, prompt:str = "describe the image", image:str = CAPTURED_IMAGE) -> str:
         """
@@ -123,10 +123,10 @@ class Agent(Brain):
         )
 
     def tools_response(self, prompt:str) -> str:
+        self._end_round_response = ""
+        self._fragments_buffer = []
         self.call_tools(prompt)
         response = self._end_round_response
-        self._end_round_response = ""
-        self._fragment_buffer = []
         return response
 
 
