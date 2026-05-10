@@ -2,6 +2,7 @@
 # pip install diffusers
 # pip install transformers
 # pip install accelerate
+# pip install imageio-ffmpeg
 
 # The default <CACHE_DIR> is ~/.cache/huggingface/hub. 
 # It is customizable with the cache_dir argument on all methods, 
@@ -12,14 +13,44 @@
 # https://learn.microsoft.com/en-us/windows/advanced-settings/developer-mode
 
 
+from email.mime import image
+
 import PIL
 import typing
 import torch
 from enum import Enum
+from diffusers.utils import (
+    export_to_video, 
+    load_image, 
+    export_to_gif, 
+    load_video
+)
+from diffusers import (
+    AutoPipelineForText2Image, 
+    AutoPipelineForImage2Image, 
+    DiffusionPipeline, 
+    StableVideoDiffusionPipeline,
+)
+
 
 class PipeType(str, Enum):
-    STABLE_DIFFUSION = "runwayml/stable-diffusion-v1-5"
-    FLUX = "black-forest-labs/FLUX.1-dev"
+    T2I = "runwayml/stable-diffusion-v1-5"
+    T2I_U = "black-forest-labs/FLUX.1-dev"
+    T2V = "damo-vilab/text-to-video-ms-1.7b"
+    I2I = "black-forest-labs/FLUX.2-klein-base-4B"
+
+
+TYPE_CFG = {
+    PipeType.T2I: {"use_safetensors": True},
+    PipeType.T2I_U: {},
+    PipeType.T2V: {"variant": "fp16"},
+    PipeType.I2I: {}
+}
+
+LORA_WEIGHTS = {
+    PipeType.T2I_U: "Ryouko65777/Flux-Uncensored-V2",
+}
+
 
 def get_device():
     device_name = "cpu"
@@ -30,31 +61,91 @@ def get_device():
 
 
 def pipe_factory(pipe_type: PipeType) -> typing.Any:
-    if pipe_type == PipeType.STABLE_DIFFUSION:
-        from diffusers import StableDiffusionPipeline
-        pipe = StableDiffusionPipeline.from_pretrained(pipe_type.value, use_safetensors=True).to(get_device())
-    elif pipe_type == PipeType.FLUX:
-        from diffusers import DiffusionPipeline
-        pipe = DiffusionPipeline.from_pretrained(pipe_type.value, dtype=torch.bfloat16).to(get_device())
-        pipe.load_lora_weights("imagepipeline/flux_uncensored_nsfw_v1")
+
+    if pipe_type == PipeType.T2I:
+        pipe = AutoPipelineForText2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
+    elif pipe_type == PipeType.T2V:
+        pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
+    elif pipe_type == PipeType.T2I_U:
+        pipe = AutoPipelineForText2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
+    elif pipe_type == PipeType.I2I:
+        pipe = AutoPipelineForImage2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     else:
-        raise ValueError(f"Unsupported pipe_type: {pipe_type}")
+        raise ValueError(f"Unsupported pipe type: {pipe_type}")
+    
+    lora_weights = LORA_WEIGHTS.get(pipe_type)
+    if lora_weights:
+        pipe.load_lora_weights(lora_weights)
     return pipe
 
 
-def text2image(prompt:str, pipe_type: PipeType, width:int=512, height:int=512, seed:int=42, steps:int=50) -> "PIL.Image.Image":
-    pipe = pipe_factory(pipe_type)
-    image = pipe(
-        prompt, 
-        width=width,
-        height=height,
-        num_inference_steps=steps,
-        generator=torch.manual_seed(seed)
-    ).images[0]
-    return image
+def text2image(prompt:str, width:int=512, height:int=512, seed:int=42, steps:int=50) -> "PIL.Image.Image":
+    pipe = pipe_factory(PipeType.T2I)
+    with torch.inference_mode():
+        out_image = pipe(
+            prompt, 
+            width=width,
+            height=height,
+            num_inference_steps=steps,
+            generator=torch.manual_seed(seed)
+        ).images[0]
+    return out_image
+
+
+def image2image(image: PIL.Image.Image, prompt:str, strength:float=0.8, seed:int=42, steps:int=50) -> "PIL.Image.Image":
+    pipe = pipe_factory(PipeType.I2I)
+    with torch.inference_mode():
+        out_image = pipe(
+            prompt, 
+            image=image, 
+            strength=strength,
+            num_inference_steps=steps,
+            generator=torch.manual_seed(seed)
+        ).images[0]
+    return out_image
+
+
+def text2video(prompt:str, width:int=64, height:int=64, seed:int=42, steps:int=50) -> list["PIL.Image.Image"]:
+    pipe = pipe_factory(PipeType.T2V)
+    with torch.inference_mode():
+        video_frames = pipe(
+            prompt, 
+            width=width,
+            height=height,
+            num_frames=49,
+            guidance_scale=6,
+            num_inference_steps=steps,
+            generator=torch.manual_seed(seed)
+        ).frames[0]
+    return video_frames
+    
+
+def exampleT2I():
+    out_image = text2image(
+        prompt="get an anime image of a blonde girl with blue eyes, she is looking at the camera, simple passport photo, no background, detailed face",
+    )
+    out_image.save("test.png")
+
+
+def exampleI2I():
+    input_image = load_image("avatar.jpg")
+    out_image = image2image(
+        image=input_image,
+        prompt="make the girl smile",
+    )
+    out_image.save("test_i2i.png")
+
+
+def exampleT2V():
+    raise NotImplementedError("This example is not working yet")
+    video_frames = text2video(
+        prompt="get a video of a girl with blue eyes talking, she is looking at the camera"
+    )
+    export_to_video(video_frames, "test.mp4", fps=8)
 
 
 if __name__ == "__main__":
-    prompt = "get an anime image of a blonde 20 year old girl with green eyes"
-    image = text2image(prompt, PipeType.STABLE_DIFFUSION)
-    image.save("test.png")
+    exampleT2I()
+    # exampleT2V()
+    # exampleI2I()
+
