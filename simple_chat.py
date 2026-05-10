@@ -30,7 +30,7 @@ while True:
     if USE_TOOLS:
         agent.call_tools(user_input)
     else:
-        response = agent.stream_response(user_input)
-        for f in response:
+        fragments = agent.stream_fragments(user_input)
+        for f in fragments:
             agent.print_fragment(f)
     print()

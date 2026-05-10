@@ -46,7 +46,7 @@ class Brain:
         self.tools:list[Callable] = []
         self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
 
-    def stream_response(self, prompt: str) -> PredictionStream:
+    def stream_fragments(self, prompt: str) -> PredictionStream:
         self.logger.info(f"Sending to Model [🤖: {self.config.brain.model}] ...")
         self.logger.debug(f"Prompt:\n{prompt}")
         self.chat.add_user_message(prompt)
@@ -56,9 +56,13 @@ class Brain:
             config=self._chat_cfg,
         )
         return resp_stream
+    
+    @staticmethod
+    def print_fragment(fragment):
+        print(fragment.content, end="", flush=True)
 
     def model_response(self, prompt: str) -> str:
-        resp_stream = self.stream_response(prompt)
+        resp_stream = self.stream_fragments(prompt)
         answer:list[str] = [fragment.content for fragment in resp_stream]
         response = " ".join(answer).strip()
         self.logger.debug(f"Response:\n{response}")
@@ -78,10 +82,6 @@ class Agent(Brain):
             webpage_headlines, capture_image, save_financial_chart
         ]
         self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' is ready with [{len(self.tools)}] tools.")
-
-    @staticmethod
-    def print_fragment(fragment, round_index=0):
-        print(fragment.content, end="", flush=True)
 
     def handle_fragment(self, fragment, round_index=0):
         self._fragment_buffer.append(fragment.content)
