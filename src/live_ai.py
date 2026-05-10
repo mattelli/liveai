@@ -83,18 +83,11 @@ class Agent(Brain):
         self._fragments_buffer:list[str] = []
         self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' initialized. Setting up tools ...")
         self.tools:list[Callable] = [
-            self.image_response, 
+            self.image_response, self.allow_speech,
             exit_gracefully, system_info, current_date_time,  read_text_file, write_text_file, get_working_directory, run_command,
             webpage_headlines, capture_image, save_financial_chart
         ]
         self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' is ready with [{len(self.tools)}] tools.")
-        if self.config.agent.speech_enabled:
-            self.logger.info("🔊 Speech enabled for Agent responses. Initializing Speech Generator ...")
-            self.speech = SpeechGenerator(
-                model_path=config.speech_gen.model_path,
-                samplerate=config.speech_gen.samplerate
-            )
-            self.logger.info("✅ Speech Generator initialized.")
 
     def _handle_fragment(self, fragment, round_index=0):
         self._fragments_buffer.append(fragment.content)
@@ -106,9 +99,27 @@ class Agent(Brain):
         context_usage_percentage = float(token_count/self.context_window) * 100
         context_usage_msg = f"[context: {context_usage_percentage:.2f} %]"
         print(context_usage_msg)
-        if self.config.agent.speech_enabled and self.speech:
+        if hasattr(self, "speech"):
             self.speech.speak(" ".join(self._fragments_buffer).strip())
-            self._fragments_buffer.clear()
+        self._fragments_buffer.clear()
+
+    def allow_speech(self, enable:bool):
+        """
+        Enable or disable speech for Agent responses.
+        When enabled, the Agent will use the Speech Generator to vocalize its responses after each round of interaction.
+        It can be toggled on the fly during the conversation.
+        """
+        if enable and not hasattr(self, "speech"):
+            self.logger.info("Enabling speech for Agent responses. Initializing Speech Generator ...")
+            self.speech = SpeechGenerator(
+                model_path=self.config.speech_gen.model_path,
+                samplerate=self.config.speech_gen.samplerate
+            )
+            self.logger.info("✅ Speech Generator initialized.")
+        elif not enable and hasattr(self, "speech"):
+            self.logger.info("Disabling speech for Agent responses. Releasing Speech Generator ...")
+            del self.speech
+            self.logger.info("✅ Speech Generator released.")
 
     def image_response(self, prompt:str = "describe the image", image:str = CAPTURED_IMAGE) -> str:
         """
