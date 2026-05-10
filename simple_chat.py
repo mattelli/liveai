@@ -16,6 +16,9 @@ CONFIG_FILE = WORK_DIR / "config.toml"
 config = load_config(CONFIG_FILE)
 agent = Agent(config=config)
 
+print(f"\n🤖 [{config.brain.model}]: ", end="", flush=True)
+agent.act("Say hello to the user and introduce briefly yourself.")
+
 while True:
     try:
         user_input = input("You (leave blank to exit): ")
@@ -28,7 +31,7 @@ while True:
     
     print(f"🤖 [{config.brain.model}]: ", end="", flush=True)
     if USE_TOOLS:
-        agent.call_tools(user_input)
+        agent.act(user_input)
     else:
         fragments = agent.stream_fragments(user_input)
         for f in fragments:
