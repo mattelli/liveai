@@ -1,9 +1,9 @@
 import logging
 from pathlib import Path
 from src.common import load_config
-from src.live_ai import Brain
+from src.live_ai import Agent
 
-USE_AGENT:bool = True
+USE_TOOLS:bool = True
 
 logging.basicConfig(
     level=logging.WARNING,
@@ -14,7 +14,7 @@ logging.basicConfig(
 WORK_DIR = Path(__file__).parent.resolve()
 CONFIG_FILE = WORK_DIR / "config.toml"
 config = load_config(CONFIG_FILE)
-brain = Brain(config=config)
+agent = Agent(config=config)
 
 while True:
     try:
@@ -27,10 +27,10 @@ while True:
         break
     
     print(f"🤖 [{config.brain.model}]: ", end="", flush=True)
-    if USE_AGENT:
-        brain.agent_response(user_input)
+    if USE_TOOLS:
+        agent.tools_response(user_input)
     else:
-        response = brain.model_stream_response(user_input)
+        response = agent.stream_response(user_input)
         for f in response:
-            brain.print_fragment(f)
+            agent.print_fragment(f)
     print()

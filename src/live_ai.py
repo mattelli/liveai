@@ -43,13 +43,40 @@ class Brain:
             "temperature": self.config.brain.temperature,
             "maxTokens": self.context_window,
         }
+        self.tools:list[Callable] = []
+        self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
+
+    def stream_response(self, prompt: str) -> PredictionStream:
+        self.logger.info(f"Sending to Model [🤖: {self.config.brain.model}] ...")
+        self.logger.debug(f"Prompt:\n{prompt}")
+        self.chat.add_user_message(prompt)
+        resp_stream = self.model.respond_stream(
+            self.chat,
+            on_message=self.chat.append,
+            config=self._chat_cfg,
+        )
+        return resp_stream
+
+    def model_response(self, prompt: str) -> str:
+        resp_stream = self.stream_response(prompt)
+        answer:list[str] = [fragment.content for fragment in resp_stream]
+        response = " ".join(answer).strip()
+        self.logger.debug(f"Response:\n{response}")
+        return response
+
+
+class Agent(Brain):
+
+    def __init__(self, config: SimpleNamespace):
+        super().__init__(config)
+        self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' initialized. Setting up tools ...")
         self.tools:list[Callable] = [
             self.image_response, 
             system_info, current_date_time,  read_text_file, write_text_file, get_working_directory, run_command,
             webpage_headlines, capture_image, save_financial_chart
         ]
-        self.logger.info(f"✅ LLM Model '{self.config.brain.model}' connected.")
-        
+        self.logger.info(f"✅ Agent with Model '{self.config.brain.model}' is ready with [{len(self.tools)}] tools.")
+
     @staticmethod
     def print_fragment(fragment, round_index=0):
         print(fragment.content, end="", flush=True)
@@ -60,18 +87,7 @@ class Brain:
         context_usage = float(token_count/self.context_window) * 100
         context_usage_msg = f" [context: {context_usage:.2f} %]"
         print(context_usage_msg, end="", flush=True)
-    
-    def model_stream_response(self, prompt: str) -> PredictionStream:
-        self.logger.info(f"Sending to Model [🤖: {self.config.brain.model}] ...")
-        self.logger.debug(f"Prompt:\n{prompt}")
-        self.chat.add_user_message(prompt)
-        resp_stream = self.model.respond_stream(
-            self.chat,
-            on_message=self.chat.append,
-            config=self._chat_cfg,
-        )
-        return resp_stream
-    
+
     def image_response(self, prompt:str = "describe the image", image:str = CAPTURED_IMAGE) -> str:
         """
         Provide text response form an input image.
@@ -85,14 +101,7 @@ class Brain:
         prediction  = self.model.respond(self.chat)
         return prediction.content
     
-    def model_response(self, prompt: str) -> str:
-        resp_stream = self.model_stream_response(prompt)
-        answer:list[str] = [fragment.content for fragment in resp_stream]
-        response = " ".join(answer).strip()
-        self.logger.debug(f"Response:\n{response}")
-        return response
-    
-    def agent_response(self, prompt: str):
+    def tools_response(self, prompt: str):
         self.logger.info(f"Sending to Agent [🤖: {self.config.brain.model}] ...")
         self.logger.debug(f"Prompt:\n{prompt}")
         self.chat.add_user_message(prompt)
