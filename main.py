@@ -1,4 +1,3 @@
-import argparse
 import logging
 from pathlib import Path
 from src.common import load_config
@@ -9,10 +8,6 @@ CONFIG_FILE = WORK_DIR / "config.toml"
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Local live AI assistant."
-    )
-    args = parser.parse_args()
     logging.basicConfig(
         level=logging.WARNING,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",

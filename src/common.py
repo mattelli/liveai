@@ -1,4 +1,5 @@
 import tomllib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,3 +36,14 @@ def load_config(config_path: Path) -> SimpleNamespace:
 
     return namespace_from_dict(data, config_dir)
 
+
+def read_json(file_path: Path):
+    """Read JSON data from a file and return it as a Python object."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def write_json(file_path: Path, data):
+    """Write JSON data to a file."""
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)

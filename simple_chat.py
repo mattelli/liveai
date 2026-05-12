@@ -17,7 +17,7 @@ config = load_config(CONFIG_FILE)
 agent = Agent(config=config)
 
 print(f"\n🤖 [{config.brain.model}]: ", end="", flush=True)
-agent.act("Say hello to the user and introduce briefly yourself.")
+agent.act(config.brain.bootstrap_prompt)
 
 while True:
     try:
@@ -28,7 +28,7 @@ while True:
     if not user_input:
         print("Bye! 👋")
         break
-    
+
     print(f"🤖 [{config.brain.model}]: ", end="", flush=True)
     if USE_TOOLS:
         agent.act(user_input)

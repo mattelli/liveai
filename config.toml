@@ -4,23 +4,19 @@ silence_timeout_s = 2.0
 language = "en"
 
 
-[brain] # OpenAI API configuration
-# url = "https://api.minimax.io/v1"
-# model = "MiniMax-M2.5"
-# api_key = "your_api_key_here"
-
-url = "http://localhost:1234/v1"
-
-model = "google/gemma-4-e4b"
+[brain] # llm configuration
+# model = "google/gemma-4-e4b"
 # model = "qwen/qwen3.5-0.8b"
 # model = "qwen/qwen3.5-4b"
+model = "qwen/qwen3-vl-4b"
+# model = "qwen/qwen3.5-9b"
 # model = "liquid/lfm2.5-1.2b"
 # model = "zai-org/glm-4.6v-flash"
-
-api_key = "local"
+bootstrap_prompt = "Say hello to the user and introduce briefly yourself. Ask the user for their name."
+system_path = "system_prompt.txt"
+history_path = "chat_history.json"
 context_ratio = 1.0
 temperature = 0.7
-system_prompt = "You are a helpful assistant. Answer the user's question concisely and accurately. If you don't know the answer, say 'I don't know.' Never use markdown format for your responses."
 
 
 [speech_gen]
