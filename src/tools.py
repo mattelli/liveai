@@ -5,7 +5,7 @@ import subprocess
 import pandas as pd
 import yfinance as yf
 import matplotlib
-matplotlib.use("Agg") 
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from pathlib import Path

@@ -33,7 +33,7 @@ while True:
     if USE_TOOLS:
         agent.act(user_input)
     else:
-        fragments = agent.stream_fragments(user_input)
+        fragments = agent.model_fragments(user_input)
         for f in fragments:
             agent.print_fragment(f)
     print()
