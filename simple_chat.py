@@ -16,9 +16,6 @@ CONFIG_FILE = WORK_DIR / "config.toml"
 config = load_config(CONFIG_FILE)
 agent = Agent(config=config)
 
-print(f"\n🤖 [{config.brain.model}]: ", end="", flush=True)
-agent.act(config.brain.bootstrap_prompt)
-
 while True:
     try:
         user_input = input("You (leave blank to exit): ")

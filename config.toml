@@ -3,7 +3,6 @@ model_path= "res/faster-whisper-medium"
 silence_timeout_s = 2.0
 language = "en"
 
-
 [brain] # llm configuration
 # model = "google/gemma-4-e4b"
 model = "qwen/qwen3.5-0.8b"
@@ -12,12 +11,13 @@ model = "qwen/qwen3.5-0.8b"
 # model = "qwen/qwen3.5-9b"
 # model = "liquid/lfm2.5-1.2b"
 # model = "zai-org/glm-4.6v-flash"
-bootstrap_prompt = " Recall history. Say hello to the user. Ask the user name if not available from the history."
-system_path = "system_prompt.txt"
-history_path = "chat_history.txt"
+system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know."
+history_path = "chat_history.log"
 context_ratio = 1.0
-temperature = 0.7
+temperature = 0.6
 
+[agent]
+bootstrap_prompt = "Hello !"
 
 [speech_gen]
 model_path = "res/voices/en_US-hfc_female-medium.onnx"
