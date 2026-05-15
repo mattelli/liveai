@@ -14,46 +14,6 @@ from src.tools import (
 )
 
 
-class ChatHistory:
-    """
-    Class to manage the history of interactions with the model.
-    It can save and load history from a text file.
-    """
-    def __init__(
-            self,
-            history_path: pathlib.Path,
-            system_prompt: str=" "
-        ):
-        self.history_path = history_path
-        self._buffer:dict[str, list[dict[str, str]]] = {"messages": []}
-        sys_message = {"role": "system", "content": system_prompt}
-        if not self.history_path.exists():
-            self._buffer.get("messages", []).append(sys_message)
-            write_json(self.history_path, self._buffer)
-        else:
-            self._buffer = read_json(self.history_path)
-
-    def _build_message(self, role: str, content: str) -> dict[str, str]:
-        return {"role": role, "content": content}
-        # now = datetime.now(tz=timezone.utc)
-        # timestamp = now.strftime("%A, %B %d, %Y at %I:%M %p, %Z")
-        # return {"role": role, "content": f"[{timestamp}] {content}"}
-
-    def get(self) -> dict[str, list[dict[str, str]]]:
-        """Returns hustory buffer"""
-        return self._buffer
-
-    def append(self, message: dict[str, str]):
-        """Append a message to the history and save it to the file."""
-        self._buffer.get("messages", []).append(message)
-        write_json(self.history_path, self._buffer)
-
-    def append_message(self, role: str, content: str):
-        """Build a message with timestamp and append it to the history."""
-        if role != self._buffer.get("messages", [])[-1]["role"]:
-            self.append(self._build_message(role, content))
-
-
 class Brain:
     """
     Brain class that connects to the LLM model.
@@ -80,11 +40,7 @@ class Brain:
         self.model = lms.llm(config.brain.model)
         self.info = self.model.get_info()
         self.context_window = int(float(self.config.brain.context_ratio)*self.info.context_length)
-        self._history = ChatHistory(
-            self.config.brain.history_path,
-            self.config.brain.system_prompt
-        )
-        self.chat = lms.Chat.from_history(self._history.get())
+        self.chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
         self._chat_cfg = {
             "temperature": self.config.brain.temperature,
             "maxTokens": self.context_window,
@@ -93,7 +49,6 @@ class Brain:
 
     def _add_user_prompt(self, prompt: str):
         self.chat.add_user_message(prompt)
-        self._history.append_message("user", prompt)
         self.logger.debug("Prompt:\n%s", prompt)
 
     def model_fragments(self, prompt: str) -> PredictionStream:
@@ -136,7 +91,6 @@ class Brain:
             return "Cannot handle images"
         image_handle = lms.prepare_image(image)
         self.chat.add_user_message(prompt, images=[image_handle])
-        self._history.append_message("user", prompt)
         prediction  = self.model.respond(self.chat)
         return prediction.content
 
@@ -159,6 +113,34 @@ class Brain:
             del self.speech
             return "Speech Generator released"
 
+    def store_chat(self) ->  str:
+        """
+        Summarzes the chat to a text files.
+        Usefull when the user ask to store the current conversation. 
+        """
+        history = pathlib.Path(self.config.brain.history_path).resolve()
+        messages = self.chat._get_history().get("messages", [])
+        user_promt = "Past User prompt:\n" + "\n * ".join(
+            [m["content"][0]["text"] for m in messages if m["role"] == "user"]
+        ) + "\n"
+        if not history.exists():
+            history.write_text(user_promt, encoding="utf-8")
+        else:
+            with open(file=history, mode="a", encoding="utf-8") as f:
+                f.write(user_promt)
+        return f"Conversation written to {history}"
+
+    def recall_chat(self) -> str:
+        """
+        Read conversation summary from file.
+        usefull when the user ask to rememeber the past conversations. 
+        """
+        history = pathlib.Path(self.config.brain.history_path).resolve()
+        if not history.exists():
+            return "Nothing to recall"
+        else:
+            return history.read_text(encoding="utf-8")
+
 
 class Agent(Brain):
     """
@@ -172,8 +154,8 @@ class Agent(Brain):
             self.config.brain.model
         )
         self.tools:list[Callable] = [
-            self.image_response, self.allow_speech,
-            exit_gracefully, system_info, current_date_time, 
+            self.image_response, self.allow_speech, self.store_chat, self.recall_chat,
+            exit_gracefully, system_info, current_date_time,
             read_text_file, write_text_file, get_working_directory, run_command,
             webpage_headlines, capture_image, save_financial_chart
         ]
@@ -197,7 +179,6 @@ class Agent(Brain):
         if hasattr(self, "speech"):
             self.speech.speak(response)
         self._fragments_buffer.clear()
-        self._history.append_message("assistant", response)
 
     def act(self, prompt: str):
         """
