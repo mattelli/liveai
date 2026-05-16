@@ -4,12 +4,13 @@ silence_timeout_s = 2.0
 language = "en"
 
 [brain] # llm configuration
-# model = "google/gemma-4-e4b"
-# model = "qwen/qwen3.5-0.8b"
-# model = "qwen/qwen3.5-4b"
-model = "qwen/qwen3-vl-4b"
+# model = "google/gemma-4-e4b"  # too verbose
+model = "mistralai/ministral-3-3b"  # OK
+# model = "qwen/qwen3.5-0.8b" # OK for quick simple test
+# model = "qwen/qwen3.5-4b"  # too verbose
+# model = "qwen/qwen3-vl-4b"  # OK
 # model = "qwen/qwen3.5-9b"
-# model = "liquid/lfm2.5-1.2b"
+# model = "liquid/lfm2.5-1.2b"  # KO
 # model = "zai-org/glm-4.6v-flash"
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know."
 history_path = "chat_history.log"

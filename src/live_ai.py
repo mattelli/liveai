@@ -70,16 +70,15 @@ class Brain:
         """Print a response fragment to the console. This can be used as a callback for streaming responses."""
         print(fragment.content, end="", flush=True)
 
-    def model_response(self, prompt: str) -> str:
+
+    ## TOOLS ##
+
+    def model_info(self) -> str:
         """
-        Get the full response from the model for a given prompt.
-        Tools are not supported in this method.
+        Returns the loaded model info.
+        Usefull when user ask for information about the loaded model.
         """
-        resp_stream = self.model_fragments(prompt)
-        answer:list[str] = [fragment.content for fragment in resp_stream]
-        response = " ".join(answer).strip()
-        self.logger.debug("Response:\n%s", response)
-        return response
+        return str(self.info)
 
     def image_response(self, image:str, prompt:str = "describe the image") -> str:
         """
@@ -159,7 +158,7 @@ class Agent(Brain):
             self.config.brain.model
         )
         self.tools:list[Callable] = [
-            self.image_response, self.allow_speech, self.store_chat, self.recall_chat,
+            self.image_response, self.allow_speech, self.store_chat, self.recall_chat, self.model_info,
             exit_gracefully, system_info, current_date_time,
             read_text_file, write_text_file, get_working_directory, run_command,
             webpage_headlines, capture_image, save_financial_chart
