@@ -6,7 +6,7 @@ from logging import getLogger
 from datetime import datetime, timezone
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
-from src.common import SimpleNamespace, write_json, read_json
+from src.common import SimpleNamespace
 from src.tools import (
     exit_gracefully, system_info, current_date_time,
     read_text_file, write_text_file, get_working_directory, run_command,
@@ -115,14 +115,19 @@ class Brain:
 
     def store_chat(self) ->  str:
         """
-        Summarzes the chat to a text files.
-        Usefull when the user ask to store the current conversation. 
+        Stores the user messages to a text file.
+        Usefull when the user ask to store or remember the conversations. 
         """
         history = pathlib.Path(self.config.brain.history_path).resolve()
+        now = datetime.now(tz=timezone.utc)
+        timestamp = now.strftime("%d/%m/%Y, %H:%M")
         messages = self.chat._get_history().get("messages", [])
-        user_promt = "Past User prompt:\n" + "\n * ".join(
-            [m["content"][0]["text"] for m in messages if m["role"] == "user"]
-        ) + "\n"
+        user_msgs = [m["content"][0]["text"] for m in messages if m["role"] == "user"]
+        if user_msgs and user_msgs[0] == self.config.agent.bootstrap_prompt:
+            selected_msgs = user_msgs[1:]
+        else:
+            selected_msgs = user_msgs
+        user_promt = f"At {timestamp} user wrote:\n * " + "\n * ".join(selected_msgs) + "\n"
         if not history.exists():
             history.write_text(user_promt, encoding="utf-8")
         else:
@@ -132,8 +137,8 @@ class Brain:
 
     def recall_chat(self) -> str:
         """
-        Read conversation summary from file.
-        usefull when the user ask to rememeber the past conversations. 
+        Read conversation from file.
+        usefull when the user ask to recall the past conversations. 
         """
         history = pathlib.Path(self.config.brain.history_path).resolve()
         if not history.exists():
