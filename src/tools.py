@@ -13,6 +13,8 @@ from bs4 import BeautifulSoup
 from datetime import datetime, timezone
 from typing import Literal
 
+from src.common import dump_func_call
+
 CAPTURED_IMAGE:str = "captured_image.jpg"
 
 class ValidYF:
@@ -28,12 +30,12 @@ def exit_gracefully():
     print("\nExiting gracefully. Bye! 👋")
     exit(0)
 
+@dump_func_call
 def system_info() -> str:
     """
     Returns system information such as OS, CPU.
     Useful when user asks for system status or performance.
     """
-    print("calling: system_info")
     try:
         os_info = platform.platform()
         processor_info = platform.processor()
@@ -42,21 +44,21 @@ def system_info() -> str:
     except Exception as e:
         return f"Error fetching system info: {e}"
 
+@dump_func_call
 def current_date_time() -> str:
     """
     Returns the current date and time. 
     Useful when user asks for time, date, or 'what day is it?'
     """
-    print("calling: current_date_time")
     now = datetime.now(tz=timezone.utc)
     return now.strftime("%A, %B %d, %Y at %I:%M %p, %Z")
 
+@dump_func_call
 def read_text_file(file: str) -> str:
     """
     Read a text file and return its contents as a string.
     Useful when user asks for content description.
     """
-    print(f"calling: read_text_file({file})")
     file_path = Path(file).resolve()
     if file_path.exists() and file_path.is_file():
         try:
@@ -65,12 +67,12 @@ def read_text_file(file: str) -> str:
             return f"Error: {exc!r}"
     return f"Unable to read '{file}'"
 
+@dump_func_call
 def write_text_file(file: str, content: str) -> str:
     """
     Write a text file with the given its path and string content.
     Useful when user asks for content generation, e.g. code generation.
     """
-    print(f"calling: write_text_file({file})")
     dest_path = Path(file).resolve()
     if dest_path.exists and dest_path.is_file():
         return "File already exists."
@@ -80,6 +82,7 @@ def write_text_file(file: str, content: str) -> str:
         return f"Error: {exc!r}"
     return f"File created at '{dest_path.resolve()}'"
 
+@dump_func_call
 def get_working_directory() -> str:
     """
     Returns the current working directory.
@@ -88,6 +91,7 @@ def get_working_directory() -> str:
     """
     return str(Path.cwd().resolve())
 
+@dump_func_call
 def run_command(cmd: str) -> str:
     """
     Run a command with a subprocess and wait for it to terminate. 
@@ -97,7 +101,6 @@ def run_command(cmd: str) -> str:
         git, wget, curl, cd, mkdir, mv, cp, find, grep, python, ping 
     and so on so fourth.
     """
-    print(f"calling: run_command >> {cmd}")
     cmd_list = cmd.split()
     process = subprocess.Popen(
         cmd_list,
@@ -113,12 +116,12 @@ def run_command(cmd: str) -> str:
         return f"Return code [{rcode}]: {stderr}"
     return stdout
 
+@dump_func_call
 def webpage_headlines(url: str = "https://www.ansa.it/english/", text_length:int=5, timeout_s:int=10) -> str:
     """
     Automatic extraction of headlines from a URL. Returns headlines as string.
     Useful when user is asking to summarize the content of a webpage given its URL.
     """
-    print(f"calling: webpage_headlines({url})")
     headers:list[str] = ["h1", "h2"]
     try:
         r = requests.get(url, timeout=timeout_s)
@@ -133,12 +136,12 @@ def webpage_headlines(url: str = "https://www.ansa.it/english/", text_length:int
             headlines.append(text)
     return f"\nFrom [{url}]\n"+"\n".join(headlines)
 
-def capture_image(camera_index:int=0, out_file:str=CAPTURED_IMAGE) -> str:
+@dump_func_call
+def capture_image(out_file:str=CAPTURED_IMAGE, camera_index:int=0, ) -> str:
     """
     Captures a frame from a camera and saves it as an image file.
     Useful when user asks for taking a picture.
     """
-    print(f"calling: capture_image({camera_index})")
     cap = cv2.VideoCapture(camera_index)
     if not cap.isOpened():
         return f"Webcam '{camera_index}' not available"
@@ -150,14 +153,14 @@ def capture_image(camera_index:int=0, out_file:str=CAPTURED_IMAGE) -> str:
         return f"Unable to save image '{out_file}'"
     return str(Path(out_file).resolve())
 
+@dump_func_call
 def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.period) -> str:
     """
     Fetch closing price of a stock symbol within a time period with a time interval.
     The closing price are plotted in a chart that is saved as image.
     Useful when user asks for getting financial info of a financial product given its symbol. 
     """
-    print(f"calling: save_financial_chart({symbol})")
-    
+
     def fetch_data(
             symbol: str,
             interval: ValidYF.interval = '1mo',
@@ -165,7 +168,6 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
             start_date: str = None,  # YYYY-MM-DD
             end_date: str = None  # YYYY-MM-DD
     ) -> pd.DataFrame:
-        print(f"\nFetching data for [{symbol}] in the period [{period}] at interval [{interval}] ...\n")
         data = yf.download(symbol, period=period, interval=interval, start=start_date, end=end_date)
         if data.empty:
             raise ValueError(f"No data found for {symbol}.")
@@ -220,7 +222,7 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
         return f"Plot saved to '{plot_path}'"
     except Exception as e:
         return f"Unable to plot data for symbol '{symbol}'"
-    
-    
+
+
 if __name__ == "__main__":
     print(system_info())

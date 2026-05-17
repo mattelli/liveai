@@ -6,7 +6,7 @@ from logging import getLogger
 from datetime import datetime, timezone
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
-from src.common import SimpleNamespace
+from src.common import SimpleNamespace, dump_func_call
 from src.tools import (
     exit_gracefully, system_info, current_date_time,
     read_text_file, write_text_file, get_working_directory, run_command,
@@ -67,12 +67,16 @@ class Brain:
 
     @staticmethod
     def print_fragment(fragment):
-        """Print a response fragment to the console. This can be used as a callback for streaming responses."""
+        """
+        Print a response fragment to the console.
+        This can be used as a callback for streaming responses.
+        """
         print(fragment.content, end="", flush=True)
 
 
     ## TOOLS ##
 
+    @dump_func_call
     def model_info(self) -> str:
         """
         Returns the loaded model info.
@@ -80,12 +84,12 @@ class Brain:
         """
         return str(self.info)
 
+    @dump_func_call
     def image_response(self, image:str, prompt:str = "describe the image") -> str:
         """
         Provide text response form an input image.
         Useful when user asks for getting a description of the input image content. 
         """
-        print(f"calling: image_response [{prompt}, {image}]")
         if not self.info.vision:
             return "Cannot handle images"
         image_handle = lms.prepare_image(image)
@@ -93,13 +97,13 @@ class Brain:
         prediction  = self.model.respond(self.chat)
         return prediction.content
 
+    @dump_func_call
     def allow_speech(self, enable:bool) -> str:
         """
         Enable or disable speech for Agent responses.
         When enabled, the Agent will use the Speech Generator.
         It can be toggled on the fly during the conversation.
         """
-        print(f"calling: allow_speech [{enable}]")
         if enable and not hasattr(self, "speech"):
             self.logger.info("Initializing Speech Generator ...")
             self.speech = SpeechGenerator(
@@ -112,6 +116,7 @@ class Brain:
             del self.speech
             return "Speech Generator released"
 
+    @dump_func_call
     def store_chat(self) ->  str:
         """
         Stores the user messages to a text file.
@@ -134,6 +139,7 @@ class Brain:
                 f.write(user_promt)
         return f"Conversation written to {history}"
 
+    @dump_func_call
     def recall_chat(self) -> str:
         """
         Read conversation from file.

@@ -1,5 +1,7 @@
 import tomllib
 import json
+import inspect
+from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,12 +40,34 @@ def load_config(config_path: Path) -> SimpleNamespace:
 
 
 def read_json(file_path: Path):
-    """Read JSON data from a file and return it as a Python object."""
+    """
+    Read JSON data from a file and return it as a Python object.
+    """
     with open(file_path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def write_json(file_path: Path, data):
-    """Write JSON data to a file."""
+    """
+    Write JSON data to a file.
+    """
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+
+def dump_func_call(func):
+    """
+    Decorator to print function call details with parameter names and shorted values.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        sig = inspect.signature(func)
+        bound_args = sig.bind_partial(*args, **kwargs)
+        bound_args.apply_defaults()
+        sel_args = [
+            (name, str(value)[:50]) for name, value in bound_args.arguments.items()
+            if "self" not in str(name)
+        ]
+        print(f"\n[CALL] {func.__name__}(" + ", ".join(f"{n}={v!r}" for n, v in sel_args) + ")")
+        return func(*args, **kwargs)
+    return wrapper
