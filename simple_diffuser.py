@@ -12,43 +12,41 @@
 # To support symlinks on Windows, you either need to activate Developer Mode or to run Python as an administrator.
 # https://learn.microsoft.com/en-us/windows/advanced-settings/developer-mode
 
-
-from email.mime import image
+# From https://github.com/marcchicoine/runwayml-stable-diffusion-v1-5
+# See https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/safety_checker.py
+# Patch 88 +,- [False for res in result]
 
 import PIL
 import typing
 import torch
 from enum import Enum
 from diffusers.utils import (
-    export_to_video, 
-    load_image, 
-    export_to_gif, 
-    load_video
+    export_to_video,
+    load_image,
+    # export_to_gif,
+    # load_video
 )
 from diffusers import (
-    AutoPipelineForText2Image, 
-    AutoPipelineForImage2Image, 
-    DiffusionPipeline, 
-    StableVideoDiffusionPipeline,
+    AutoPipelineForText2Image,
+    AutoPipelineForImage2Image,
+    DiffusionPipeline,
+    # StableVideoDiffusionPipeline,
 )
 
 
 class PipeType(str, Enum):
     T2I = "runwayml/stable-diffusion-v1-5"
-    T2I_U = "black-forest-labs/FLUX.1-dev"
     T2V = "damo-vilab/text-to-video-ms-1.7b"
     I2I = "black-forest-labs/FLUX.2-klein-base-4B"
 
 
 TYPE_CFG = {
     PipeType.T2I: {"use_safetensors": True},
-    PipeType.T2I_U: {},
     PipeType.T2V: {"variant": "fp16"},
     PipeType.I2I: {}
 }
 
 LORA_WEIGHTS = {
-    PipeType.T2I_U: "Ryouko65777/Flux-Uncensored-V2",
 }
 
 
@@ -66,8 +64,6 @@ def pipe_factory(pipe_type: PipeType) -> typing.Any:
         pipe = AutoPipelineForText2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     elif pipe_type == PipeType.T2V:
         pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
-    elif pipe_type == PipeType.T2I_U:
-        pipe = AutoPipelineForText2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     elif pipe_type == PipeType.I2I:
         pipe = AutoPipelineForImage2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     else:
@@ -83,7 +79,7 @@ def text2image(prompt:str, width:int=512, height:int=512, seed:int=42, steps:int
     pipe = pipe_factory(PipeType.T2I)
     with torch.inference_mode():
         out_image = pipe(
-            prompt, 
+            prompt,
             width=width,
             height=height,
             num_inference_steps=steps,
@@ -96,8 +92,8 @@ def image2image(image: PIL.Image.Image, prompt:str, strength:float=0.8, seed:int
     pipe = pipe_factory(PipeType.I2I)
     with torch.inference_mode():
         out_image = pipe(
-            prompt, 
-            image=image, 
+            prompt,
+            image=image,
             strength=strength,
             num_inference_steps=steps,
             generator=torch.manual_seed(seed)
@@ -109,7 +105,7 @@ def text2video(prompt:str, width:int=64, height:int=64, seed:int=42, steps:int=5
     pipe = pipe_factory(PipeType.T2V)
     with torch.inference_mode():
         video_frames = pipe(
-            prompt, 
+            prompt,
             width=width,
             height=height,
             num_frames=49,
