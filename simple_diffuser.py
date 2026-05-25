@@ -28,7 +28,7 @@ from diffusers.utils import (
 )
 from diffusers import (
     # AutoPipelineForText2Image,
-    # AutoPipelineForImage2Image,
+    AutoPipelineForImage2Image,
     DiffusionPipeline,
 )
 
@@ -65,7 +65,7 @@ def pipe_factory(pipe_type: PipeType) -> typing.Any:
     elif pipe_type == PipeType.T2V:
         pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     elif pipe_type == PipeType.I2I:
-        pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
+        pipe = AutoPipelineForImage2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     elif pipe_type == PipeType.I2V:
         pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     else:
@@ -134,7 +134,7 @@ def image2video(image: PIL.Image.Image, prompt:str, strength:float=0.8, seed:int
 ## MAIN ###
 def exampleT2I():
     out_image = text2image(
-        prompt="get an anime image of a blonde girl with blue eyes, she is looking at the camera, simple passport photo, no background, detailed face",
+        prompt="get an anime image of a blonde girl with blue eyes, she is looking at the camera smiling, simple passport photo, no background, detailed face",
     )
     out_image.save("test.png")
 
@@ -143,7 +143,7 @@ def exampleI2I():
     input_image = load_image("res/test6.png")
     out_image = image2image(
         image=input_image,
-        prompt="make the girl smile",
+        prompt="make the girl of the image smile",
     )
     out_image.save("test_i2i.png")
 
