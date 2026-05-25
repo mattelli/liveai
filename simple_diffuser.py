@@ -27,23 +27,23 @@ from diffusers.utils import (
     # load_video
 )
 from diffusers import (
-    AutoPipelineForText2Image,
-    AutoPipelineForImage2Image,
+    # AutoPipelineForText2Image,
+    # AutoPipelineForImage2Image,
     DiffusionPipeline,
-    # StableVideoDiffusionPipeline,
 )
 
 
 class PipeType(str, Enum):
-    T2I = "runwayml/stable-diffusion-v1-5"
-    T2V = "damo-vilab/text-to-video-ms-1.7b"
-    I2I = "black-forest-labs/FLUX.2-klein-base-4B"
+    # T2I = "runwayml/stable-diffusion-v1-5"
+    # T2I = "UnfilteredAI/NSFW-gen-v2"
+    T2I = "UnfilteredAI/NSFW-GEN-ANIME"
+    I2I = "Estebandidoooi/realisticVisionV60B1_v51HyperVAE"
+    T2V = ""
+    I2V = ""
 
 
 TYPE_CFG = {
     PipeType.T2I: {"use_safetensors": True},
-    PipeType.T2V: {"variant": "fp16"},
-    PipeType.I2I: {}
 }
 
 LORA_WEIGHTS = {
@@ -61,11 +61,13 @@ def get_device():
 def pipe_factory(pipe_type: PipeType) -> typing.Any:
 
     if pipe_type == PipeType.T2I:
-        pipe = AutoPipelineForText2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
+        pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     elif pipe_type == PipeType.T2V:
         pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     elif pipe_type == PipeType.I2I:
-        pipe = AutoPipelineForImage2Image.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
+        pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
+    elif pipe_type == PipeType.I2V:
+        pipe = DiffusionPipeline.from_pretrained(pipe_type.value, **TYPE_CFG.get(pipe_type, {})).to(get_device())
     else:
         raise ValueError(f"Unsupported pipe type: {pipe_type}")
     
@@ -114,8 +116,22 @@ def text2video(prompt:str, width:int=64, height:int=64, seed:int=42, steps:int=5
             generator=torch.manual_seed(seed)
         ).frames[0]
     return video_frames
-    
 
+
+def image2video(image: PIL.Image.Image, prompt:str, strength:float=0.8, seed:int=42, steps:int=50) -> "PIL.Image.Image":
+    pipe = pipe_factory(PipeType.I2V)
+    with torch.inference_mode():
+        out_image = pipe(
+            prompt,
+            image=image,
+            strength=strength,
+            num_inference_steps=steps,
+            generator=torch.manual_seed(seed)
+        ).frames[0]
+    return out_image
+
+
+## MAIN ###
 def exampleT2I():
     out_image = text2image(
         prompt="get an anime image of a blonde girl with blue eyes, she is looking at the camera, simple passport photo, no background, detailed face",
@@ -124,7 +140,7 @@ def exampleT2I():
 
 
 def exampleI2I():
-    input_image = load_image("avatar.jpg")
+    input_image = load_image("res/test6.png")
     out_image = image2image(
         image=input_image,
         prompt="make the girl smile",
@@ -133,8 +149,17 @@ def exampleI2I():
 
 
 def exampleT2V():
-    raise NotImplementedError("This example is not working yet")
+    raise ValueError("Unable to run in mini hardware")
     video_frames = text2video(
+        prompt="get a video of a girl with blue eyes talking, she is looking at the camera"
+    )
+    export_to_video(video_frames, "test.mp4", fps=8)
+
+
+def exampleI2V():
+    raise ValueError("Unable to run in mini hardware")
+    video_frames = image2video(
+        image= "res/test2.png",
         prompt="get a video of a girl with blue eyes talking, she is looking at the camera"
     )
     export_to_video(video_frames, "test.mp4", fps=8)
@@ -142,6 +167,6 @@ def exampleT2V():
 
 if __name__ == "__main__":
     exampleT2I()
-    # exampleT2V()
     # exampleI2I()
-
+    # exampleT2V()
+    # exampleI2V()
