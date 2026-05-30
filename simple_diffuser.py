@@ -1,21 +1,4 @@
-# Python 3.9
-# pip install diffusers
-# pip install transformers
-# pip install accelerate
-# pip install imageio-ffmpeg
-
-# The default <CACHE_DIR> is ~/.cache/huggingface/hub. 
-# It is customizable with the cache_dir argument on all methods, 
-# or by specifying either HF_HOME or HF_HUB_CACHE environment variable.
-
-# `huggingface_hub` cache-system uses symlinks by default to efficiently store duplicated files.
-# To support symlinks on Windows, you either need to activate Developer Mode or to run Python as an administrator.
-# https://learn.microsoft.com/en-us/windows/advanced-settings/developer-mode
-
-# From https://github.com/marcchicoine/runwayml-stable-diffusion-v1-5
-# See https://github.com/huggingface/diffusers/blob/main/src/diffusers/pipelines/stable_diffusion/safety_checker.py
-# Patch 88 +,- [False for res in result]
-
+import time
 import PIL
 import typing
 import torch
@@ -35,15 +18,14 @@ from diffusers import (
 
 class PipeType(str, Enum):
     # T2I = "runwayml/stable-diffusion-v1-5"
-    # T2I = "UnfilteredAI/NSFW-gen-v2"
-    T2I = "UnfilteredAI/NSFW-GEN-ANIME"
+    T2I = "UnfilteredAI/NSFW-gen-v2"
     I2I = "Estebandidoooi/realisticVisionV60B1_v51HyperVAE"
     T2V = ""
     I2V = ""
 
 
 TYPE_CFG = {
-    PipeType.T2I: {"use_safetensors": True},
+    PipeType.T2I: {"use_safetensors": True, "torch_dtype": torch.float32},
 }
 
 LORA_WEIGHTS = {
@@ -166,7 +148,10 @@ def exampleI2V():
 
 
 if __name__ == "__main__":
+    start = time.perf_counter()
     exampleT2I()
     # exampleI2I()
     # exampleT2V()
     # exampleI2V()
+    end = time.perf_counter()
+    print(f"Execution Time: {end - start:.2f} seconds")
