@@ -4,12 +4,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
-.venv/
-.lms/
-venv/
+.*/
 
-# Resources
-res/
 
 # Logs
 *.log
