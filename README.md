@@ -31,7 +31,7 @@ python3 -m piper.download_voices en_US-hfc_female-medium
 
 
 ## Diffusers
-Text to Image and Image to Image generation through Diffusion pipelins.
+Text to Image and Image to Image generation through Diffusion pipelines.
 
 Considered models
 
@@ -51,6 +51,24 @@ OS Windows 11 (powershell)
 .\sd-cpu-setup.ps1  
 
 ```
+
+
+## System Notes
+
+```
+CPU - AMD Ryzen 7 7735HS with Radeon Graphics - 8 Cores
+RAM - 24 GB
+
+APU - AMD Radeon(TM) Graphics - Primary/Integrated
+VRAM - 4096 MB - LPDDR5 800 MHz
+
+Windows Edition - Windows 11 Professional (64 bit)
+Windows Version - 25H2
+```
+
+The processing is done through CPU.
+GPU processing is supported only through Direct ML (very limited - not usable)
+
 
 ## License
 
