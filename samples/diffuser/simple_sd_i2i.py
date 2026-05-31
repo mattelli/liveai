@@ -8,9 +8,9 @@ import os
 # ============================
 
 MODEL = "runwayml/stable-diffusion-v1-5"   # Cambiabile con SDXL
-INPUT_IMAGE = ".res/test_a.png"
-MASK_IMAGE = ".res/mask.png"  # es. "mask.png" se vuoi inpainting
-OUTPUT_DIR = "out_images"
+INPUT_IMAGE = "../../.res/test_a.png"
+MASK_IMAGE = "../../.res/mask.png"  # es. "mask.png" se vuoi inpainting
+OUTPUT_DIR = "../../.out_images"
 
 PROMPT = "make the girl smile, same person, same pose, same lighting, same style, 4k resolution, masterpiece"
 NEGATIVE = "distorted face, deformed eyes, asymmetry, extra teeth, bad anatomy"
