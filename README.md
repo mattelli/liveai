@@ -30,12 +30,27 @@ python3 -m piper.download_voices en_US-hfc_female-medium
 ```
 
 
+## Diffusers
+Text to Image and Image to Image generation through Diffusion pipelins.
+
+Considered models
+
+- runwayml/stable-diffusion-v1-5
+- UnfilteredAI/NSFW-gen-v2
+
+
 ## Setup (Python 3.12.10)
 
-```
-pip install numpy sounddevice soundfile faster-whisper lmstudio piper-tts opencv-python
-```
+OS Windows 11 (powershell)
 
+```
+# Ai agent based on LM Studio API
+.\lms-cpu-setup.ps1
+
+# Stable-Diffusers pipeline
+.\sd-cpu-setup.ps1  
+
+```
 
 ## License
 
