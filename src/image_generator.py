@@ -76,48 +76,49 @@ class ImageGenerator:
         return out_image
     
     def image2image(self, 
-            image:Image, 
+            image:pathlib.Path, 
             prompt:str, 
-            variants:int=2,
-            mask_img: pathlib.Path|None = None, 
+            mask: pathlib.Path|None = None, 
             negative_prompt:str=" ",
             denoise:float=0.5,
             guidance:float=5.0
-        ) -> list:
+        ) -> Image:
+        """
+        Denoise: 0-1, how much the model will change the input image.
+        Guidance: 3-12, how much the model will follow the prompt.
+        """
         print(f"Using device: {self._device}")
         if not self._i2i_pipe:
             raise ValueError("Image2Image pipeline not initialized")
-        if self._in_paint and not mask_img:
+        if self._in_paint and not mask:
             raise ValueError("Image-mask is required")
         
-        init_image = Image.open(image).convert("RGB")
-        if mask_img:
-            mask_image = Image.open(mask_img).convert("RGB")
-        
-        image_variants = []
+        init_img = Image.open(image).convert("RGB")
+        if mask and mask.is_file():
+            mask_img = Image.open(mask).convert("RGB")
+        else:
+            raise ValueError("Mask should be an image file path")
         start = time.perf_counter()
-        for i in range(variants):
-            if self._in_paint:
-                result = self._i2i_pipe(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    image=init_image,
-                    mask_image=mask_image,
-                    strength=denoise,
-                    guidance_scale=guidance,
-                )
-            else:
-                result = self._i2i_pipe(
-                    prompt=prompt,
-                    negative_prompt=negative_prompt,
-                    image=init_image,
-                    strength=denoise,
-                    guidance_scale=guidance,
-                )
-            image_variants.append(result.images[0])
+        if self._in_paint:
+            result = self._i2i_pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                image=init_img,
+                mask_image=mask_img,
+                strength=denoise,
+                guidance_scale=guidance,
+            )
+        else:
+            result = self._i2i_pipe(
+                prompt=prompt,
+                negative_prompt=negative_prompt,
+                image=init_img,
+                strength=denoise,
+                guidance_scale=guidance,
+            )
         end = time.perf_counter()
         print(f"Generation Time: {end - start:.2f} seconds")
-        return image_variants
+        return result.images[0]
     
     @staticmethod
     def save(image, img_path:pathlib.Path) -> bool:
