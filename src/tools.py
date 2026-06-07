@@ -130,7 +130,7 @@ def run_command(cmd: str) -> str:
     return stdout
 
 @dump_func_call
-def webpage_headlines(url: str = "https://www.ansa.it/english/", text_length:int=5, timeout_s:int=10) -> str:
+def webpage_headlines(url: str = "https://www.ansa.it/english/", relevant_text_length:int=20, timeout_s:int=10) -> str:
     """
     Automatic extraction of headlines from a URL. Returns headlines as string.
     Useful when user is asking to summarize the content of a webpage given its URL.
@@ -145,7 +145,7 @@ def webpage_headlines(url: str = "https://www.ansa.it/english/", text_length:int
     headlines = []
     for tag in soup.find_all(headers):
         text = tag.get_text(strip=True)
-        if len(text) > text_length:
+        if len(text) > relevant_text_length:
             headlines.append(text)
     return f"\nFrom [{url}]\n"+"\n".join(headlines)
 
@@ -180,7 +180,6 @@ def web_search(query:str, n_results:int=5, timeout_s:float=10.0) -> str:
         return f"Error: {exc!r}"
     finally:
         driver.quit()
-
 
 @dump_func_call
 def capture_image(out_file:str=CAPTURED_IMAGE, camera_index:int=0, ) -> str:
