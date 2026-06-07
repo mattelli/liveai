@@ -1,6 +1,5 @@
 # ============================================
-# Stable Diffusion CPU Windows 11
-# No way to install pakages to enable Windows 11 + AMD Radeon (680M)
+# Live Assistant - Windows 11
 $target_py_version = "3.12"
 # ============================================
 
@@ -30,8 +29,10 @@ pip install numpy
 pip install opencv-python
 pip install yfinance
 pip install matplotlib
+pip install requests
 pip install beautifulsoup4
-
+pip install selenium
+pip install webdriver-manager
 
 
 Write-Host ""

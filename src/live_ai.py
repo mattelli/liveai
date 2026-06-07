@@ -10,7 +10,7 @@ from src.common import SimpleNamespace, dump_func_call
 from src.tools import (
     exit_gracefully, system_info, current_date_time,
     read_text_file, write_text_file, get_working_directory, run_command,
-    webpage_headlines, capture_image, save_financial_chart,
+    webpage_headlines, web_search, capture_image, save_financial_chart,
 )
 
 
@@ -167,7 +167,7 @@ class Agent(Brain):
             self.image_response, self.allow_speech, self.store_chat, self.recall_chat, self.model_info,
             exit_gracefully, system_info, current_date_time,
             read_text_file, write_text_file, get_working_directory, run_command,
-            webpage_headlines, capture_image, save_financial_chart
+            webpage_headlines, web_search, capture_image, save_financial_chart
         ]
         self.logger.info(
             "✅ Agent with Model '%s' is ready with [%d] tools.", 

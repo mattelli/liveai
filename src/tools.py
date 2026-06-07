@@ -10,10 +10,20 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from pathlib import Path
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from webdriver_manager.chrome import ChromeDriverManager
 from datetime import datetime, timezone
 from typing import Literal
 
-from src.common import dump_func_call
+try:
+    from src.common import dump_func_call
+except:
+    from common import dump_func_call
 
 CAPTURED_IMAGE:str = "captured_image.jpg"
 
@@ -140,6 +150,39 @@ def webpage_headlines(url: str = "https://www.ansa.it/english/", text_length:int
     return f"\nFrom [{url}]\n"+"\n".join(headlines)
 
 @dump_func_call
+def web_search(query:str, n_results:int=5, timeout_s:float=10.0) -> str:
+    """
+    Search web pages based on the query.
+    Useful when user asks for search on a topic.
+    """
+    options = Options()
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--incognito")
+    service = Service(ChromeDriverManager().install())
+    driver = webdriver.Chrome(service=service, options=options)
+    driver.set_window_size(width=300, height=200)
+    try:
+        driver.get("https://duckduckgo.com/")
+        wait = WebDriverWait(driver, timeout_s)
+        search_bar = wait.until(EC.element_to_be_clickable((By.ID, "searchbox_input")))
+        search_bar.send_keys(query)
+        search_bar.submit()
+        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "article")))
+        elements = driver.find_elements(By.CSS_SELECTOR, "article")
+        results = [el.text.strip() for el in elements if el.text.strip()]
+        result_content = "\nSearch Results:\n"
+        for i, it in enumerate(results[:n_results], 1):
+            result_content += f"{i}) {it}\n"
+            result_content += 50*"=" + "\n"
+        return result_content
+    except Exception as exc:
+        return f"Error: {exc!r}"
+    finally:
+        driver.quit()
+
+
+@dump_func_call
 def capture_image(out_file:str=CAPTURED_IMAGE, camera_index:int=0, ) -> str:
     """
     Captures a frame from a camera and saves it as an image file.
@@ -228,4 +271,4 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
 
 
 if __name__ == "__main__":
-    print(system_info())
+    print(webpage_headlines("https://www.ilmeteo.it"))
