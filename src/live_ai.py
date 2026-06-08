@@ -120,7 +120,7 @@ class Brain:
     def store_chat(self) ->  str:
         """
         Stores the user messages to a text file.
-        Usefull when the user ask to store or remember the conversations. 
+        Useful when the user ask to store or remember the conversations. 
         """
         history = pathlib.Path(self.config.brain.history_path).resolve()
         now = datetime.now(tz=timezone.utc)
@@ -143,7 +143,7 @@ class Brain:
     def recall_chat(self) -> str:
         """
         Read conversation from file.
-        usefull when the user ask to recall the past conversations. 
+        useful when the user ask to recall the past conversations. 
         """
         history = pathlib.Path(self.config.brain.history_path).resolve()
         if not history.exists():
