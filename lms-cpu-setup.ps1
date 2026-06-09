@@ -34,6 +34,10 @@ pip install beautifulsoup4
 pip install selenium
 pip install webdriver-manager
 
+# EMBEDDING
+pip install -U "sentence-transformers[image]"
+pip install nltk
+
 
 Write-Host ""
 Write-Host "=== Installation complete ==="
