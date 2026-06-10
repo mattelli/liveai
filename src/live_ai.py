@@ -131,12 +131,12 @@ class Brain:
             selected_msgs = user_msgs[1:]
         else:
             selected_msgs = user_msgs
-        user_promt = f"At {timestamp} user wrote:\n * " + "\n * ".join(selected_msgs) + "\n"
+        user_prompt = f"At {timestamp} user wrote:\n * " + "\n * ".join(selected_msgs) + "\n"
         if not history.exists():
-            history.write_text(user_promt, encoding="utf-8")
+            history.write_text(user_prompt, encoding="utf-8")
         else:
             with open(file=history, mode="a", encoding="utf-8") as f:
-                f.write(user_promt)
+                f.write(user_prompt)
         return f"Conversation written to {history}"
 
     @dump_func_call
