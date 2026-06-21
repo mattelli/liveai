@@ -11,6 +11,7 @@ from src.tools import (
     exit_gracefully, system_info, current_date_time,
     read_text_file, write_text_file, get_working_directory, run_command,
     webpage_headlines, web_search, capture_image, save_financial_chart,
+    search_pattern_in_files
 )
 
 Role = Literal['system', 'user', 'assistant']
@@ -199,7 +200,8 @@ class Agent(Brain):
             self.store_personal, self.recall_personal, 
             exit_gracefully, system_info, current_date_time,
             read_text_file, write_text_file, get_working_directory, run_command,
-            webpage_headlines, web_search, capture_image, save_financial_chart
+            webpage_headlines, web_search, capture_image, save_financial_chart,
+            search_pattern_in_files
         ]
         self.logger.info(
             "✅ Agent with Model '%s' is ready with [%d] tools.", 
