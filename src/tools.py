@@ -346,7 +346,56 @@ def replace_pattern_in_file(file_path:str, pattern:str, replacement:str) -> str:
         return f"Error: File '{_file_path}' not found."
     except Exception as e:
         return f"Error: {e}"
+    
+@dump_func_call
+def amend_text_file(file_path:str, new_text:str, top_row:int|None=None, bottom_row:int|None=None) -> str:
+    """
+    Amend the content of a text file with new_text content by specifying top_row and bottom_row of the text.
+    If top_row and bottom_row are both None then the new_text will be appended to the original file content.
+    If top_row == bottom_row then the new_text will be inserted at top_row. 
+    If top_row != bottom_row then the current content between top_row and bottom_row will be removed and the new_text will be inserted at top_row. 
+    Args:
+        file_path (str): Path to the file to modify.
+        new_text (str): new text to add.
+        top_row (int|None): line where start current text to be amended.
+        bottom_row (int|None): line where end current text to be amended.
+    Returns:
+        Returns a string providing the number of lines inserted and the line.
+    """
+    def added_lines(txt:str) -> int:
+        return  len(txt.split("\n")) - 1
+
+    _file_path = Path(file_path).resolve()
+    if _file_path.is_dir():
+        return f"Error: '{_file_path}' is a directory."
+    if not _file_path.exists():
+        return f"Error: '{_file_path}' does not exists."
+    try:
+        with open(file_path, 'r') as file:
+            lines = file.readlines()
+        if top_row is None and bottom_row is None:
+            _txt = "\n" + new_text + "\n"
+            lines.append(_txt)
+            response =  f"Appended '{added_lines(_txt)}' lines to '{_file_path}'"
+        elif top_row == bottom_row:
+            lines.insert(top_row - 1, new_text)
+            response =  f"Inserted '{added_lines(new_text)}' lines to '{_file_path}' at line '{top_row}'"
+        elif top_row > bottom_row:
+            return f"Error: top_row '{top_row}' must be lesser than bottom_row '{bottom_row}' !"
+        else:
+            for i in range(top_row - 1, bottom_row):
+                lines.pop(i)
+            lines.insert(top_row - 1, new_text)
+            response = f"Replaced '{bottom_row-top_row + 1}' with '{added_lines(new_text)}' lines to '{_file_path}' at line '{top_row}'"
+        with open(file_path, 'w') as file:
+            file.writelines(lines)
+        return response
+    except Exception as e:
+        return f"Error: {e}"
 
 
 if __name__ == "__main__":
-    print(replace_pattern_in_file("./src/live_ai.py", "self.chat", "self._chat"))
+    # print(amend_text_file("./amend_text_file.py", "prova\nprova\n"))
+    # print(amend_text_file("./amend_text_file.py", "pippo\npippo\n",27, 28))
+    print(amend_text_file("./amend_text_file.py", "azz\nazz\n",23, 22))
+
