@@ -11,7 +11,7 @@ from src.tools import (
     exit_gracefully, system_info, current_date_time,
     read_text_file, write_text_file, get_working_directory, run_command,
     webpage_headlines, web_search, capture_image, save_financial_chart,
-    search_pattern_in_files, replace_pattern_in_file, amend_text_file
+    search_pattern_in_files, replace_string_in_file, amend_text_file
 )
 
 Role = Literal['system', 'user', 'assistant']
@@ -40,8 +40,8 @@ class Brain:
             pass
 
         self._model = lms.llm(config.brain.model)
-        self.info = self._model.get_info()
-        self._context_window = int(float(self.config.brain.context_ratio)*self.info.context_length)
+        self._info = self._model.get_info()
+        self._context_window = int(float(self.config.brain.context_ratio)*self._info.context_length)
         self._chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
         self._chat_cfg = {
             "temperature": self.config.brain.temperature,
@@ -113,7 +113,7 @@ class Brain:
         Returns the loaded model info.
         Useful when user ask for information about the loaded model.
         """
-        return str(self.info)
+        return str(self._info)
 
     @dump_func_call
     def image_response(self, image:str, prompt:str = "describe the image") -> str:
@@ -121,7 +121,7 @@ class Brain:
         Provide text response form an input image.
         Useful when user asks for getting a description of the input image content. 
         """
-        if not self.info.vision:
+        if not self._info.vision:
             return "Cannot handle images"
         image_handle = lms.prepare_image(image)
         self._chat.add_user_message(prompt, images=[image_handle])
@@ -201,7 +201,7 @@ class Agent(Brain):
             exit_gracefully, system_info, current_date_time,
             read_text_file, write_text_file, get_working_directory, run_command,
             webpage_headlines, web_search, capture_image, save_financial_chart,
-            search_pattern_in_files, replace_pattern_in_file, amend_text_file
+            search_pattern_in_files, replace_string_in_file, amend_text_file
         ]
         self.logger.info(
             "✅ Agent with Model '%s' is ready with [%d] tools.", 

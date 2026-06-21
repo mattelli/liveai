@@ -328,13 +328,13 @@ def search_pattern_in_files(
     return formatted_res
 
 @dump_func_call
-def replace_pattern_in_file(path:str, pattern:str, replacement:str) -> str:
+def replace_string_in_file(path:str, old_string:str, new_string:str) -> str:
     """
-    Replace all occurrences of a pattern in a file with a replacement and count replacements.
+    Replace all occurrences of old_string in a file with new_string and count replacements.
     Args:
         file_path (str): Path to the file to modify.
-        pattern (str): Regular expression pattern to search for.
-        replacement (str): String to replace the pattern with.
+        new_string (str): New string to replace the old_string.
+        old_string (str): String to be replaced.
     Returns:
         Returns a string repenting the count of replacements
     """
@@ -344,11 +344,11 @@ def replace_pattern_in_file(path:str, pattern:str, replacement:str) -> str:
     try:
         with open(_file_path, 'r', encoding='utf-8') as file:
             content = file.read()
-        count = len(re.findall(pattern, content))
-        new_content = re.sub(pattern, replacement, content)   
+        count = len(re.findall(old_string, content))
+        content = content.replace(old_string, new_string) 
         with open(_file_path, 'w', encoding='utf-8') as file:
-            file.write(new_content)
-        return f"'{count}' occurrences of '{pattern}' have been replaced by '{replacement}'"
+            file.write(content)
+        return f"'{count}' occurrences of '{old_string}' have been replaced by '{new_string}'"
     except FileNotFoundError:
         return f"Error: File '{_file_path}' not found."
     except Exception as e:
