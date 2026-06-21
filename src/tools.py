@@ -276,14 +276,15 @@ def search_pattern_in_files(
     include_extensions: str="", 
     exclude_extensions: str=""
     ) -> str:
-    """Search for a pattern in files within a directory recursively.
+    """
+    Search for a pattern in files within a directory recursively.
     Args:
         directory (str): The root directory to search in.
         pattern (str): The pattern to search for.
         include_extensions (str): Comma separated file extensions to include.
         exclude_extensions (str): Comma separated  file extensions to exclude.
     Returns:
-        String of dict[str, list[int]]: Dictionary with file paths as keys and list of line numbers as values.
+        String listing the file paths and the line numbers where pattern is found.
     """
     include_extensions_list = [ext.strip().lower() for ext in include_extensions.split(",")] if include_extensions else [] 
     exclude_extensions_list = [ext.strip().lower() for ext in exclude_extensions.split(",")] if exclude_extensions else [] 
@@ -319,6 +320,33 @@ def search_pattern_in_files(
         formatted_res += f"- in file '{str(path)}' at lines: " + ", ".join(map(str, lines))  + "\n"
     return formatted_res
 
+@dump_func_call
+def replace_pattern_in_file(file_path:str, pattern:str, replacement:str) -> str:
+    """
+    Replace all occurrences of a pattern in a file with a replacement and count replacements.
+    Args:
+        file_path (str): Path to the file to modify.
+        pattern (str): Regular expression pattern to search for.
+        replacement (str): String to replace the pattern with.
+    Returns:
+        Returns a string repenting the count of replacements
+    """
+    _file_path = Path(file_path).resolve()
+    if _file_path.is_dir():
+        return f"Error: '{_file_path}' is a directory."
+    try:
+        with open(_file_path, 'r', encoding='utf-8') as file:
+            content = file.read()
+        count = len(re.findall(pattern, content))
+        new_content = re.sub(pattern, replacement, content)   
+        with open(file_path, 'w', encoding='utf-8') as file:
+            file.write(new_content)
+        return f"'{count}' occurrences of '{pattern}' have been replaced by '{replacement}'"
+    except FileNotFoundError:
+        return f"Error: File '{_file_path}' not found."
+    except Exception as e:
+        return f"Error: {e}"
+
 
 if __name__ == "__main__":
-    print(search_pattern_in_files("error", "./src"))
+    print(replace_pattern_in_file("./src/live_ai.py", "self.chat", "self._chat"))
