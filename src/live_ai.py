@@ -73,6 +73,12 @@ class Brain:
         """
         print(fragment.content, end="", flush=True)
 
+    def _clear_chat(self) -> bool:
+        try:
+            self.chat._messages.clear()
+            return True
+        except:
+            return False
 
     ## TOOLS ##
 
@@ -80,7 +86,7 @@ class Brain:
     def model_info(self) -> str:
         """
         Returns the loaded model info.
-        Usefull when user ask for information about the loaded model.
+        Useful when user ask for information about the loaded model.
         """
         return str(self.info)
 
@@ -117,10 +123,10 @@ class Brain:
             return "Speech Generator released"
 
     @dump_func_call
-    def store_chat(self) ->  str:
+    def store_personal(self) ->  str:
         """
-        Stores the user messages to a text file.
-        Useful when the user ask to store or remember the conversations. 
+        Stores the user personal content to a text file.
+        Useful when the users explicitly mention the prompted text is "personal". 
         """
         history = pathlib.Path(self.config.brain.history_path).resolve()
         now = datetime.now(tz=timezone.utc)
@@ -140,16 +146,32 @@ class Brain:
         return f"Conversation written to {history}"
 
     @dump_func_call
-    def recall_chat(self) -> str:
+    def recall_personal(self) -> str:
         """
-        Read conversation from file.
-        useful when the user ask to recall the past conversations. 
+        Read users personal data from file.
+        Useful when the users ask to recall their personal data. 
         """
         history = pathlib.Path(self.config.brain.history_path).resolve()
         if not history.exists():
-            return "Nothing to recall"
+            return "No personal data found!"
         else:
             return history.read_text(encoding="utf-8")
+        
+    @dump_func_call
+    def clear_personal(self) -> str:
+        """
+        Clear users personal data from file.
+        Useful when the users ask to forget their personal data. 
+        """
+        history = pathlib.Path(self.config.brain.history_path).resolve()
+        if not history.exists():
+            return "Nothing to clear"
+        else:
+            if self._clear_chat():
+                history.write_text("", encoding="utf-8")
+                return "Chat history successfully cleaned"
+            else:
+                return "Chat history not cleaned"
 
 
 class Agent(Brain):
@@ -164,7 +186,8 @@ class Agent(Brain):
             self.config.brain.model
         )
         self.tools:list[Callable] = [
-            self.image_response, self.allow_speech, self.store_chat, self.recall_chat, self.model_info,
+            self.model_info, self.image_response, self.allow_speech, 
+            self.store_personal, self.recall_personal, self.clear_personal, 
             exit_gracefully, system_info, current_date_time,
             read_text_file, write_text_file, get_working_directory, run_command,
             webpage_headlines, web_search, capture_image, save_financial_chart
@@ -184,11 +207,14 @@ class Agent(Brain):
         formatted = self.model.apply_prompt_template(self.chat)
         token_count = len(self.model.tokenize(formatted))
         context_usage_percentage = float(token_count/self.context_window) * 100
-        print(f"[context: {context_usage_percentage:.2f} %]")
+        print(f"  [context: {context_usage_percentage:.2f} %]")
         response = " ".join(self._fragments_buffer).strip()
         if hasattr(self, "speech"):
             self.speech.speak(response)
         self._fragments_buffer.clear()
+        if context_usage_percentage > float(self.config.agent.refresh_context) * 100:
+            self._clear_chat()
+            self._add_user_prompt(self.recall_personal())
 
     def act(self, prompt: str):
         """

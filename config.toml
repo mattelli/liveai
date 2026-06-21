@@ -15,7 +15,8 @@ context_ratio = 1.0
 temperature = 0.6
 
 [agent]
-bootstrap_prompt = "Recall past chat and say 'Hello' to the user. Ask user name if it is unknown."
+bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
+refresh_context = 0.7
 
 [speech_gen]
 model_path = ".res/voices/en_US-hfc_female-medium.onnx"
