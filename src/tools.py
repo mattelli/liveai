@@ -1,3 +1,4 @@
+import re
 import platform
 import cv2
 import requests
@@ -268,6 +269,56 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
     except Exception as e:
         return f"Unable to plot data for symbol '{symbol}'"
 
+@dump_func_call
+def search_pattern_in_files(
+    pattern: str, 
+    directory: str, 
+    include_extensions: str="", 
+    exclude_extensions: str=""
+    ) -> str:
+    """Search for a pattern in files within a directory recursively.
+    Args:
+        directory (str): The root directory to search in.
+        pattern (str): The pattern to search for.
+        include_extensions (str): Comma separated file extensions to include.
+        exclude_extensions (str): Comma separated  file extensions to exclude.
+    Returns:
+        String of dict[str, list[int]]: Dictionary with file paths as keys and list of line numbers as values.
+    """
+    include_extensions_list = [ext.strip().lower() for ext in include_extensions.split(",")] if include_extensions else [] 
+    exclude_extensions_list = [ext.strip().lower() for ext in exclude_extensions.split(",")] if exclude_extensions else [] 
+    regex = re.compile(pattern)
+    results:dict[str, list[int]] = {}
+    search_dir = Path(directory).resolve()
+    if not search_dir.exists():
+        return f"'{search_dir}' does not exist!"
+    if not search_dir.is_dir():
+        return f"'{search_dir}' is not a directory!"
+    for file_path in search_dir.rglob("*"):
+        if file_path.is_dir():
+            continue
+        ext = file_path.suffix.lower()
+        if include_extensions_list and ext not in include_extensions_list:
+            continue
+        if exclude_extensions_list and ext in exclude_extensions_list:
+            continue
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+                for line_num, line in enumerate(lines):
+                    if regex.search(line):
+                        if file_path not in results:
+                            results[file_path] = []
+                        results[file_path].append(line_num + 1)  # Line numbers are 1-based
+        except Exception as e:
+            continue
+    if not results:
+        return f"Did not find file having pattern '{pattern}' in directory '{search_dir}' "
+    formatted_res = f"Found '{len(results)}' files having pattern '{pattern}' in directory '{search_dir}' :\n"
+    for path, lines in results.items():
+        formatted_res += f"- in file '{str(path)}' at lines: " + ", ".join(map(str, lines))  + "\n"
+    return formatted_res
+
 
 if __name__ == "__main__":
-    print(webpage_headlines("https://www.ilmeteo.it"))
+    print(search_pattern_in_files("error", "./src"))
