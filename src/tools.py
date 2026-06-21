@@ -274,7 +274,8 @@ def search_pattern_in_files(
     pattern: str, 
     directory: str, 
     include_extensions: str="", 
-    exclude_extensions: str=""
+    exclude_extensions: str="",
+    exclude_glob: str|None=".*",
     ) -> str:
     """
     Search for a pattern in files within a directory recursively.
@@ -283,6 +284,7 @@ def search_pattern_in_files(
         pattern (str): The pattern to search for.
         include_extensions (str): Comma separated file extensions to include.
         exclude_extensions (str): Comma separated  file extensions to exclude.
+        exclude_glob (str): Glob pattern of the files or directories to  exclude.
     Returns:
         String listing the file paths and the line numbers where pattern is found.
     """
@@ -295,6 +297,9 @@ def search_pattern_in_files(
         return f"'{search_dir}' does not exist!"
     if not search_dir.is_dir():
         return f"'{search_dir}' is not a directory!"
+    excluded_items = []
+    if exclude_glob:
+        excluded_items = [f.name for f in search_dir.glob(exclude_glob)]
     for file_path in search_dir.rglob("*"):
         if file_path.is_dir():
             continue
@@ -302,6 +307,8 @@ def search_pattern_in_files(
         if include_extensions_list and ext not in include_extensions_list:
             continue
         if exclude_extensions_list and ext in exclude_extensions_list:
+            continue
+        if any(item in file_path.parts for item in excluded_items):
             continue
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -321,7 +328,7 @@ def search_pattern_in_files(
     return formatted_res
 
 @dump_func_call
-def replace_pattern_in_file(file_path:str, pattern:str, replacement:str) -> str:
+def replace_pattern_in_file(path:str, pattern:str, replacement:str) -> str:
     """
     Replace all occurrences of a pattern in a file with a replacement and count replacements.
     Args:
@@ -331,7 +338,7 @@ def replace_pattern_in_file(file_path:str, pattern:str, replacement:str) -> str:
     Returns:
         Returns a string repenting the count of replacements
     """
-    _file_path = Path(file_path).resolve()
+    _file_path = Path(path).resolve()
     if _file_path.is_dir():
         return f"Error: '{_file_path}' is a directory."
     try:
@@ -339,7 +346,7 @@ def replace_pattern_in_file(file_path:str, pattern:str, replacement:str) -> str:
             content = file.read()
         count = len(re.findall(pattern, content))
         new_content = re.sub(pattern, replacement, content)   
-        with open(file_path, 'w', encoding='utf-8') as file:
+        with open(_file_path, 'w', encoding='utf-8') as file:
             file.write(new_content)
         return f"'{count}' occurrences of '{pattern}' have been replaced by '{replacement}'"
     except FileNotFoundError:
@@ -348,7 +355,7 @@ def replace_pattern_in_file(file_path:str, pattern:str, replacement:str) -> str:
         return f"Error: {e}"
     
 @dump_func_call
-def amend_text_file(file_path:str, new_text:str, top_row:int|None=None, bottom_row:int|None=None) -> str:
+def amend_text_file(path:str, new_text:str, top_row:int|None=None, bottom_row:int|None=None) -> str:
     """
     Amend the content of a text file with new_text content by specifying top_row and bottom_row of the text.
     If top_row and bottom_row are both None then the new_text will be appended to the original file content.
@@ -365,13 +372,13 @@ def amend_text_file(file_path:str, new_text:str, top_row:int|None=None, bottom_r
     def added_lines(txt:str) -> int:
         return  len(txt.split("\n")) - 1
 
-    _file_path = Path(file_path).resolve()
+    _file_path = Path(path).resolve()
     if _file_path.is_dir():
         return f"Error: '{_file_path}' is a directory."
     if not _file_path.exists():
         return f"Error: '{_file_path}' does not exists."
     try:
-        with open(file_path, 'r') as file:
+        with open(_file_path, 'r') as file:
             lines = file.readlines()
         if top_row is None and bottom_row is None:
             _txt = "\n" + new_text + "\n"
@@ -387,7 +394,7 @@ def amend_text_file(file_path:str, new_text:str, top_row:int|None=None, bottom_r
                 lines.pop(i)
             lines.insert(top_row - 1, new_text)
             response = f"Replaced '{bottom_row-top_row + 1}' with '{added_lines(new_text)}' lines to '{_file_path}' at line '{top_row}'"
-        with open(file_path, 'w') as file:
+        with open(_file_path, 'w') as file:
             file.writelines(lines)
         return response
     except Exception as e:
@@ -397,5 +404,4 @@ def amend_text_file(file_path:str, new_text:str, top_row:int|None=None, bottom_r
 if __name__ == "__main__":
     # print(amend_text_file("./amend_text_file.py", "prova\nprova\n"))
     # print(amend_text_file("./amend_text_file.py", "pippo\npippo\n",27, 28))
-    print(amend_text_file("./amend_text_file.py", "azz\nazz\n",23, 22))
-
+    print(search_pattern_in_files("error", "./"))

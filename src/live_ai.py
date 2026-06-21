@@ -39,18 +39,18 @@ class Brain:
         except lms.LMStudioClientError:
             pass
 
-        self.model = lms.llm(config.brain.model)
-        self.info = self.model.get_info()
-        self.context_window = int(float(self.config.brain.context_ratio)*self.info.context_length)
-        self.chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
+        self._model = lms.llm(config.brain.model)
+        self.info = self._model.get_info()
+        self._context_window = int(float(self.config.brain.context_ratio)*self.info.context_length)
+        self._chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
         self._chat_cfg = {
             "temperature": self.config.brain.temperature,
-            "maxTokens": self.context_window,
+            "maxTokens": self._context_window,
         }
         self.logger.info("✅ LLM Model '%s' connected.", self.config.brain.model)
 
     def _add_user_prompt(self, prompt: str):
-        self.chat.add_user_message(prompt)
+        self._chat.add_user_message(prompt)
         self.logger.debug("Prompt:\n%s", prompt)
 
     def model_fragments(self, prompt: str) -> PredictionStream:
@@ -60,9 +60,9 @@ class Brain:
         """
         self.logger.info("Sending to Model [🤖: %s] ...", self.config.brain.model)
         self._add_user_prompt(prompt)
-        resp_stream = self.model.respond_stream(
-            self.chat,
-            on_message=self.chat.append,
+        resp_stream = self._model.respond_stream(
+            self._chat,
+            on_message=self._chat.append,
             config=self._chat_cfg,
         )
         return resp_stream
@@ -77,7 +77,7 @@ class Brain:
 
     def _get_messages(self) -> list[dict]:
         try:
-            return self.chat._get_history().get("messages", [])
+            return self._chat._get_history().get("messages", [])
         except:
             return []
 
@@ -91,16 +91,16 @@ class Brain:
     def _clear_chat(self, all:bool=False) -> bool:
         try:
             msg_list = self._get_messages()
-            self.chat._messages.clear()
+            self._chat._messages.clear()
             if not all:
                 sys_msg = self._get_messages_from(role="system", msg=msg_list)
                 usr_msg = self._get_messages_from(role="user", msg=msg_list)
                 agt_msg = self._get_messages_from(role="assistant", msg=msg_list)
-                self.chat.add_system_prompt(sys_msg[0])
-                self.chat.add_user_message(self.recall_personal())
-                self.chat.add_assistant_response("acknowledge")
-                self.chat.add_user_message(usr_msg[-1])
-                self.chat.add_assistant_response(agt_msg[-1])
+                self._chat.add_system_prompt(sys_msg[0])
+                self._chat.add_user_message(self.recall_personal())
+                self._chat.add_assistant_response("acknowledge")
+                self._chat.add_user_message(usr_msg[-1])
+                self._chat.add_assistant_response(agt_msg[-1])
             return True
         except:
             return False
@@ -124,8 +124,8 @@ class Brain:
         if not self.info.vision:
             return "Cannot handle images"
         image_handle = lms.prepare_image(image)
-        self.chat.add_user_message(prompt, images=[image_handle])
-        prediction  = self.model.respond(self.chat)
+        self._chat.add_user_message(prompt, images=[image_handle])
+        prediction  = self._model.respond(self._chat)
         return prediction.content
 
     @dump_func_call
@@ -215,9 +215,9 @@ class Agent(Brain):
         print(fragment.content, end="", flush=True)
 
     def _handle_round_end(self, round_index=0):
-        formatted = self.model.apply_prompt_template(self.chat)
-        token_count = len(self.model.tokenize(formatted))
-        context_usage_percentage = float(token_count/self.context_window) * 100
+        formatted = self._model.apply_prompt_template(self._chat)
+        token_count = len(self._model.tokenize(formatted))
+        context_usage_percentage = float(token_count/self._context_window) * 100
         print(f"  [context: {context_usage_percentage:.2f} %]")
         response = " ".join(self._fragments_buffer).strip()
         if hasattr(self, "speech"):
@@ -233,10 +233,10 @@ class Agent(Brain):
         """
         self.logger.info("Sending to Agent [🤖: %s] ...", self.config.brain.model)
         self._add_user_prompt(prompt)
-        self.model.act(
-            self.chat,
+        self._model.act(
+            self._chat,
             self.tools,
-            on_message=self.chat.append,
+            on_message=self._chat.append,
             config=self._chat_cfg,
             on_prediction_fragment=self._handle_fragment,
             on_round_end=self._handle_round_end
