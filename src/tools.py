@@ -270,6 +270,32 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
         return f"Unable to plot data for symbol '{symbol}'"
 
 @dump_func_call
+def search_in_file(pattern: str, file:str) -> str:
+    """
+    Search for a pattern in a specified file.
+    Returns the line numbers where pattern is found.
+    """
+    file_path = Path(file).resolve()
+    if not file_path.exists():
+        return f"Error: '{file_path}' does not exist!"
+    if file_path.is_dir():
+        return f"Error: '{file_path}' is a directory!"
+    found_lines:list[int] = []
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+            for line_num, line in enumerate(lines):
+                if pattern in line:
+                    found_lines.append(line_num + 1)  # Line numbers are 1-based
+    except Exception as e:
+        f"Error: '{e}'"
+
+    if not found_lines:
+        return f"Did not find pattern '{pattern}' in file '{file_path}' "
+    return  f"Found pattern '{pattern}' in file '{file_path}' at lines: " + ", ".join(map(str, found_lines))  + "\n"
+
+
+@dump_func_call
 def search_pattern_in_files(
     pattern: str, 
     directory: str, 
@@ -279,18 +305,10 @@ def search_pattern_in_files(
     ) -> str:
     """
     Search for a pattern in files within a directory recursively.
-    Args:
-        directory (str): The root directory to search in.
-        pattern (str): The pattern to search for.
-        include_extensions (str): Comma separated file extensions to include.
-        exclude_extensions (str): Comma separated  file extensions to exclude.
-        exclude_glob (str): Glob pattern of the files or directories to  exclude.
-    Returns:
-        String listing the file paths and the line numbers where pattern is found.
+    Returns a list of the file paths and the line numbers where pattern is found.
     """
     include_extensions_list = [ext.strip().lower() for ext in include_extensions.split(",")] if include_extensions else [] 
     exclude_extensions_list = [ext.strip().lower() for ext in exclude_extensions.split(",")] if exclude_extensions else [] 
-    regex = re.compile(pattern)
     results:dict[str, list[int]] = {}
     search_dir = Path(directory).resolve()
     if not search_dir.exists():
@@ -314,7 +332,7 @@ def search_pattern_in_files(
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
                 for line_num, line in enumerate(lines):
-                    if regex.search(line):
+                    if pattern in line:
                         if file_path not in results:
                             results[file_path] = []
                         results[file_path].append(line_num + 1)  # Line numbers are 1-based
@@ -331,12 +349,6 @@ def search_pattern_in_files(
 def replace_string_in_file(path:str, old_string:str, new_string:str) -> str:
     """
     Replace all occurrences of old_string in a file with new_string and count replacements.
-    Args:
-        file_path (str): Path to the file to modify.
-        new_string (str): New string to replace the old_string.
-        old_string (str): String to be replaced.
-    Returns:
-        Returns a string repenting the count of replacements
     """
     _file_path = Path(path).resolve()
     if _file_path.is_dir():
@@ -354,54 +366,6 @@ def replace_string_in_file(path:str, old_string:str, new_string:str) -> str:
     except Exception as e:
         return f"Error: {e}"
     
-@dump_func_call
-def amend_text_file(path:str, new_text:str, top_row:int|None=None, bottom_row:int|None=None) -> str:
-    """
-    Amend the content of a text file with new_text content by specifying top_row and bottom_row of the text.
-    If top_row and bottom_row are both None then the new_text will be appended to the original file content.
-    If top_row == bottom_row then the new_text will be inserted at top_row. 
-    If top_row != bottom_row then the current content between top_row and bottom_row will be removed and the new_text will be inserted at top_row. 
-    Args:
-        file_path (str): Path to the file to modify.
-        new_text (str): new text to add.
-        top_row (int|None): line where start current text to be amended.
-        bottom_row (int|None): line where end current text to be amended.
-    Returns:
-        Returns a string providing the number of lines inserted and the line.
-    """
-    def added_lines(txt:str) -> int:
-        return  len(txt.split("\n")) - 1
-
-    _file_path = Path(path).resolve()
-    if _file_path.is_dir():
-        return f"Error: '{_file_path}' is a directory."
-    if not _file_path.exists():
-        return f"Error: '{_file_path}' does not exists."
-    try:
-        with open(_file_path, 'r') as file:
-            lines = file.readlines()
-        if top_row is None and bottom_row is None:
-            _txt = "\n" + new_text + "\n"
-            lines.append(_txt)
-            response =  f"Appended '{added_lines(_txt)}' lines to '{_file_path}'"
-        elif top_row == bottom_row:
-            lines.insert(top_row - 1, new_text)
-            response =  f"Inserted '{added_lines(new_text)}' lines to '{_file_path}' at line '{top_row}'"
-        elif top_row > bottom_row:
-            return f"Error: top_row '{top_row}' must be lesser than bottom_row '{bottom_row}' !"
-        else:
-            for i in range(top_row - 1, bottom_row):
-                lines.pop(i)
-            lines.insert(top_row - 1, new_text)
-            response = f"Replaced '{bottom_row-top_row + 1}' with '{added_lines(new_text)}' lines to '{_file_path}' at line '{top_row}'"
-        with open(_file_path, 'w') as file:
-            file.writelines(lines)
-        return response
-    except Exception as e:
-        return f"Error: {e}"
-
 
 if __name__ == "__main__":
-    # print(amend_text_file("./amend_text_file.py", "prova\nprova\n"))
-    # print(amend_text_file("./amend_text_file.py", "pippo\npippo\n",27, 28))
     print(search_pattern_in_files("error", "./"))
