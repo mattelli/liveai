@@ -196,12 +196,14 @@ class Agent(Brain):
             self.config.brain.model
         )
         self.tools:list[Callable] = [
-            self.model_info, self.image_response, self.allow_speech, 
-            self.store_personal, self.recall_personal, 
-            exit_gracefully, system_info, current_date_time,
-            read_text_file, write_text_file, get_working_directory, run_command,
-            webpage_headlines, web_search, capture_image, save_financial_chart,
-            search_pattern_in_files, replace_string_in_file, search_in_file
+            self.model_info, self.recall_personal, self.store_personal, 
+            self.image_response, self.allow_speech, 
+            system_info, current_date_time, get_working_directory, run_command,
+            search_in_file, search_pattern_in_files, read_text_file, 
+            replace_string_in_file, write_text_file, 
+            capture_image, save_financial_chart, 
+            webpage_headlines, web_search,
+            exit_gracefully
         ]
         self.logger.info(
             "✅ Agent with Model '%s' is ready with [%d] tools.", 
