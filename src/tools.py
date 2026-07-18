@@ -202,7 +202,7 @@ def web_search(query:str, n_results:int=5, timeout_s:float=10.0) -> str:
         driver.quit()
 
 @dump_func_call
-def capture_image(out_file:str=CAPTURED_IMAGE, camera_index:int=0, ) -> str:
+def capture_image(out_file:str=CAPTURED_IMAGE, camera_index:int=0) -> str:
     """
     Captures a frame from a camera and saves it as an image file.
     Useful when user asks for taking a picture.
@@ -219,23 +219,22 @@ def capture_image(out_file:str=CAPTURED_IMAGE, camera_index:int=0, ) -> str:
     return str(Path(out_file).resolve())
 
 @dump_func_call
-def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.period) -> str:
+def fetch_financial_data(
+        symbol: str,
+        interval: ValidYF.interval = '1mo',
+        period: ValidYF.period = '1y',
+        start_date: str = None,  # YYYY-MM-DD
+        end_date: str = None,  # YYYY-MM-DD
+        to_string:bool = True
+    ) -> pd.DataFrame|str:
     """
     Fetch closing price of a stock symbol within a time period with a time interval.
-    The closing price are plotted in a chart that is saved as image.
     Useful when user asks for getting financial info of a financial product given its symbol. 
     """
-
-    def fetch_data(
-            symbol: str,
-            interval: ValidYF.interval = '1mo',
-            period: ValidYF.period = '1y',
-            start_date: str = None,  # YYYY-MM-DD
-            end_date: str = None  # YYYY-MM-DD
-    ) -> pd.DataFrame:
+    try:
         data = yf.download(symbol, period=period, interval=interval, start=start_date, end=end_date)
         if data.empty:
-            raise ValueError(f"No data found for {symbol}.")
+            return f"No data found for {symbol}."
         data.reset_index(inplace=True)
         _date = ''
         if 'Date' in data.columns:
@@ -243,7 +242,7 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
         elif 'Datetime' in data.columns:
             _date = 'Datetime'
         else:
-            raise ValueError("Date are missing")
+            return "Date are missing"
         if not pd.api.types.is_datetime64_any_dtype(data[_date]):
             data[_date] = pd.to_datetime(data[_date])
         if data[_date].dt.tz is not None:
@@ -252,11 +251,26 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
         target_cols = [(_date, '')] + [(rc, symbol) for rc in required_cols[1:]]
         available_cols = [col for col in target_cols if col in data.columns]
         if len(available_cols) < 3:
-            raise ValueError(f"Not all the required columns {required_cols} are available.")
+            return f"Not all the required columns {required_cols} are available."
         selected_data = data[target_cols]
         selected_data.columns = required_cols
+        if to_string:
+            return selected_data.to_string()
         return selected_data
-    
+    except Exception as e:
+        return f"Error: {e}"
+
+@dump_func_call
+def save_financial_chart(
+        symbol: str, 
+        interval:ValidYF.interval = '1mo', 
+        period:ValidYF.period = '1y'
+    ) -> str:
+    """
+    Fetch closing price of a stock symbol within a time period with a time interval.
+    The closing price are plotted in a chart that is saved as image.
+    Useful when user asks for plotting a financial product given its symbol. 
+    """
     def set_axis():
         date_locator = mdates.AutoDateLocator()
         date_formatter = mdates.AutoDateFormatter(date_locator)
@@ -274,7 +288,9 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
         plt.tight_layout()
         
     try:
-        data = fetch_data(symbol, interval, period)
+        data = fetch_financial_data(symbol, interval, period, to_string=False)
+        if isinstance(data, str):
+            return data
         plt.figure(figsize=(12, 6))
         plt.plot(
             data['Date'], data['Close'], label='Close Price', marker='o', linestyle='-', color='blue', markersize=5
@@ -286,7 +302,7 @@ def save_financial_chart(symbol: str, interval:ValidYF.interval, period:ValidYF.
         plt.close()
         return f"Plot saved to '{plot_path}'"
     except Exception as e:
-        return f"Unable to plot data for symbol '{symbol}'"
+        return f"Error: {e}"
 
 @dump_func_call
 def search_in_file(pattern: str, file:str) -> str:
@@ -315,11 +331,11 @@ def search_in_file(pattern: str, file:str) -> str:
 
 @dump_func_call
 def search_pattern_in_files(
-    pattern: str, 
-    directory: str, 
-    include_extensions: str="", 
-    exclude_extensions: str="",
-    exclude_glob: str|None=".*",
+        pattern: str, 
+        directory: str, 
+        include_extensions: str="", 
+        exclude_extensions: str="",
+        exclude_glob: str|None=".*",
     ) -> str:
     """
     Search for a pattern in files within a directory recursively.
@@ -387,4 +403,5 @@ def replace_string_in_file(path:str, old_string:str, new_string:str) -> str:
 
 if __name__ == "__main__":
     # print(web_search("quantum computing wikipedia"))
-    print(webpage_content("https://www.nist.gov/quantum-information-science/quantum-computing-explained"))
+    # print(webpage_content("https://www.nist.gov/quantum-information-science/quantum-computing-explained"))
+    print(save_financial_chart("STLA"))
