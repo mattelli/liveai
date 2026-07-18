@@ -134,7 +134,7 @@ def run_command(cmd: str) -> str:
 def webpage_headlines(url: str = "https://www.ansa.it/english/", relevant_text_length:int=20, timeout_s:int=10) -> str:
     """
     Automatic extraction of headlines from a URL. Returns headlines as string.
-    Useful when user is asking to summarize the content of a webpage given its URL.
+    Useful when user is asking to summarize webpage headlines given its URL.
     """
     headers:list[str] = ["h1", "h2"]
     try:
@@ -145,6 +145,25 @@ def webpage_headlines(url: str = "https://www.ansa.it/english/", relevant_text_l
     soup = BeautifulSoup(r.text, "html.parser")
     headlines = []
     for tag in soup.find_all(headers):
+        text = tag.get_text(strip=True)
+        if len(text) > relevant_text_length:
+            headlines.append(text)
+    return f"\nFrom [{url}]\n"+"\n".join(headlines)
+
+@dump_func_call
+def webpage_content(url: str = "https://www.ibm.com/think/topics/quantum-computing", relevant_text_length:int=20, timeout_s:int=10) -> str:
+    """
+    Automatic extraction paragraph content from a URL as string.
+    Useful when user is asking to summarize the webpage content of a webpage given its URL.
+    """
+    try:
+        r = requests.get(url, timeout=timeout_s)
+        r.raise_for_status()
+    except Exception as e:
+        return f"Error fetching URL: {e}"
+    soup = BeautifulSoup(r.text, "html.parser")
+    headlines = []
+    for tag in soup.find_all("p"):
         text = tag.get_text(strip=True)
         if len(text) > relevant_text_length:
             headlines.append(text)
@@ -174,7 +193,7 @@ def web_search(query:str, n_results:int=5, timeout_s:float=10.0) -> str:
         results = [el.text.strip() for el in elements if el.text.strip()]
         result_content = "\nSearch Results:\n"
         for i, it in enumerate(results[:n_results], 1):
-            result_content += f"{i}) {it}\n"
+            result_content += f"{i}) {it.replace(" › ","/")}\n"
             result_content += 50*"=" + "\n"
         return result_content
     except Exception as exc:
@@ -294,7 +313,6 @@ def search_in_file(pattern: str, file:str) -> str:
         return f"Did not find pattern '{pattern}' in file '{file_path}' "
     return  f"Found pattern '{pattern}' in file '{file_path}' at lines: " + ", ".join(map(str, found_lines))  + "\n"
 
-
 @dump_func_call
 def search_pattern_in_files(
     pattern: str, 
@@ -368,4 +386,5 @@ def replace_string_in_file(path:str, old_string:str, new_string:str) -> str:
     
 
 if __name__ == "__main__":
-    print(search_pattern_in_files("error", "./"))
+    # print(web_search("quantum computing wikipedia"))
+    print(webpage_content("https://www.nist.gov/quantum-information-science/quantum-computing-explained"))
