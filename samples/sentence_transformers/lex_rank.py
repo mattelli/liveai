@@ -20,7 +20,6 @@ def degree_centrality_scores(similarity_matrix, threshold=None, increase_power=T
 
     if threshold is None:
         markov_matrix = create_markov_matrix(similarity_matrix)
-
     else:
         markov_matrix = create_markov_matrix_discrete(
             similarity_matrix,
