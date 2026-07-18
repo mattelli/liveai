@@ -8,9 +8,10 @@ from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace, dump_func_call
 from src.tools import (
-    exit_gracefully, system_info, current_date_time,
-    read_text_file, write_text_file, get_working_directory, run_command,
-    webpage_headlines, web_search, capture_image, save_financial_chart,
+    exit_gracefully, system_info, current_date_time, get_working_directory,
+    read_text_file, write_text_file, run_command,
+    web_search, webpage_headlines, webpage_content, capture_image, 
+    fetch_financial_data, save_financial_chart, 
     search_pattern_in_files, replace_string_in_file, search_in_file
 )
 
@@ -197,12 +198,12 @@ class Agent(Brain):
         )
         self.tools:list[Callable] = [
             self.model_info, self.recall_personal, self.store_personal, 
-            self.image_response, self.allow_speech, 
+            self.image_response, self.allow_speech, capture_image,
             system_info, current_date_time, get_working_directory, run_command,
-            search_in_file, search_pattern_in_files, read_text_file, 
-            replace_string_in_file, write_text_file, 
-            capture_image, save_financial_chart, 
-            webpage_headlines, web_search,
+            search_in_file, search_pattern_in_files, 
+            read_text_file, replace_string_in_file, write_text_file,
+            web_search, webpage_content, webpage_headlines,
+            fetch_financial_data, save_financial_chart, 
             exit_gracefully
         ]
         self.logger.info(

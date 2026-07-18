@@ -151,7 +151,7 @@ def webpage_headlines(url: str = "https://www.ansa.it/english/", relevant_text_l
     return f"\nFrom [{url}]\n"+"\n".join(headlines)
 
 @dump_func_call
-def webpage_content(url: str = "https://www.ibm.com/think/topics/quantum-computing", relevant_text_length:int=20, timeout_s:int=10) -> str:
+def webpage_content(url: str, relevant_text_length:int=20, timeout_s:int=10) -> str:
     """
     Automatic extraction paragraph content from a URL as string.
     Useful when user is asking to summarize the webpage content of a webpage given its URL.
