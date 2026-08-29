@@ -89,24 +89,26 @@ class Brain:
         except:
             return []
 
-    def _clear_chat(self, all:bool=False) -> bool:
+    ## TOOLS ##
+
+    @dump_func_call
+    def clear_chat(self) -> bool:
+        """
+        Useful when user ask for cleaning conversation history.
+        """
         try:
             msg_list = self._get_messages()
             self._chat._messages.clear()
-            if not all:
-                sys_msg = self._get_messages_from(role="system", msg=msg_list)
-                usr_msg = self._get_messages_from(role="user", msg=msg_list)
-                agt_msg = self._get_messages_from(role="assistant", msg=msg_list)
-                self._chat.add_system_prompt(sys_msg[0])
-                self._chat.add_user_message(self.recall_personal())
-                self._chat.add_assistant_response("acknowledge")
+            sys_msg = self._get_messages_from(role="system", msg=msg_list)
+            usr_msg = self._get_messages_from(role="user", msg=msg_list)
+            system_prompt = sys_msg[0] if sys_msg else self.config.brain.system_prompt
+            self._chat.add_system_prompt(system_prompt)
+            self._chat.add_user_message(self.recall_personal())
+            if usr_msg:
                 self._chat.add_user_message(usr_msg[-1])
-                self._chat.add_assistant_response(agt_msg[-1])
-            return True
-        except:
-            return False
-
-    ## TOOLS ##
+            return "Chat cleared successfully"
+        except Exception as e:
+            return f"Error: {e}"
 
     @dump_func_call
     def model_info(self) -> str:
@@ -197,10 +199,10 @@ class Agent(Brain):
             self.config.brain.model
         )
         self.tools:list[Callable] = [
-            self.model_info, self.recall_personal, self.store_personal, 
-            self.image_response, self.allow_speech, capture_image,
-            system_info, current_date_time, get_working_directory, run_command,
-            search_in_file, search_pattern_in_files, 
+            self.model_info, self.recall_personal, self.store_personal,
+            self.image_response, self.allow_speech, self.clear_chat,
+            capture_image, system_info, current_date_time, get_working_directory, 
+            run_command, search_in_file, search_pattern_in_files, 
             read_text_file, replace_string_in_file, write_text_file,
             web_search, webpage_content, webpage_headlines,
             fetch_financial_data, save_financial_chart, 
@@ -227,8 +229,6 @@ class Agent(Brain):
         if hasattr(self, "speech"):
             self.speech.speak(response)
         self._fragments_buffer.clear()
-        if context_usage_percentage > float(self.config.agent.refresh_context) * 100:
-            self._clear_chat()
 
     def act(self, prompt: str):
         """
