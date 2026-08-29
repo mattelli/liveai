@@ -6,7 +6,7 @@ from logging import getLogger
 from datetime import datetime, timezone
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
-from src.common import SimpleNamespace, dump_func_call
+from src.common import SimpleNamespace, dump_func_call, cprint
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command,
@@ -74,7 +74,7 @@ class Brain:
         Print a response fragment to the console.
         This can be used as a callback for streaming responses.
         """
-        print(fragment.content, end="", flush=True)
+        cprint(fragment.content, end="", flush=True, color="cyan")
 
     def _get_messages(self) -> list[dict]:
         try:
@@ -215,13 +215,14 @@ class Agent(Brain):
 
     def _handle_fragment(self, fragment, round_index=0):
         self._fragments_buffer.append(fragment.content)
-        print(fragment.content, end="", flush=True)
+        self.print_fragment(fragment)
 
     def _handle_round_end(self, round_index=0):
         formatted = self._model.apply_prompt_template(self._chat)
         token_count = len(self._model.tokenize(formatted))
         context_usage_percentage = float(token_count/self._context_window) * 100
-        print(f"  [context: {context_usage_percentage:.2f} %]")
+        print()
+        cprint("-"*50 + f"\n[context: {context_usage_percentage:.2f} %]\n", "grey")
         response = " ".join(self._fragments_buffer).strip()
         if hasattr(self, "speech"):
             self.speech.speak(response)
@@ -234,6 +235,7 @@ class Agent(Brain):
         Perform an action based on the input prompt. 
         The response may involve using tools or just generating a text.
         """
+        cprint(f"🤖 [{self.config.brain.model}]", "grey")
         self.logger.info("Sending to Agent [🤖: %s] ...", self.config.brain.model)
         self._add_user_prompt(prompt)
         self._model.act(
@@ -260,19 +262,19 @@ class LiveAi:
         self.agent = Agent(config=config)
 
     def run(self):
-        print("\nReady. Press Ctrl+C to quit.")
+        iteration = 0
         while True:
             try:
+                cprint("Press Ctrl+C to quit.", "grey")
                 prompt = self.detector.listen_and_transcribe(
                     silence_timeout_s=self.config.speech_det.silence_timeout_s,
                 )
                 if not prompt:
                     self.logger.info("Empty transcription, skipping.")
                     continue
-                print(f"\nYou: {prompt}")
-                print(f"\n🤖 [{self.config.brain.model}]: ", end="", flush=True)
+                iteration += 1
+                cprint(f"\n[{iteration}] You: {prompt}", "green")
                 self.agent.act(prompt)
-                print("\n---\n")
             except KeyboardInterrupt:
                 print("\n👋 Exiting.")
                 break

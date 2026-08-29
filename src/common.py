@@ -4,6 +4,33 @@ import inspect
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Literal
+
+Colors = Literal['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', 'reset']
+
+def cprint(text: str, color: Colors = "reset", bold: bool = False, end: str = "\n", flush: bool = False) -> None:
+    """
+    Print text in the terminal with ANSI colors.
+    Examples:
+        cprint("Hello", "green")
+        cprint("Warning", "yellow", bold=True)
+        cprint("Error", "red", end="", flush=True)
+    """
+    color_map = {
+        "black": "30",
+        "red": "31",
+        "green": "32",
+        "yellow": "33",
+        "blue": "34",
+        "magenta": "35",
+        "cyan": "36",
+        "grey": "90",
+        "white": "37",
+        "reset": "0",
+    }
+    color_code = color_map.get(color.lower(), color_map["reset"])
+    style = "1;" if bold else ""
+    print(f"\033[{style}{color_code}m{text}\033[0m", end=end, flush=flush)
 
 
 def load_config(config_path: Path) -> SimpleNamespace:
@@ -68,6 +95,6 @@ def dump_func_call(func):
             (name, str(value)[:50]) for name, value in bound_args.arguments.items()
             if "self" not in str(name)
         ]
-        print(f"\n[CALL] {func.__name__}(" + ", ".join(f"{n}={v!r}" for n, v in sel_args) + ")")
+        cprint(f"[CALL] {func.__name__}(" + ", ".join(f"{n}={v!r}" for n, v in sel_args) + ")", "grey", bold=True)
         return func(*args, **kwargs)
     return wrapper

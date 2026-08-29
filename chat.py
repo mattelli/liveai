@@ -14,11 +14,14 @@ logging.basicConfig(
 WORK_DIR = Path(__file__).parent.resolve()
 CONFIG_FILE = WORK_DIR / "config.toml"
 config = load_config(CONFIG_FILE)
+print(f"Agent Loaded.", "Tools are enabled" if USE_TOOLS else "")
 agent = Agent(config=config)
 
+iteration = 0
 while True:
     try:
-        user_input = input("You (leave blank to exit): ")
+        iteration += 1
+        user_input = input(f"[{iteration}] You (leave blank to exit): ")
     except EOFError:
         print()
         break
@@ -26,7 +29,6 @@ while True:
         print("Bye! 👋")
         break
 
-    print(f"🤖 [{config.brain.model}]: ", end="", flush=True)
     if USE_TOOLS:
         agent.act(user_input)
     else:
