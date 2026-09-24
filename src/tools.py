@@ -185,7 +185,7 @@ def web_search(query:str, n_results:int=5, timeout_s:float=10.0) -> str:
     try:
         driver.get("https://duckduckgo.com/")
         wait = WebDriverWait(driver, timeout_s)
-        search_bar = wait.until(EC.element_to_be_clickable((By.ID, "searchbox_input")))
+        search_bar = wait.until(EC.element_to_be_clickable((By.NAME, "q")))
         search_bar.send_keys(query)
         search_bar.submit()
         wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "article")))
@@ -402,6 +402,6 @@ def replace_string_in_file(path:str, old_string:str, new_string:str) -> str:
     
 
 if __name__ == "__main__":
-    # print(web_search("quantum computing wikipedia"))
+    print(web_search("quantum computing wikipedia"))
     # print(webpage_content("https://www.nist.gov/quantum-information-science/quantum-computing-explained"))
-    print(save_financial_chart("STLA"))
+    # print(save_financial_chart("STLA"))
