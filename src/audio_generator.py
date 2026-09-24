@@ -1,3 +1,4 @@
+import re
 import wave
 import sounddevice as sd
 from pathlib import Path
@@ -43,7 +44,24 @@ class SpeechGenerator:
             self.voice.synthesize_wav(text, wav_file, syn_config=self.syn_config)
         self.logger.info(f"💾 Audio saved to {file_path.name}")
 
-    def speak(self, text: str):
+    @staticmethod
+    def clean_for_speech(text: str) -> str:
+        """Remove formatting characters and emoji so they are not read aloud."""
+        # Remove markdown formatting characters: **, __, *, _, #, `, >, ~, [ ] ( )
+        text = re.sub(r"[*_#`>~\[\]]", "", text)
+        # Remove emoji and other pictographic symbols
+        text = re.sub(
+            r"[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\uFE0F\u200D\u2190-\u21FF\u2B00-\u2BFF]",
+            "",
+            text,
+        )
+        # Collapse leftover whitespace
+        return re.sub(r"\s+", " ", text).strip()
+
+    def speak(self, text: str, strip_formatting: bool=True):
+        if strip_formatting:
+            self.logger.debug("Removing formatted syntax...")
+            text = self.clean_for_speech(text)
         self.logger.info("🔊 Streaming output audio ...")
         self.stream.start()
         for chunk in self.voice.synthesize(text, syn_config=self.syn_config):
