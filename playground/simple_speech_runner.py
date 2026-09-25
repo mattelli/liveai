@@ -4,6 +4,11 @@ Simple example: detect speech, transcribe it and generate speech.
 """
 import logging
 from pathlib import Path
+
+import sys
+MAIN_PATH = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(MAIN_PATH))
+
 from src.audio_wrapper import audio_to_wav, SpeechDetector
 from src.audio_generator import SpeechGenerator
 
@@ -11,8 +16,8 @@ from src.audio_generator import SpeechGenerator
 def main():
     # Settings
     TIMEOUT_S = 1.5
-    MODEL_PATH = "res/faster-whisper-medium"
-    VOICE_MODEL_PATH = "res/voices/en_US-hfc_female-medium.onnx"
+    MODEL_PATH = MAIN_PATH / ".res" / "faster-whisper-medium"
+    VOICE_MODEL_PATH = MAIN_PATH / ".res" / "voices" / "en_US-hfc_female-medium.onnx"
     logging.basicConfig(level=logging.DEBUG)
     
     # Initialize audio wrapper

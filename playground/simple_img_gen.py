@@ -1,4 +1,9 @@
 import pathlib
+
+import sys
+MAIN_PATH = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(MAIN_PATH))
+
 from src.image_generator import ImageGenerator
 
 

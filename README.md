@@ -45,10 +45,10 @@ OS Windows 11 (powershell)
 
 ```
 # Ai agent based on LM Studio API
-.\lms-cpu-setup.ps1
+.\setup-lms-cpu.ps1
 
 # Stable-Diffusers pipeline
-.\sd-cpu-setup.ps1  
+.\setup-sd-cpu.ps1  
 
 ```
 

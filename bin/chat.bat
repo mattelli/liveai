@@ -8,6 +8,6 @@ call lms ps
 echo --------------------------------------------------
 echo Loading Agent ...
 echo --------------------------------------------------
-python ..\chat.py %*
+python ..\main-chat.py %*
 @echo on
 pause
