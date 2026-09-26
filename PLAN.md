@@ -1034,6 +1034,7 @@ Must pass, and additionally verify manually:
 ## 6. Out of scope (do not implement under this plan)
 
 - Session transcript persistence / `--resume`.
-- Readline / pyreadline3 integration or multi-line paste.
+- ~~Readline / pyreadline3 integration or multi-line paste.~~ **Superseded by
+  [`PLAN-INPUT.md`](PLAN-INPUT.md)** (prompt_toolkit-based interactive input).
 - Removing `LiveAi` entirely (T14 leaves it untouched; `main.py` stops using it).
 - Any change to model selection, tools, or `config.toml` semantics.

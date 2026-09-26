@@ -54,7 +54,9 @@ class ConversationSession:
             text = prompt.strip()
             if text == "":
                 continue
-            if self.handle_command(text):
+            # A multi-line paste goes to the agent even if its first line looks
+            # like a command; only a single-line string may be a command.
+            if "\n" not in text and self.handle_command(text):
                 continue
             try:
                 self._run_turn(text)

@@ -22,3 +22,12 @@ bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. As
 [speech_gen]
 model_path = ".res/voices/en_US-hfc_female-medium.onnx"
 samplerate = 22050
+
+[input]
+# Interactive chat input (prompt_toolkit). All keys optional.
+history_file = "input.log"       # resolved relative to this config file; "." or empty disables persistence
+prompt_toolkit = true            # false -> builtin input() fallback
+auto_suggest = true              # inline history suggestions
+completion = true                # complete /slash commands with Tab
+explicit_paste = true            # /paste ... . fallback for terminals without bracketed paste
+multiline = false                # true -> Esc+Enter to accept (advanced)

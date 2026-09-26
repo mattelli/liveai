@@ -53,6 +53,42 @@ OS Windows 11 (powershell)
 ```
 
 
+## Interactive chat input
+
+`python main.py --chat` uses [prompt_toolkit](https://python-prompt-toolkit.readthedocs.io/)
+as its input layer, so the same behaviour works on Windows and POSIX:
+
+- **Line editing** — arrows, Home/End, word operations, Ctrl-K/U/W, selection.
+- **Persistent history** — Up/Down recalls previous turns, and history survives
+  across sessions. It is stored in `.chat_history` (git-ignored). Delete the file
+  to reset; it has no size cap.
+- **Inline history suggestions** — faint grey text suggests a previous entry;
+  press Right/End to accept.
+- **Multi-line paste** — pasting a block inserts it as one buffer; Enter submits
+  the whole block as a single turn (never split into one turn per line). A paste
+  whose first line looks like `/quit` is sent to the model, not executed.
+- **Completion** — type `/` and press Tab to complete session commands.
+- **Explicit paste fallback** — on terminals that do not send bracketed-paste
+  markers, start a line with `/paste`, type the block, then a line containing
+  only `.` to submit it.
+
+Configure via the `[input]` block in `config.toml` (all keys optional):
+
+```toml
+[input]
+history_file = ".chat_history"   # relative to config.toml; empty/omitted -> in-memory
+prompt_toolkit = true            # false -> builtin input() fallback
+auto_suggest = true
+completion = true
+explicit_paste = true
+multiline = false                # true -> Enter inserts newline, Esc+Enter accepts
+```
+
+`Ctrl-C` exits the loop cleanly (exit code 0); `Ctrl-D` (EOF) exits via the EOF
+path. If prompt_toolkit is missing or disabled, input falls back to the builtin
+`input()` with no line editing or history.
+
+
 ## System Notes
 
 ```

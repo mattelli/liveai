@@ -40,6 +40,32 @@ def fake_agent():
 
 
 @pytest.fixture
+def pt_input():
+    """A prompt_toolkit pipe input installed as the active app session."""
+    from prompt_toolkit.application import create_app_session
+    from prompt_toolkit.input import create_pipe_input
+    from prompt_toolkit.output import DummyOutput
+
+    with create_pipe_input() as pipe:
+        with create_app_session(input=pipe, output=DummyOutput()):
+            yield pipe
+
+
+def make_session(pipe, **kw):
+    """PromptSession bound to the test pipe, never touching the real TTY."""
+    from prompt_toolkit import PromptSession
+    from prompt_toolkit.history import InMemoryHistory
+    from prompt_toolkit.output import DummyOutput
+
+    return PromptSession(
+        input=pipe,
+        output=DummyOutput(),
+        history=kw.pop("history", InMemoryHistory()),
+        **kw,
+    )
+
+
+@pytest.fixture
 def prompts():
     """Returns a helper: prompts(["a", None]) -> a read_prompt callable."""
 

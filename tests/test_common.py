@@ -2,7 +2,7 @@ import io
 
 from rich.console import Console
 
-from src.common import StreamPrinter, cprint, prompt_input
+from src.common import StreamPrinter, cprint, load_config, prompt_input
 
 
 def test_prompt_input_returns_line(monkeypatch):
@@ -63,3 +63,17 @@ def test_stream_printer_unterminated_code_block():
     sp.feed("```py\nx=1")
     sp.flush()  # must not raise
     assert "x=1" in _printed(sp)
+
+
+def test_load_config_without_input_block(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[brain]\nmodel = 'x'\n")
+    ns = load_config(cfg)  # must not raise
+    assert not hasattr(ns, "input")
+
+
+def test_load_config_resolves_input_history_file(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[input]\nhistory_file = ".chat_history"\n')
+    ns = load_config(cfg)
+    assert ns.input.history_file == (tmp_path / ".chat_history").resolve()

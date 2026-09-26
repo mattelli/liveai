@@ -1,6 +1,11 @@
+import subprocess
 import sys
+import types
 
 import main as main_mod
+import src.input_reader as input_reader_mod
+import src.live_ai as live_ai_mod
+import src.session as session_mod
 
 
 def test_parse_args_defaults():
@@ -45,3 +50,157 @@ def test_single_prompt_turn_uses_agent():
     it = iter(["hello", None])
     assert ConversationSession(agent, lambda: next(it)).run() == 0
     assert agent.acted == ["hello"]
+
+
+def test_import_main_does_not_import_prompt_toolkit():
+    code = "import sys, main; print('prompt_toolkit' in sys.modules)"
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True
+    )
+    assert out.stdout.strip() == "False"
+
+
+def test_chat_builds_and_closes_reader(monkeypatch):
+    created = {}
+
+    class RecorderReader:
+        def __init__(self, **kw):
+            created["kw"] = kw
+            created["closed"] = False
+            created["read"] = 0
+
+        def read(self, label=""):
+            created["read"] += 1
+            return "/quit"
+
+        def close(self):
+            created["closed"] = True
+
+    class StubSession:
+        COMMANDS = ("/help", "/quit")
+
+        def __init__(self, agent, read_prompt, use_tools=True):
+            created["read_prompt"] = read_prompt
+
+        def run(self):
+            assert created["read_prompt"]() == "/quit"
+            return 0
+
+    monkeypatch.setattr(input_reader_mod, "InputReader", RecorderReader)
+    monkeypatch.setattr(session_mod, "ConversationSession", StubSession)
+    monkeypatch.setattr(live_ai_mod, "Agent", lambda config: object())
+    monkeypatch.setattr(main_mod, "load_config", lambda p: types.SimpleNamespace())
+
+    assert main_mod.main(["--chat"]) == 0
+    assert created["kw"]["history_path"] is None
+    assert created["read"] == 1
+    assert created["closed"] is True
+
+
+def test_chat_reader_uses_input_config(monkeypatch):
+    created = {}
+
+    class RecorderReader:
+        def __init__(self, **kw):
+            created["kw"] = kw
+
+        def read(self, label=""):
+            return "/quit"
+
+        def close(self):
+            pass
+
+    class StubSession:
+        COMMANDS = ("/help", "/quit")
+
+        def __init__(self, agent, read_prompt, use_tools=True):
+            pass
+
+        def run(self):
+            return 0
+
+    cfg = types.SimpleNamespace(
+        input=types.SimpleNamespace(
+            history_file=".chat_history", auto_suggest=False,
+            completion=False, multiline=True, explicit_paste=False,
+        )
+    )
+    monkeypatch.setattr(input_reader_mod, "InputReader", RecorderReader)
+    monkeypatch.setattr(session_mod, "ConversationSession", StubSession)
+    monkeypatch.setattr(live_ai_mod, "Agent", lambda config: object())
+    monkeypatch.setattr(main_mod, "load_config", lambda p: cfg)
+
+    assert main_mod.main(["--chat"]) == 0
+    assert created["kw"]["auto_suggest"] is False
+    assert created["kw"]["multiline"] is True
+    assert created["kw"]["explicit_paste"] is False
+    assert created["kw"]["completer"] is None  # completion disabled
+
+
+def test_chat_prompt_toolkit_false_uses_fallback(monkeypatch):
+    created = {}
+
+    class RecorderReader:
+        def __init__(self, **kw):
+            created["kw"] = kw
+
+        def read(self, label=""):
+            return "fallback"
+
+        def close(self):
+            pass
+
+    class StubSession:
+        COMMANDS = ("/help", "/quit")
+
+        def __init__(self, agent, read_prompt, use_tools=True):
+            pass
+
+        def run(self):
+            return 0
+
+    cfg = types.SimpleNamespace(
+        input=types.SimpleNamespace(prompt_toolkit=False)
+    )
+    monkeypatch.setattr(input_reader_mod, "InputReader", RecorderReader)
+    monkeypatch.setattr(session_mod, "ConversationSession", StubSession)
+    monkeypatch.setattr(live_ai_mod, "Agent", lambda config: object())
+    monkeypatch.setattr(main_mod, "load_config", lambda p: cfg)
+
+    assert main_mod.main(["--chat"]) == 0
+    assert created["kw"]["session"] is None
+    assert created["kw"]["fallback"] is main_mod.prompt_input
+
+
+def test_main_closes_reader_on_exception(monkeypatch):
+    created = {"closed": False}
+
+    class RecorderReader:
+        def __init__(self, **kw):
+            pass
+
+        def read(self, label=""):
+            return "/quit"
+
+        def close(self):
+            created["closed"] = True
+
+    class BoomSession:
+        COMMANDS = ("/help", "/quit")
+
+        def __init__(self, agent, read_prompt, use_tools=True):
+            pass
+
+        def run(self):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(input_reader_mod, "InputReader", RecorderReader)
+    monkeypatch.setattr(session_mod, "ConversationSession", BoomSession)
+    monkeypatch.setattr(live_ai_mod, "Agent", lambda config: object())
+    monkeypatch.setattr(main_mod, "load_config", lambda p: types.SimpleNamespace())
+
+    import pytest
+
+    with pytest.raises(RuntimeError):
+        main_mod.main(["--chat"])
+    assert created["closed"] is True
