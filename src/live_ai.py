@@ -217,6 +217,9 @@ class Agent(Brain):
             "✅ Agent with Model '%s' is ready with [%d] tools.", 
             self.config.brain.model, len(self.tools)
         )
+
+    def bootstrap(self) -> None:
+        """Run the configured bootstrap prompt (called by the session, not on init)."""
         if self.config.agent.bootstrap_prompt:
             self.act(self.config.agent.bootstrap_prompt)
 

@@ -36,6 +36,18 @@ def cprint(text: str, color: Colors = "reset", bold: bool = False, end: str = "\
     print(f"\033[{style}{color_code}m{text}\033[0m", end=end, flush=flush)
 
 
+def prompt_input(label: str, color: Colors = "yellow") -> str | None:
+    """Write label (flushed, no newline) and read a line.
+
+    Returns the raw line (without trailing newline), or None on EOFError.
+    """
+    cprint(label, color, end="", flush=True)
+    try:
+        return input()
+    except EOFError:
+        return None
+
+
 class StreamPrinter:
     """
     Prints streamed model output with syntax-highlighted fenced code blocks.

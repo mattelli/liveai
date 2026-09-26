@@ -42,6 +42,13 @@ def get_audio_tone(
     return audio.astype('int16')
 
 
+def format_level(rms: float, threshold: float, show: bool) -> str:
+    """Build the live RMS level line. Empty string when show is False."""
+    if not show:
+        return ""
+    return f"\rIN-Audio RMS: {rms:.3f} | Silence threshold [{threshold:.3f}] "
+
+
 def audio_to_wav(
         audio: np.ndarray, 
         out_file: Path="input_audio.wav", 
@@ -80,7 +87,9 @@ class SpeechDetector:
             model_path: Path, 
             language: str = "en", 
             beam_size: int = 5,
+            show_levels: bool = False,
         ):
+        self.show_levels = show_levels
         if not model_path.exists():
             raise FileNotFoundError(f"Model file not found: {model_path}")
         self.logger = getLogger(self.__class__.__name__)
@@ -124,13 +133,18 @@ class SpeechDetector:
                 chunk_rms = np.sqrt(np.mean(chunk.astype(np.float32)**2))
                 chunk_rms_values.append(chunk_rms)
                 audio_rms = np.mean(chunk_rms_values)
-                print(f"\rIN-Audio RMS: {audio_rms:.3f} | Silence threshold [{self.silence_threshold:.3f}] ", end="")
+                level_line = format_level(audio_rms, self.silence_threshold, self.show_levels)
+                if level_line:
+                    from src.common import cprint
+                    cprint(level_line, "reset", end="", flush=True)
                 if audio_rms > self.silence_threshold:
                     if speech_start is None:
                         speech_start = time.time()
                         start_chunk = int((speech_start - start_time) / chunk_time_s)
                     elif np.mean(chunk_rms_values[-timeout_chunks:]) < self.silence_threshold:
-                        print()
+                        if self.show_levels:
+                            from src.common import cprint
+                            cprint("\r" + " " * 40 + "\r", "reset", end="", flush=True)
                         self.logger.info(f" ⏹️  Silence timeout detected after speech. Stopping listening.")
                         break
                 if time.time() - start_time > clear_timeout_s:
