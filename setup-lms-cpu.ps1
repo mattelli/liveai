@@ -25,6 +25,9 @@ pip install soundfile
 pip install sounddevice
 pip install numpy
 
+# CLI INPUT (line editing, persistent history, multi-line paste)
+pip install prompt_toolkit
+
 # TOOLS
 pip install opencv-python
 pip install yfinance
