@@ -84,7 +84,7 @@ class ConversationSession:
         """True if the text was consumed as a command."""
         if not text.startswith("/"):
             lowered = text.lower()
-            if lowered in ("exit", "\\x"):
+            if lowered == "exit":
                 self.should_quit = True
                 return True
             return False
@@ -93,7 +93,7 @@ class ConversationSession:
         cmd = parts[0].lower()
         arg = parts[1] if len(parts) > 1 else ""
 
-        if cmd in ("/quit", "\\x"):
+        if cmd == "/quit":
             self.should_quit = True
             return True
         if cmd == "/help":
@@ -118,7 +118,7 @@ class ConversationSession:
     def _cmd_help(self) -> None:
         cprint("Available commands:", "cyan")
         cprint("  /help              - show this help", "cyan")
-        cprint("  /quit              - exit the session (aliases: exit, \\x)", "cyan")
+        cprint("  /quit              - exit the session (alias: exit)", "cyan")
         cprint("  /clear             - clear the conversation history", "cyan")
         cprint("  /voice on|off      - toggle speech output", "cyan")
         cprint("  /tools on|off      - toggle tool usage (act vs. streaming)", "cyan")

@@ -197,11 +197,19 @@ def test_ctrl_c_during_turn_exits(capsys):
 # ------------------------------------------------------------- T12 quit aliases
 
 
-@pytest.mark.parametrize("token", ["/quit", "exit", "EXIT", r"\x"])
+@pytest.mark.parametrize("token", ["/quit", "exit", "EXIT"])
 def test_quit_aliases(token):
     it = iter([token])
     agent = FakeAgent()
     assert ConversationSession(agent, lambda: next(it)).run() == 0
+
+
+def test_backslash_x_is_not_a_command():
+    """Backslash-x was removed as a quit alias; it is now plain text for the model."""
+    it = iter([r"\x", "/quit"])
+    agent = FakeAgent()
+    assert ConversationSession(agent, lambda: next(it)).run() == 0
+    assert agent.acted == [r"\x"]
 
 
 # ----------------------------------------------------------------- T13 shutdown
