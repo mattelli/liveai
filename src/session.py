@@ -179,7 +179,6 @@ class ConversationSession:
 
     def banner(self) -> None:
         cprint(
-            f"Agent ready. Tools are {'enabled' if self.use_tools else 'disabled'}."
-            " Type /help for commands",
+            f"Agent ready. Tools are {'enabled' if self.use_tools else 'disabled'}.",
             "green",
         )

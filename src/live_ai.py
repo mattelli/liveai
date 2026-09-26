@@ -4,7 +4,6 @@ from lmstudio.sync_api import PredictionStream
 from typing import Callable, Literal
 from logging import getLogger
 from datetime import datetime, timezone
-from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace, dump_func_call, cprint, StreamPrinter
 from src.tools import (
@@ -20,6 +19,7 @@ Role = Literal['system', 'user', 'assistant']
 class Brain:
     """
     Brain class that connects to the LLM model.
+    Basic function calls like model response, streaming, and printing are available.
     """
     def __init__(self, config: SimpleNamespace):
         self.logger = getLogger(self.__class__.__name__)
@@ -94,7 +94,7 @@ class Brain:
         except:
             return []
 
-    ## TOOLS ##
+    ## TOOLS CALLS ##
 
     @dump_func_call
     def clear_chat(self) -> bool:
@@ -196,7 +196,7 @@ class Brain:
 
 class Agent(Brain):
     """
-    Agent class that extends the Brain with tool usage capabilities and message history.
+    Agent class that extends the Brain with tool usage capabilities.
     """
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
