@@ -25,25 +25,20 @@ def main(argv=None) -> int:
         datefmt="%H:%M:%S",
     )
     config = load_config(args.config)
-
+    from src.session import ConversationSession
     from src.live_ai import Agent  # lazy import: keeps `import main` side-effect free
 
     agent = Agent(config=config)
 
     if args.prompt is not None:
-        from src.session import ConversationSession
-
         # Non-interactive: exactly one turn, no stdin reads.
         read_prompt = iter([args.prompt, None]).__next__
         return ConversationSession(agent, read_prompt, use_tools=not args.no_tools).run()
 
     if args.chat:
-        from src.session import ConversationSession
-
         read_prompt = lambda: prompt_input("[You] (type /quit to exit): ")  # noqa: E731
     else:
         from src.audio_wrapper import SpeechDetector  # lazy import
-
         detector = SpeechDetector(
             model_path=config.speech_det.model_path,
             language=config.speech_det.language,
@@ -52,8 +47,6 @@ def main(argv=None) -> int:
         read_prompt = lambda: detector.listen_and_transcribe(  # noqa: E731
             silence_timeout_s=config.speech_det.silence_timeout_s
         )
-
-    from src.session import ConversationSession
 
     return ConversationSession(agent, read_prompt, use_tools=not args.no_tools).run()
 
