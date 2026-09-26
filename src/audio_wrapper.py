@@ -144,7 +144,7 @@ class SpeechDetector:
                     elif np.mean(chunk_rms_values[-timeout_chunks:]) < self.silence_threshold:
                         if self.show_levels:
                             from src.common import cprint
-                            cprint("\r" + " " * 40 + "\r", "reset", end="", flush=True)
+                            cprint("\r" + " " * 80 + "\r", "reset", end="", flush=True)
                         self.logger.info(f" ⏹️  Silence timeout detected after speech. Stopping listening.")
                         break
                 if time.time() - start_time > clear_timeout_s:
