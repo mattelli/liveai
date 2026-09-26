@@ -6,6 +6,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Literal
 
+from rich.console import Console
+from rich.syntax import Syntax
+
 Colors = Literal['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', 'reset']
 
 def cprint(text: str, color: Colors = "reset", bold: bool = False, end: str = "\n", flush: bool = False) -> None:
@@ -31,6 +34,67 @@ def cprint(text: str, color: Colors = "reset", bold: bool = False, end: str = "\
     color_code = color_map.get(color.lower(), color_map["reset"])
     style = "1;" if bold else ""
     print(f"\033[{style}{color_code}m{text}\033[0m", end=end, flush=flush)
+
+
+class StreamPrinter:
+    """
+    Prints streamed model output with syntax-highlighted fenced code blocks.
+
+    Plain text is printed in `text_color`. Text between ``` fences is buffered
+    and rendered with Pygments (via Rich) once the closing fence arrives, using
+    the language tag from the opening fence (defaults to "text").
+    """
+
+    def __init__(self, text_color: Colors = "cyan", code_theme: str = "monokai") -> None:
+        self.console = Console()
+        self.text_color = text_color
+        self.code_theme = code_theme
+        self._buffer = ""       # unprocessed (incomplete) text
+        self._in_code = False
+        self._code_lang = "text"
+        self._code_lines: list[str] = []
+
+    def feed(self, content: str) -> None:
+        """Push a new streamed fragment. Prints any newly completed lines."""
+        self._buffer += content
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            self._process_line(line + "\n")
+
+    def _process_line(self, line: str) -> None:
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            if self._in_code:
+                self._in_code = False
+                self._flush_code()
+            else:
+                self._in_code = True
+                self._code_lang = stripped[3:].strip() or "text"
+                self._code_lines = []
+            return
+
+        if self._in_code:
+            self._code_lines.append(line)
+        else:
+            self.console.print(line, end="", style=self.text_color, highlight=False, soft_wrap=True)
+
+    def _flush_code(self) -> None:
+        code = "".join(self._code_lines).rstrip("\n")
+        self._code_lines = []
+        if not code:
+            return
+        self.console.print(
+            Syntax(code, self._code_lang, theme=self.code_theme, line_numbers=False)
+        )
+
+    def flush(self) -> None:
+        """Flush any buffered partial line / unterminated code block."""
+        if self._buffer:
+            self._process_line(self._buffer)
+            self._buffer = ""
+        if self._in_code:
+            self._in_code = False
+            self._flush_code()
 
 
 def load_config(config_path: Path) -> SimpleNamespace:

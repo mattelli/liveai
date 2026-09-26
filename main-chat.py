@@ -38,5 +38,6 @@ while True:
         fragments = agent.model_fragments(user_input)
         for f in fragments:
             agent.print_fragment(f)
+        agent.flush_stream()
 
     print()

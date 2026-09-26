@@ -6,7 +6,7 @@ from logging import getLogger
 from datetime import datetime, timezone
 from src.audio_wrapper import SpeechDetector
 from src.audio_generator import SpeechGenerator
-from src.common import SimpleNamespace, dump_func_call, cprint
+from src.common import SimpleNamespace, dump_func_call, cprint, StreamPrinter
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command,
@@ -44,6 +44,7 @@ class Brain:
         self._info = self._model.get_info()
         self._context_window = int(float(self.config.brain.context_ratio)*self._info.context_length)
         self._chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
+        self._stream = StreamPrinter(text_color="cyan")
         self._chat_cfg = {
             "temperature": self.config.brain.temperature,
             "maxTokens": self._context_window,
@@ -68,13 +69,17 @@ class Brain:
         )
         return resp_stream
 
-    @staticmethod
-    def print_fragment(fragment):
+    def print_fragment(self, fragment):
         """
         Print a response fragment to the console.
+        Fenced code blocks are syntax-highlighted; plain text is cyan.
         This can be used as a callback for streaming responses.
         """
-        cprint(fragment.content, end="", flush=True, color="cyan")
+        self._stream.feed(fragment.content)
+
+    def flush_stream(self) -> None:
+        """Flush any buffered text left after a streaming response ends."""
+        self._stream.flush()
 
     def _get_messages(self) -> list[dict]:
         try:
@@ -223,6 +228,7 @@ class Agent(Brain):
         formatted = self._model.apply_prompt_template(self._chat)
         token_count = len(self._model.tokenize(formatted))
         context_usage_percentage = float(token_count/self._context_window) * 100
+        self.flush_stream()
         print()
         cprint("-"*50 + f"\n[context: {context_usage_percentage:.2f} %]\n", "grey")
         response = " ".join(self._fragments_buffer).strip()
