@@ -65,6 +65,70 @@ def test_stream_printer_unterminated_code_block():
     assert "x=1" in _printed(sp)
 
 
+def test_stream_printer_emits_plain_text_incrementally():
+    sp = _capture_printer()
+    for token in ["Hello", " there", ", how", " are", " you?"]:
+        sp.feed(token)
+        # No newline and no flush: output must keep growing while streaming.
+    assert _printed(sp) == "Hello there, how are you?"
+
+
+def test_stream_printer_single_line_streams_before_flush():
+    sp = _capture_printer()
+    sp.feed("Hello")
+    assert _printed(sp) == "Hello"  # already emitted, without flush()
+    sp.feed(" world")
+    assert _printed(sp) == "Hello world"
+    sp.flush()
+    assert _printed(sp) == "Hello world"
+
+
+def test_stream_printer_fence_split_across_fragments():
+    sp = _capture_printer()
+    sp.feed("``")
+    assert _printed(sp) == ""  # ambiguous prefix held back
+    sp.feed("`py\n")
+    assert _printed(sp) == ""  # fence opened; nothing emitted as plain text
+    sp.feed("x=1\n")
+    assert _printed(sp) == ""  # code buffered until the closing fence
+    sp.feed("```\n")
+    out = _printed(sp)
+    assert "x=1" in out
+    assert "```" not in out  # fences themselves are never printed
+
+
+def test_stream_printer_plain_text_then_code_block():
+    sp = _capture_printer()
+    sp.feed("answer:\n")
+    sp.feed("```py\nx=1\n```\n")
+    out = _printed(sp)
+    assert "answer:" in out
+    assert "x=1" in out
+    assert "```" not in out
+
+
+def test_stream_printer_inline_backticks_are_plain():
+    sp = _capture_printer()
+    sp.feed("use ``code`` here\n")
+    assert "use ``code`` here" in _printed(sp)
+    assert sp._in_code is False
+
+
+def test_stream_printer_two_backticks_line_is_plain():
+    sp = _capture_printer()
+    sp.feed("``\n")
+    assert "``" in _printed(sp)
+    assert sp._in_code is False
+
+
+def test_stream_printer_indent_then_text():
+    sp = _capture_printer()
+    sp.feed("  ")  # indentation could still become a fence
+    assert _printed(sp) == ""
+    sp.feed("hello\n")
+    assert "  hello" in _printed(sp)
+
+
 def test_load_config_without_input_block(tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text("[brain]\nmodel = 'x'\n")

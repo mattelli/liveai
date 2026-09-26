@@ -52,43 +52,85 @@ class StreamPrinter:
     """
     Prints streamed model output with syntax-highlighted fenced code blocks.
 
-    Plain text is printed in `text_color`. Text between ``` fences is buffered
+    Plain text is printed in `text_color`; text between ``` fences is buffered
     and rendered with Pygments (via Rich) once the closing fence arrives, using
     the language tag from the opening fence (defaults to "text").
+
+    Plain text is emitted as soon as it arrives, so single-line replies stream
+    token by token instead of appearing all at once at ``flush()``. Only the
+    ambiguous prefix at the start of a line (indentation plus up to two
+    backticks) is held back until it can be classified as text or as a fence.
     """
 
     def __init__(self, text_color: Colors = "cyan", code_theme: str = "monokai") -> None:
         self.console = Console()
         self.text_color = text_color
         self.code_theme = code_theme
-        self._buffer = ""       # unprocessed (incomplete) text
+        self._line = ""              # current line tail not yet classified/emitted
         self._in_code = False
         self._code_lang = "text"
         self._code_lines: list[str] = []
+        self._plain_started = False  # current line already partly emitted as text
 
     def feed(self, content: str) -> None:
-        """Push a new streamed fragment. Prints any newly completed lines."""
-        self._buffer += content
-        while "\n" in self._buffer:
-            line, self._buffer = self._buffer.split("\n", 1)
-            self._process_line(line + "\n")
+        """Push a streamed fragment, emitting plain text as soon as it is safe."""
+        start = 0
+        while True:
+            newline = content.find("\n", start)
+            if newline == -1:
+                self._feed_partial(content[start:])
+                return
+            self._feed_partial(content[start:newline])
+            self._end_line()
+            start = newline + 1
 
-    def _process_line(self, line: str) -> None:
+    def _feed_partial(self, text: str) -> None:
+        if not text:
+            return
+        if self._in_code:
+            self._line += text
+        elif self._plain_started:
+            self._emit(text)
+        else:
+            self._line += text
+            if not self._could_be_fence(self._line):
+                self._emit(self._line)
+                self._line = ""
+                self._plain_started = True
+
+    @staticmethod
+    def _could_be_fence(partial: str) -> bool:
+        """True while `partial` could still become a ``` fence opening."""
+        stripped = partial.lstrip()
+        if stripped == "":
+            return True  # only indentation so far
+        backticks = len(stripped) - len(stripped.lstrip("`"))
+        if backticks >= 3:
+            return True  # confirmed fence; wait for the newline to classify it
+        return backticks == len(stripped)  # only 1-2 backticks so far; may grow
+
+    def _end_line(self) -> None:
+        line, self._line = self._line, ""
+        started, self._plain_started = self._plain_started, False
         stripped = line.strip()
-        if stripped.startswith("```"):
-            if self._in_code:
+        if self._in_code:
+            if stripped.startswith("```"):
                 self._in_code = False
                 self._flush_code()
             else:
-                self._in_code = True
-                self._code_lang = stripped[3:].strip() or "text"
-                self._code_lines = []
+                self._code_lines.append(line + "\n")
             return
+        if stripped.startswith("```"):
+            self._in_code = True
+            self._code_lang = stripped[3:].strip() or "text"
+            self._code_lines = []
+            return
+        self._emit("\n" if started else line + "\n")
 
-        if self._in_code:
-            self._code_lines.append(line)
-        else:
-            self.console.print(line, end="", style=self.text_color, highlight=False, soft_wrap=True)
+    def _emit(self, text: str) -> None:
+        self.console.print(
+            text, end="", style=self.text_color, highlight=False, soft_wrap=True
+        )
 
     def _flush_code(self) -> None:
         code = "".join(self._code_lines).rstrip("\n")
@@ -101,12 +143,16 @@ class StreamPrinter:
 
     def flush(self) -> None:
         """Flush any buffered partial line / unterminated code block."""
-        if self._buffer:
-            self._process_line(self._buffer)
-            self._buffer = ""
+        line, self._line = self._line, ""
+        self._plain_started = False
         if self._in_code:
+            if line and not line.strip().startswith("```"):
+                self._code_lines.append(line)
             self._in_code = False
             self._flush_code()
+            return
+        if line and not line.strip().startswith("```"):
+            self._emit(line)
 
 
 def load_config(config_path: Path) -> SimpleNamespace:
