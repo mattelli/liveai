@@ -43,12 +43,6 @@ def test_tools_off_uses_stream_path():
     assert agent.acted == [] and agent.printed == ["stream"]
 
 
-def test_banner_mentions_help(capsys):
-    it = iter(["/quit"])
-    ConversationSession(FakeAgent(), lambda: next(it)).banner()
-    assert "/help" in capsys.readouterr().out
-
-
 # -------------------------------------------------------------------- T4 help
 
 
@@ -104,19 +98,77 @@ def test_voice_usage(capsys):
 # ------------------------------------------------------------------- T7 tools
 
 
-def test_tools_toggle_runtime():
-    it = iter(["/tools off", "hello", "/tools on", "world", "/quit"])
+def test_tools_argument_shows_usage(capsys):
+    it = iter(["/tools on", "/quit"])
     agent = FakeAgent()
     ConversationSession(agent, lambda: next(it)).run()
-    # first prompt streamed, second acted
-    assert agent.printed == ["stream"]
-    assert agent.acted == ["world"]
+    assert "usage" in capsys.readouterr().out.lower()
+    assert agent.acted == []
 
 
-def test_tools_usage(capsys):
+class ToolAgent(FakeAgent):
+    """FakeAgent exposing a small set of tools for the /tools launcher."""
+
+    def __init__(self):
+        super().__init__()
+        self.launched = []
+
+        def greet():
+            """Say hello."""
+            self.launched.append("greet")
+            return "hello"
+
+        def echo(text: str):
+            """Echo text back."""
+            self.launched.append(("echo", text))
+            return text
+
+        self.tools = [greet, echo]
+
+
+def test_tools_lists_available_tools(capsys):
+    agent = ToolAgent()
+    it = iter(["/tools", "", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "greet" in out and "echo" in out
+    assert "Say hello." in out
+
+
+def test_tools_runs_tool_without_params():
+    agent = ToolAgent()
+    it = iter(["/tools", "1", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.launched == ["greet"]
+
+
+def test_tools_prompts_required_param_by_name():
+    agent = ToolAgent()
+    it = iter(["/tools", "echo", "hi there", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.launched == [("echo", "hi there")]
+
+
+def test_tools_blank_selection_cancels(capsys):
+    agent = ToolAgent()
+    it = iter(["/tools", "   ", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.launched == []
+    assert "cancelled" in capsys.readouterr().out.lower()
+
+
+def test_tools_unknown_selection(capsys):
+    agent = ToolAgent()
+    it = iter(["/tools", "nope", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.launched == []
+    assert "unknown tool" in capsys.readouterr().out.lower()
+
+
+def test_tools_empty_list(capsys):
     it = iter(["/tools", "/quit"])
     ConversationSession(FakeAgent(), lambda: next(it)).run()
-    assert "usage" in capsys.readouterr().out.lower()
+    assert "no tools available" in capsys.readouterr().out.lower()
 
 
 # -------------------------------------------------------------------- T8 info

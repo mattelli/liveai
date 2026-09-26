@@ -5,11 +5,9 @@ TRANSCRIPT = [
     "/help",
     "/voice on",
     "summarise the plan",
-    "/tools off",
-    "just stream this",
+    "just answer",
     "/clear",
     "/info",
-    "/tools on",
     "final answer",
     "/quit",
 ]
@@ -21,8 +19,8 @@ def test_full_session_transcript(capsys):
     session = ConversationSession(agent, lambda: next(it))
     assert session.run() == 0
 
-    assert agent.acted == ["summarise the plan", "final answer"]
-    assert agent.printed == ["stream"]
+    assert agent.acted == ["summarise the plan", "just answer", "final answer"]
+    assert agent.printed == []
     assert agent.speech == [True, False]  # enabled then disabled on shutdown
     assert agent.cleared == 1
     # Per the §2.2 algorithm, command turns `continue` before the finally-flush,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from typing import Callable
 
 from src.common import cprint
@@ -123,7 +124,7 @@ class ConversationSession:
         cprint("  /quit              - exit the session (alias: exit)", "cyan")
         cprint("  /clear             - clear the conversation history", "cyan")
         cprint("  /voice on|off      - toggle speech output", "cyan")
-        cprint("  /tools on|off      - toggle tool usage (act vs. streaming)", "cyan")
+        cprint("  /tools             - list and run an available tool", "cyan")
         cprint("  /info              - show model/context info", "cyan")
 
     def _cmd_clear(self) -> None:
@@ -147,15 +148,115 @@ class ConversationSession:
             cprint("Usage: /voice on|off", "yellow")
 
     def _cmd_tools(self, arg: str) -> None:
-        arg = arg.strip().lower()
-        if arg == "on":
-            self.use_tools = True
-            cprint("Tools enabled", "green")
-        elif arg == "off":
-            self.use_tools = False
-            cprint("Tools disabled", "green")
+        if arg.strip():
+            cprint("Usage: /tools", "yellow")
+            return
+        self._launch_tool()
+
+    @staticmethod
+    def _tool_name(tool) -> str:
+        return getattr(tool, "__name__", tool.__class__.__name__)
+
+    def _read_tool_input(self, hint: str) -> str | None:
+        """Prompt for a tool interaction, handling EOF and Ctrl-C."""
+        cprint(hint, "yellow")
+        try:
+            value = self.read_prompt()
+        except KeyboardInterrupt:
+            self.should_quit = True
+            return None
+        if value is None:
+            self.should_quit = True
+        return value
+
+    def _launch_tool(self) -> None:
+        """List available tools, let the user pick one and run it.
+
+        Required parameters (those without a default value) are prompted for;
+        a tool that takes no parameters runs immediately after selection.
+        """
+        tools = list(getattr(self.agent, "tools", []) or [])
+        if not tools:
+            cprint("No tools available.", "grey")
+            return
+
+        cprint("Available tools:", "cyan")
+        for index, tool in enumerate(tools, 1):
+            doc = (getattr(tool, "__doc__", "") or "").strip().splitlines()
+            summary = doc[0].strip() if doc else ""
+            line = f"  {index:>2}. {self._tool_name(tool)}"
+            if summary:
+                line += f" - {summary}"
+            cprint(line, "cyan")
+
+        selection = self._read_tool_input(
+            "Select a tool (number or name, blank to cancel): "
+        )
+        if selection is None:
+            return
+        selection = selection.strip()
+        if not selection:
+            cprint("Cancelled.", "grey")
+            return
+
+        tool = None
+        if selection.isdigit():
+            index = int(selection)
+            if 1 <= index <= len(tools):
+                tool = tools[index - 1]
         else:
-            cprint("Usage: /tools on|off", "yellow")
+            for candidate in tools:
+                if self._tool_name(candidate).lower() == selection.lower():
+                    tool = candidate
+                    break
+        if tool is None:
+            cprint(f"Unknown tool: {selection}", "red")
+            return
+
+        arguments = []
+        for name, param in inspect.signature(tool).parameters.items():
+            if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                continue
+            if param.default is not inspect.Parameter.empty:
+                continue
+            type_hint = self._annotation_name(param.annotation)
+            hint = f"{name} ({type_hint}): " if type_hint else f"{name}: "
+            raw = self._read_tool_input(hint)
+            if raw is None:
+                return
+            arguments.append(self._convert_argument(raw, param.annotation))
+
+        cprint(f"\u25b6 {self._tool_name(tool)}", "green")
+        try:
+            result = tool(*arguments)
+        except Exception as exc:
+            cprint(f"\u274c {exc}", "red")
+            return
+        cprint(str(result), "green")
+
+    @staticmethod
+    def _annotation_name(annotation) -> str:
+        if annotation is inspect.Parameter.empty:
+            return ""
+        if isinstance(annotation, str):
+            return annotation
+        return getattr(annotation, "__name__", str(annotation))
+
+    @staticmethod
+    def _convert_argument(value: str, annotation) -> object:
+        if annotation is int or annotation == "int":
+            try:
+                return int(value)
+            except ValueError:
+                return value
+        if annotation is float or annotation == "float":
+            try:
+                return float(value)
+            except ValueError:
+                return value
+        if annotation is bool or annotation == "bool":
+            return value.strip().lower() in ("1", "true", "yes", "y", "on")
+        return value
 
     def _cmd_info(self) -> None:
         if hasattr(self.agent, "model_info"):

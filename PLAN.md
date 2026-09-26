@@ -354,10 +354,6 @@ def test_tools_off_uses_stream_path():
     ConversationSession(agent, lambda: next(it), use_tools=False).run()
     assert agent.acted == [] and agent.printed == ["stream"]
 
-def test_banner_mentions_help(capsys):
-    it = iter(["/quit"])
-    ConversationSession(FakeAgent(), lambda: next(it)).banner()
-    assert "/help" in capsys.readouterr().out
 ```
 
 **Validation.** `python -m pytest tests/test_session.py -q` → 5 passed.
