@@ -255,35 +255,3 @@ class Agent(Brain):
             on_prediction_fragment=self._handle_fragment,
             on_round_end=self._handle_round_end
         )
-
-
-class LiveAi:
-    """
-    Interactive AI agent that listens to user input via speech and tools.
-    """
-    def __init__(self, config: SimpleNamespace):
-        self.logger = getLogger(self.__class__.__name__)
-        self.config = config
-        self.detector = SpeechDetector(
-            model_path=config.speech_det.model_path, 
-            language=config.speech_det.language
-        )
-        self.agent = Agent(config=config)
-
-    def run(self):
-        iteration = 0
-        while True:
-            try:
-                cprint("Press Ctrl+C to quit.", "grey")
-                prompt = self.detector.listen_and_transcribe(
-                    silence_timeout_s=self.config.speech_det.silence_timeout_s,
-                )
-                if not prompt:
-                    self.logger.info("Empty transcription, skipping.")
-                    continue
-                iteration += 1
-                cprint(f"\n[{iteration}] You: {prompt}", "green")
-                self.agent.act(prompt)
-            except KeyboardInterrupt:
-                print("\n👋 Exiting.")
-                break
