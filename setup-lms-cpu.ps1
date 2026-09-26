@@ -38,6 +38,9 @@ pip install webdriver-manager
 pip install -U "sentence-transformers[image]"
 pip install nltk
 
+# DEV
+pip install pytest
+
 
 Write-Host ""
 Write-Host "=== Installation complete ==="
