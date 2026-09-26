@@ -42,12 +42,12 @@ class Brain:
 
         self._model = lms.llm(config.brain.model)
         self._info = self._model.get_info()
-        self._context_window = int(float(self.config.brain.context_ratio)*self._info.context_length)
+        self._context_window = self._info.context_length
         self._chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
         self._stream = StreamPrinter(text_color="cyan")
         self._chat_cfg = {
             "temperature": self.config.brain.temperature,
-            "maxTokens": self._context_window,
+            "maxTokens": self._context_window,  # max tokens to generate per response
         }
         self.logger.info("✅ LLM Model '%s' connected.", self.config.brain.model)
 
@@ -235,7 +235,7 @@ class Agent(Brain):
         context_usage_percentage = float(token_count/self._context_window) * 100
         self.flush_stream()
         print()
-        cprint("-"*50 + f"\n[context: {context_usage_percentage:.2f} %]\n", "grey")
+        cprint("-"*50 + f"\ncontext: {context_usage_percentage:.2f} % [{int(self._context_window / 1000)}k]\n", "grey")
         response = " ".join(self._fragments_buffer).strip()
         if hasattr(self, "speech"):
             self.speech.speak(response)

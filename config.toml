@@ -13,7 +13,6 @@ model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
 # model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know."
 history_path = "chat_history.log"
-context_ratio = 1.0
 temperature = 0.6
 
 [agent]
