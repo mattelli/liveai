@@ -5,10 +5,10 @@ language = "en"
 
 [brain] # llm configuration
 # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
-# model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
+model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
 # model = "ibm/granite-4.1-3b"              # NO Vision, NO Thinking
 # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
-model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
+# model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
 # model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
 # model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know."
@@ -22,6 +22,8 @@ bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. As
 [speech_gen]
 model_path = ".res/voices/en_US-hfc_female-medium.onnx"
 samplerate = 22050
+volume = 1.0
+speech_speed = 1.0
 
 [input]
 # Interactive chat input (prompt_toolkit). All keys optional.

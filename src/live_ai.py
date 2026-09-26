@@ -147,7 +147,9 @@ class Brain:
             self.logger.info("Initializing Speech Generator ...")
             self.speech = SpeechGenerator(
                 model_path=self.config.speech_gen.model_path,
-                samplerate=self.config.speech_gen.samplerate
+                samplerate=self.config.speech_gen.samplerate,
+                volume=self.config.speech_gen.volume,
+                speech_speed=self.config.speech_gen.speech_speed
             )
             return "Speech Generator initialized"
         elif not enable and hasattr(self, "speech"):
