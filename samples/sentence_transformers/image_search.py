@@ -2,7 +2,7 @@ from sentence_transformers import SentenceTransformer
 from PIL import Image
 from pathlib import Path
 
-image_path = Path.cwd() / ".res" / "two_dogs_in_snow.jpg"
+image_path = Path.cwd() / ".tmp" / "two_dogs_in_snow.jpg"
 
 # Load CLIP model
 model = SentenceTransformer("sentence-transformers/clip-ViT-B-32")
