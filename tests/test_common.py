@@ -158,3 +158,23 @@ def test_real_config_has_summarization_block():
     assert sm.model_path.is_absolute()
     for key in ("device", "ratio", "threshold", "max_sentences"):
         assert hasattr(sm, key)
+
+
+def test_load_config_resolves_embedding_paths(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[embedding]\nmodel_path = ".res/models/st"\ncorpus_path = ".res/corpus/c.pkl"\n'
+    )
+    ns = load_config(cfg)
+    assert ns.embedding.model_path == (tmp_path / ".res/models/st").resolve()
+    assert ns.embedding.corpus_path == (tmp_path / ".res/corpus/c.pkl").resolve()
+
+
+def test_real_config_has_embedding_block():
+    cfg_path = Path(__file__).parent.parent / "config.toml"
+    ns = load_config(cfg_path)
+    emb = ns.embedding
+    assert emb.model_path.is_absolute()
+    assert emb.corpus_path.is_absolute()
+    for key in ("device", "extensions", "chunk_size", "top_k"):
+        assert hasattr(emb, key)

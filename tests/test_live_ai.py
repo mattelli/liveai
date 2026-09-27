@@ -158,3 +158,129 @@ def test_agent_build_tools_keeps_existing_tools():
     names = [tool.__name__ for tool in agent._build_tools()]
     for name in ("system_info", "read_text_file", "web_search", "image_response"):
         assert name in names
+
+
+def _bare_embedding_brain(**overrides):
+    cfg = dict(model_path="m", device="cpu", extensions="txt, md",
+               chunk_size=3, top_k=5, corpus_path="corpus.pkl")
+    cfg.update(overrides)
+    brain = live_ai_mod.Brain.__new__(live_ai_mod.Brain)
+    brain.logger = getLogger("test")
+    brain.config = SimpleNamespace(embedding=SimpleNamespace(**cfg))
+    return brain
+
+
+def test_store_corpus_uses_config_and_caches(monkeypatch):
+    seen = {"count": 0}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+            seen["count"] += 1
+
+        def store(self, directory, output, overwrite=False):
+            seen["store"] = (directory, output, overwrite)
+            return "STORED"
+
+        def query(self, corpus_file, query, top_k=None):
+            raise AssertionError("query not expected")
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    brain = _bare_embedding_brain()
+    assert brain.store_corpus("/docs") == "STORED"
+    assert brain.store_corpus("/docs") == "STORED"
+
+    assert seen["count"] == 1  # corpus object created once and cached
+    assert seen["init"]["model_path"] == "m"
+    assert seen["init"]["chunk_size"] == 3
+    assert seen["init"]["top_k"] == 5
+    assert seen["store"] == ("/docs", "corpus.pkl", False)
+
+
+def test_store_corpus_forwards_explicit_file_and_overwrite(monkeypatch):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def store(self, directory, output, overwrite=False):
+            seen["store"] = (directory, output, overwrite)
+            return "STORED"
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    brain = _bare_embedding_brain()
+    assert brain.store_corpus("/docs", corpus_file="/tmp/c.pkl", overwrite=True) == "STORED"
+    assert seen["store"] == ("/docs", "/tmp/c.pkl", True)
+
+
+def test_query_corpus_forwards_query_and_top_k(monkeypatch):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, corpus_file, query, top_k=None):
+            seen["query"] = (corpus_file, query, top_k)
+            return "RESULTS"
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    brain = _bare_embedding_brain()
+    assert brain.query_corpus("hello", top_k=2) == "RESULTS"
+    assert seen["query"] == ("corpus.pkl", "hello", 2)
+
+
+def test_query_corpus_uses_explicit_corpus_file(monkeypatch):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, corpus_file, query, top_k=None):
+            seen["query"] = (corpus_file, query, top_k)
+            return "RESULTS"
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    brain = _bare_embedding_brain()
+    brain.query_corpus("hello", corpus_file="/tmp/c.pkl")
+    assert seen["query"] == ("/tmp/c.pkl", "hello", None)
+
+
+def test_store_corpus_reports_errors(monkeypatch):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def store(self, directory, output, overwrite=False):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    out = _bare_embedding_brain().store_corpus("/docs")
+    assert out.startswith("Error:") and "boom" in out
+
+
+def test_query_corpus_reports_errors(monkeypatch):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, corpus_file, query, top_k=None):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    out = _bare_embedding_brain().query_corpus("hi")
+    assert out.startswith("Error:") and "boom" in out
+
+
+def test_agent_build_tools_includes_embedding_tools():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    names = [tool.__name__ for tool in agent._build_tools()]
+    assert "store_corpus" in names and "query_corpus" in names
+
+
+def test_agent_build_tools_keeps_summarize_text():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    names = [tool.__name__ for tool in agent._build_tools()]
+    assert "summarize_text" in names

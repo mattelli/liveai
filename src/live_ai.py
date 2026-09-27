@@ -14,6 +14,9 @@ from src.tools import (
     search_pattern_in_files, replace_string_in_file, search_in_file
 )
 from src.summarizer import TextSummarizer
+from src.embedding_search import (
+    DEFAULT_CHUNK_SIZE, DEFAULT_EXTENSIONS, DEFAULT_TOP_K, EmbeddingCorpus
+)
 
 Role = Literal['system', 'user', 'assistant']
 
@@ -163,6 +166,42 @@ class Brain:
         except Exception as e:
             return f"Error: {e}"
 
+    def _embedding_corpus(self):
+        if getattr(self, "_emb_corpus", None) is None:
+            cfg = self.config.embedding
+            self._emb_corpus = EmbeddingCorpus(
+                model_path=cfg.model_path,
+                device=getattr(cfg, "device", "cpu"),
+                extensions=getattr(cfg, "extensions", DEFAULT_EXTENSIONS),
+                chunk_size=getattr(cfg, "chunk_size", DEFAULT_CHUNK_SIZE),
+                top_k=getattr(cfg, "top_k", DEFAULT_TOP_K),
+            )
+        return self._emb_corpus
+
+    @dump_func_call
+    def store_corpus(self, directory: str, corpus_file: str = "", overwrite: bool = False) -> str:
+        """
+        Build a searchable corpus from all text files in a directory and store it to a file.
+        Useful when the user asks to index, embed, or store documents for later semantic search.
+        """
+        try:
+            output = corpus_file or str(self.config.embedding.corpus_path)
+            return self._embedding_corpus().store(directory, output, overwrite)
+        except Exception as e:
+            return f"Error: {e}"
+
+    @dump_func_call
+    def query_corpus(self, query: str, corpus_file: str = "", top_k: int = 0) -> str:
+        """
+        Search a previously stored corpus for the content most relevant to a query text.
+        Useful when the user asks a question that should be answered from indexed documents.
+        """
+        try:
+            target = corpus_file or str(self.config.embedding.corpus_path)
+            return self._embedding_corpus().query(target, query, top_k or None)
+        except Exception as e:
+            return f"Error: {e}"
+
     @dump_func_call
     def allow_speech(self, enable:bool) -> str:
         """
@@ -236,6 +275,7 @@ class Agent(Brain):
             self.model_info, self.recall_personal, self.store_personal,
             self.image_response, self.allow_speech, self.clear_chat,
             self.summarize_text,
+            self.store_corpus, self.query_corpus,
             capture_image, system_info, current_date_time, get_working_directory, 
             run_command, search_in_file, search_pattern_in_files, 
             read_text_file, replace_string_in_file, write_text_file,

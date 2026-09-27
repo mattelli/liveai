@@ -86,6 +86,71 @@ Notes:
 - Tune the summary length with `ratio` or the per-call `max_sentences` argument.
 
 
+## Semantic search (corpus + FAISS)
+
+The `store_corpus` tool indexes all `.txt`/`.md` files in a directory and saves
+the embedded passages to a single corpus file. The `query_corpus` tool then
+returns the passages most relevant to a query text. Both use sentence embeddings
+(`all-MiniLM-L6-v2` by default) plus a FAISS exact inner-product index
+(`IndexFlatIP`), which is cosine similarity on L2-normalized vectors.
+
+The model and corpus file are configured in `config.toml` (paths are resolved
+relative to `config.toml`):
+
+```toml
+[embedding]
+model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to config.toml
+device = "cpu"            # "cpu" or "cuda"
+corpus_path = ".res/corpus/corpus.pkl"  # default corpus file
+extensions = "txt, md"    # comma-separated extensions collected from a directory
+chunk_size = 3            # sentences per indexed passage
+top_k = 5                 # default number of results returned by query_corpus
+```
+
+The tools fail gracefully with a clear message until the model is stored in
+`model_path`. Pick one of the following ways to store it:
+
+```bash
+# A) Hugging Face CLI (recommended)
+pip install -U huggingface_hub
+hf download sentence-transformers/all-MiniLM-L6-v2 \
+    --local-dir .res/embedding/all-MiniLM-L6-v2
+
+# B) git + git-lfs
+git lfs install
+git clone https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 \
+    .res/embedding/all-MiniLM-L6-v2
+
+# C) Python (downloads into the HF cache, then saves a local copy)
+python -c "from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')"
+```
+
+For multilingual corpora, use the sample's aligned model instead by changing
+`model_path` (and re-building the corpus):
+
+```bash
+hf download sentence-transformers/quora-distilbert-multilingual \
+    --local-dir .res/embedding/quora-distilbert-multilingual
+```
+
+Usage:
+
+- `store_corpus(directory="docs")` writes the configured `corpus_path`;
+  pass `corpus_file=...` to write elsewhere and `overwrite=True` to replace an
+  existing file.
+- `query_corpus(query="what is quantum computing?")` searches the configured
+  corpus; pass `corpus_file=...` for a different corpus and `top_k=...` to change
+  the number of results. Tune `chunk_size` to control passage length.
+
+Notes:
+
+- Requires `faiss-cpu` (already installed by `setup-lms-cpu.ps1`).
+- The corpus file is a pickle containing the passages and their normalized
+  embeddings; rebuild it whenever `model_path`, `extensions` or `chunk_size` change.
+- `.res/` is git-ignored, so downloaded weights and corpora are never committed.
+
+
 ## Setup (Python 3.12.10)
 
 OS Windows 11 (powershell)

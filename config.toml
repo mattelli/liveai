@@ -52,3 +52,11 @@ device = "cpu"            # "cpu" or "cuda"
 ratio = 0.1               # fraction of sentences to keep (0 < ratio <= 1)
 threshold = 0.5           # LexRank similarity threshold in [0, 1)
 max_sentences = 0         # 0 -> derive from ratio; >0 -> hard cap
+
+[embedding] # semantic search over a local corpus (sentence embeddings + FAISS)
+model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to this config file
+device = "cpu"            # "cpu" or "cuda"
+corpus_path = ".res/corpus/corpus.pkl"  # default corpus file, resolved relative to config.toml
+extensions = "txt, md"    # comma-separated extensions collected from a directory
+chunk_size = 3            # sentences per indexed passage
+top_k = 5                 # default number of results returned by query_corpus
