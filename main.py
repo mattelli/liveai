@@ -19,12 +19,12 @@ def parse_args(argv=None) -> argparse.Namespace:
 
 def main(argv=None) -> int:
     args = parse_args(argv)
+    config = load_config(args.config)
     logging.basicConfig(
-        level=logging.WARNING,
+        level=config.logging.level if hasattr(config, "logging") and hasattr(config.logging, "level") else logging.WARNING,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%H:%M:%S",
     )
-    config = load_config(args.config)
     from src.session import ConversationSession
     from src.live_ai import Agent  # lazy import: keeps `import main` side-effect free
 

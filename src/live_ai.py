@@ -246,7 +246,7 @@ class Agent(Brain):
         Perform an action based on the input prompt. 
         The response may involve using tools or just generating a text.
         """
-        cprint(f"🤖 [{self.config.brain.model}]", "grey")
+        cprint(f"\n🤖 [{self.config.brain.model}]", "grey")
         self.logger.info("Sending to Agent [🤖: %s] ...", self.config.brain.model)
         self._add_user_prompt(prompt)
         self._model.act(
