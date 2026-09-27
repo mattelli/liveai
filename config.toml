@@ -4,7 +4,7 @@ level = "WARNING"
 [speech_det]
 model_path= ".res/faster-whisper-medium"
 silence_timeout_s = 2.0
-language = "en"
+language = "en" # ISO 639-1 code, e.g. "en", "fr", "de", "it", "es", "zh", etc.
 beam_size = 5
 show_levels = true
 device = "auto"
@@ -15,7 +15,6 @@ guard_factor = 1.0
 [brain] # llm configuration
 # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
 model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
-# model = "ibm/granite-4.1-3b"              # NO Vision, NO Thinking
 # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
 # model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
 # model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
@@ -29,6 +28,7 @@ bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. As
 
 [speech_gen]
 model_path = ".res/voices/en_US-hfc_female-medium.onnx"
+# model_path = ".res/voices/it_IT-serena-high.onnx"
 samplerate = 22050
 volume = 1.0
 speech_speed = 1.0
