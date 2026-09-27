@@ -58,15 +58,7 @@ class FakeIndex:
         return scores[order].reshape(1, -1), order.reshape(1, -1)
 
 
-class FakeSummarizer:
-    def __init__(self, text="SUMMARY"):
-        self.text = text
-
-    def summarize(self, text):
-        return self.text
-
-
-def make_corpus(passages, vectors, *, chunk_size=1, multimodal=False, summarizer=None, **kwargs):
+def make_corpus(passages, vectors, *, chunk_size=1, multimodal=False, **kwargs):
     model = FakeModel(mapping=dict(zip(passages, vectors)), dim=len(vectors[0]))
     corpus = EmbeddingCorpus(
         "model",
@@ -77,7 +69,6 @@ def make_corpus(passages, vectors, *, chunk_size=1, multimodal=False, summarizer
         sentence_tokenizer=lambda text: list(passages),
         multimodal=multimodal,
         image_model_path="clip",
-        summarizer_factory=lambda path, device: (summarizer or FakeSummarizer()),
         **kwargs,
     )
     return corpus, model
@@ -151,7 +142,7 @@ def test_build_passages_size_one():
 
 def test_store_writes_records(tmp_path):
     directory = write_doc(tmp_path)
-    passages = ["a.", "b.", "c."]
+    passages = ["alpha.", "beta.", "gamma."]
     vectors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
     corpus, _ = make_corpus(passages, vectors)
     output = tmp_path / "corpus.pkl"
@@ -171,7 +162,7 @@ def test_store_refuses_existing_by_default(tmp_path):
     directory = write_doc(tmp_path)
     output = tmp_path / "corpus.pkl"
     output.write_bytes(b"sentinel")
-    corpus, _ = make_corpus(["a."], [[1, 0, 0]])
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]])
     assert corpus.store(str(directory), str(output)) == "File already exists."
     assert output.read_bytes() == b"sentinel"
 
@@ -180,16 +171,16 @@ def test_store_overwrite_true(tmp_path):
     directory = write_doc(tmp_path)
     output = tmp_path / "corpus.pkl"
     output.write_bytes(b"sentinel")
-    corpus, _ = make_corpus(["a."], [[1, 0, 0]])
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]])
     status = corpus.store(str(directory), str(output), overwrite=True)
     assert "1 text" in status
-    assert [r["text"] for r in load_corpus(output)["records"]] == ["a."]
+    assert [r["text"] for r in load_corpus(output)["records"]] == ["alpha."]
 
 
 def test_store_no_supported_files_returns_message(tmp_path):
     directory = tmp_path / "empty"
     directory.mkdir()
-    corpus, _ = make_corpus(["a."], [[1, 0, 0]])
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]])
     assert "No supported files" in corpus.store(str(directory), str(tmp_path / "c.pkl"))
 
 
@@ -197,43 +188,40 @@ def test_store_missing_model_raises_friendly_error(tmp_path):
     directory = write_doc(tmp_path)
     corpus = EmbeddingCorpus(
         tmp_path / "missing-model",
-        sentence_tokenizer=lambda text: ["a.", "b."],
-        summarizer_factory=lambda path, device: FakeSummarizer(),
+        sentence_tokenizer=lambda text: ["alpha.", "beta."],
     )
     with pytest.raises(FileNotFoundError) as exc:
         corpus.store(str(directory), str(tmp_path / "c.pkl"))
     assert "missing-model" in str(exc.value)
 
 
-def test_store_v2_writes_records_not_summaries(tmp_path):
+def test_store_v2_writes_records_not_processed_list(tmp_path):
     directory = write_doc(tmp_path)
-    corpus, _ = make_corpus(["a."], [[1, 0, 0]], summarizer=FakeSummarizer("SECRET_SUMMARY"))
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]])
     output = tmp_path / "corpus.pkl"
     corpus.store(str(directory), str(output))
 
-    raw = output.read_bytes()
-    assert b"SECRET_SUMMARY" not in raw
     payload = load_corpus(output)
     assert payload["version"] == 2 and "records" in payload
-    assert "summary" not in payload
+    assert "processed" not in payload and "summary" not in payload
 
 
-def test_store_appends_summary_md(tmp_path):
+def test_store_appends_processed_md(tmp_path):
     directory = write_doc(tmp_path)
-    corpus, _ = make_corpus(["a."], [[1, 0, 0]], summarizer=FakeSummarizer("A summary"))
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]])
     corpus.store(str(directory), str(tmp_path / "corpus1.pkl"))
     corpus.store(str(directory), str(tmp_path / "corpus2.pkl"))
 
-    summary_path = tmp_path / "SUMMARY.md"
-    text = summary_path.read_text(encoding="utf-8")
+    processed_path = tmp_path / "PROCESSED.md"
+    text = processed_path.read_text(encoding="utf-8")
     assert text.count("## Corpus build") == 2
-    assert "### doc.txt" in text and "A summary" in text
+    assert str((directory / "doc.txt").resolve()) in text
 
 
 def test_store_image_records_in_multimodal(tmp_path):
     directory = write_doc(tmp_path)
     write_png(directory / "pic.png")
-    passages = ["a.", "b."]
+    passages = ["alpha.", "beta."]
     vectors = [[1, 0, 0], [0, 1, 0]]
     corpus, model = make_corpus(passages, vectors, multimodal=True)
     output = tmp_path / "corpus.pkl"
@@ -252,7 +240,7 @@ def test_store_image_records_in_multimodal(tmp_path):
 def test_store_text_mode_skips_images(tmp_path):
     directory = write_doc(tmp_path)
     write_png(directory / "pic.png")
-    corpus, model = make_corpus(["a.", "b."], [[1, 0, 0], [0, 1, 0]], multimodal=False)
+    corpus, model = make_corpus(["alpha.", "beta."], [[1, 0, 0], [0, 1, 0]], multimodal=False)
     output = tmp_path / "corpus.pkl"
 
     corpus.store(str(directory), str(output))
@@ -261,26 +249,13 @@ def test_store_text_mode_skips_images(tmp_path):
     assert model.image_calls == 0
 
 
-def test_store_summarizer_failure_is_isolated(tmp_path):
-    class Boom:
-        def summarize(self, text):
-            raise RuntimeError("no summary")
-
-    directory = write_doc(tmp_path)
-    corpus, _ = make_corpus(["a."], [[1, 0, 0]], summarizer=Boom())
-    status = corpus.store(str(directory), str(tmp_path / "corpus.pkl"))
-    assert "saved" in status
-    assert "ERROR" in (tmp_path / "SUMMARY.md").read_text(encoding="utf-8")
-
-
 def test_missing_image_model_raises_friendly_error(tmp_path):
     directory = write_doc(tmp_path)
     corpus = EmbeddingCorpus(
         "model",
         multimodal=True,
         image_model_path=tmp_path / "missing-clip",
-        sentence_tokenizer=lambda text: ["a.", "b."],
-        summarizer_factory=lambda path, device: FakeSummarizer(),
+        sentence_tokenizer=lambda text: ["alpha.", "beta."],
     )
     with pytest.raises(FileNotFoundError) as exc:
         corpus.store(str(directory), str(tmp_path / "c.pkl"))
@@ -332,18 +307,18 @@ def test_query_reads_v1_corpus(tmp_path):
 
 
 def test_query_missing_corpus_returns_message(tmp_path):
-    corpus, _ = make_corpus(["a."], [[1, 0, 0]])
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]])
     assert "Corpus not found" in corpus.query(str(tmp_path / "nope.pkl"), "hi")
 
 
 def test_query_empty_query_returns_message(tmp_path):
-    corpus, _ = make_corpus(["a."], [[1, 0, 0]])
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]])
     assert corpus.query(str(tmp_path / "c.pkl"), "   ") == "No query provided."
 
 
 def test_query_dimension_mismatch_returns_message(tmp_path):
     output = tmp_path / "corpus.pkl"
-    save_corpus(output, {"passages": ["a."], "embeddings": np.ones((1, 3))})
+    save_corpus(output, {"passages": ["alpha."], "embeddings": np.ones((1, 3))})
     corpus = EmbeddingCorpus(
         "m",
         model_factory=lambda path, device: FakeModel(dim=4),
@@ -357,15 +332,14 @@ def test_model_loaded_once_across_store_and_query(tmp_path):
 
     def factory(path, device):
         counter["n"] += 1
-        return FakeModel(mapping={"a.": [1, 0, 0], "hi": [1, 0, 0]})
+        return FakeModel(mapping={"alpha.": [1, 0, 0], "hi": [1, 0, 0]})
 
-    passages = ["a."]
+    passages = ["alpha."]
     corpus = EmbeddingCorpus(
         "m",
         model_factory=factory,
         index_factory=lambda embeddings: FakeIndex(embeddings),
         sentence_tokenizer=lambda text: list(passages),
-        summarizer_factory=lambda path, device: FakeSummarizer(),
     )
     output = tmp_path / "corpus.pkl"
     corpus.store(str(write_doc(tmp_path)), str(output))
@@ -374,7 +348,7 @@ def test_model_loaded_once_across_store_and_query(tmp_path):
 
 
 def test_query_uses_instance_top_k_when_not_overridden(tmp_path):
-    passages = ["a.", "b.", "c."]
+    passages = ["alpha.", "beta.", "gamma."]
     vectors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
     corpus, model = make_corpus(passages, vectors, top_k=2)
     model.mapping["q"] = [1, 0, 0]
@@ -384,3 +358,152 @@ def test_query_uses_instance_top_k_when_not_overridden(tmp_path):
     result = corpus.query(str(output), "q")
     assert result.splitlines()[0].startswith("Top 2 matches")
     assert len(result.splitlines()) == 3  # header + 2 hits
+
+
+# ------------------------------------------------- content filter / page numbers
+
+
+def test_has_content_filters_junk():
+    assert emb.has_content("alpha") is True
+    assert emb.has_content(". . .") is False
+    assert emb.has_content("a.") is False
+    assert emb.has_content("12") is False
+    assert emb.has_content("1234") is True
+
+
+def test_store_drops_low_content_passages(tmp_path):
+    directory = write_doc(tmp_path)
+    passages = [". . .", "Real content about qubits."]
+    vectors = [[1, 0, 0], [0, 1, 0]]
+    corpus, _ = make_corpus(passages, vectors)
+    output = tmp_path / "corpus.pkl"
+
+    status = corpus.store(str(directory), str(output))
+    payload = load_corpus(output)
+    assert [r["text"] for r in payload["records"]] == ["Real content about qubits."]
+    assert "1 text" in status
+
+
+def test_store_uses_pdf_section_pages(tmp_path, monkeypatch):
+    from src.document_loader import Document
+
+    documents = [
+        Document(
+            source="doc.pdf",
+            kind="text",
+            text="alpha.\nbeta.",
+            pages=10,
+            sections=[(3, "alpha."), (7, "beta.")],
+        )
+    ]
+    monkeypatch.setattr(
+        emb, "iter_documents", lambda directory, extensions, image_dir=None: documents
+    )
+
+    model = FakeModel(mapping={"alpha.": [1, 0, 0], "beta.": [0, 1, 0]}, dim=3)
+    corpus = EmbeddingCorpus(
+        "m",
+        model_factory=lambda path, device: model,
+        index_factory=lambda embeddings: FakeIndex(embeddings),
+        sentence_tokenizer=lambda text: [text],
+    )
+    output = tmp_path / "corpus.pkl"
+    corpus.store(str(tmp_path), str(output))
+
+    payload = load_corpus(output)
+    assert [r["text"] for r in payload["records"]] == ["alpha.", "beta."]
+    assert [r["page"] for r in payload["records"]] == [3, 7]
+
+
+# --------------------------------------------------------------- kind filter
+
+
+def _multimodal_corpus(tmp_path):
+    directory = write_doc(tmp_path)
+    write_png(directory / "pic.png")
+    passages = ["alpha.", "beta."]
+    vectors = [[1, 0, 0], [0, 1, 0]]
+    corpus, model = make_corpus(passages, vectors, multimodal=True, top_k=10)
+    model.mapping["query"] = [0, 1, 0]
+    output = tmp_path / "corpus.pkl"
+    corpus.store(str(directory), str(output))
+    return corpus, output
+
+
+def test_query_image_kind_returns_only_images(tmp_path):
+    corpus, output = _multimodal_corpus(tmp_path)
+    result = corpus.query(str(output), "query", kind="image")
+    assert "image matches" in result.splitlines()[0]
+    assert "[image]" in result
+    assert "(doc.txt)" not in result
+
+
+def test_query_text_kind_returns_only_text(tmp_path):
+    corpus, output = _multimodal_corpus(tmp_path)
+    result = corpus.query(str(output), "query", kind="text")
+    assert "text matches" in result.splitlines()[0]
+    assert "(doc.txt)" in result
+    assert "[image]" not in result
+
+
+def test_query_kind_is_case_insensitive(tmp_path):
+    corpus, output = _multimodal_corpus(tmp_path)
+    result = corpus.query(str(output), "query", kind="IMAGE")
+    assert "[image]" in result
+
+
+def test_query_invalid_kind_returns_message(tmp_path):
+    corpus, output = _multimodal_corpus(tmp_path)
+    result = corpus.query(str(output), "query", kind="audio")
+    assert "Invalid kind" in result and "text" in result and "image" in result
+
+
+def test_query_image_kind_on_v1_corpus(tmp_path):
+    output = tmp_path / "old.pkl"
+    save_corpus(output, {"passages": ["alpha."], "embeddings": np.eye(1, 3)})
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]])
+    assert corpus.query(str(output), "alpha", kind="image") == "No image records found in the corpus."
+
+
+# ----------------------------------------------------- image quality filters
+
+
+def test_store_dedupes_identical_images(tmp_path):
+    directory = write_doc(tmp_path)
+    write_png(directory / "a.png")
+    write_png(directory / "b.png")  # identical bytes to a.png
+    from PIL import Image
+
+    Image.new("RGB", (2, 2), color="red").save(directory / "c.png")
+
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]], multimodal=True)
+    output = tmp_path / "corpus.pkl"
+    corpus.store(str(directory), str(output))
+
+    images = [r for r in load_corpus(output)["records"] if r["kind"] == "image"]
+    assert len(images) == 2  # a/b collapse into one; c is distinct
+
+
+def test_store_clears_stale_image_dir(tmp_path):
+    stale = tmp_path / "corpus_images"
+    stale.mkdir()
+    (stale / "junk.png").write_bytes(b"old")
+
+    corpus, _ = make_corpus(["alpha."], [[1, 0, 0]], multimodal=True)
+    corpus.store(str(write_doc(tmp_path)), str(tmp_path / "corpus.pkl"))
+
+    assert not (stale / "junk.png").exists()
+
+
+def test_prune_orphan_images(tmp_path):
+    image_dir = tmp_path / "imgs"
+    image_dir.mkdir()
+    kept = image_dir / "kept.png"
+    orphan = image_dir / "orphan.png"
+    write_png(kept)
+    write_png(orphan)
+
+    removed = emb.prune_orphan_images(image_dir, [{"kind": "image", "image_path": str(kept)}])
+
+    assert removed == 1
+    assert kept.exists() and not orphan.exists()

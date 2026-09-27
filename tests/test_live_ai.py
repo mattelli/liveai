@@ -182,7 +182,7 @@ def test_store_corpus_uses_config_and_caches(monkeypatch):
             seen["store"] = (directory, output, overwrite)
             return "STORED"
 
-        def query(self, corpus_file, query, top_k=None):
+        def query(self, corpus_file, query, top_k=None, kind=None):
             raise AssertionError("query not expected")
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
@@ -221,7 +221,7 @@ def test_query_corpus_forwards_query_and_top_k(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def query(self, corpus_file, query, top_k=None):
+        def query(self, corpus_file, query, top_k=None, kind=None):
             seen["query"] = (corpus_file, query, top_k)
             return "RESULTS"
 
@@ -238,7 +238,7 @@ def test_query_corpus_uses_explicit_corpus_file(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def query(self, corpus_file, query, top_k=None):
+        def query(self, corpus_file, query, top_k=None, kind=None):
             seen["query"] = (corpus_file, query, top_k)
             return "RESULTS"
 
@@ -246,6 +246,23 @@ def test_query_corpus_uses_explicit_corpus_file(monkeypatch):
     brain = _bare_embedding_brain()
     brain.query_corpus("hello", corpus_file="/tmp/c.pkl")
     assert seen["query"] == ("/tmp/c.pkl", "hello", None)
+
+
+def test_query_corpus_forwards_kind(monkeypatch):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, corpus_file, query, top_k=None, kind=None):
+            seen["query"] = (corpus_file, query, top_k, kind)
+            return "RESULTS"
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    brain = _bare_embedding_brain()
+    assert brain.query_corpus("cluster diagram", kind="image") == "RESULTS"
+    assert seen["query"] == ("corpus.pkl", "cluster diagram", None, "image")
 
 
 def test_store_corpus_reports_errors(monkeypatch):
@@ -266,7 +283,7 @@ def test_query_corpus_reports_errors(monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def query(self, corpus_file, query, top_k=None):
+        def query(self, corpus_file, query, top_k=None, kind=None):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
@@ -298,13 +315,13 @@ def test_store_corpus_passes_multimodal_config(monkeypatch):
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
     brain = _bare_embedding_brain(
-        image_model_path="clip", multimodal=True, summary_name="SUM.md",
+        image_model_path="clip", multimodal=True, processed_name="PROC.md",
         image_extensions="png, jpg",
     )
     assert brain.store_corpus("/docs") == "STORED"
     assert seen["init"]["image_model_path"] == "clip"
     assert seen["init"]["multimodal"] is True
-    assert seen["init"]["summary_name"] == "SUM.md"
+    assert seen["init"]["processed_name"] == "PROC.md"
     assert seen["init"]["image_extensions"] == "png, jpg"
 
 
@@ -315,13 +332,13 @@ def test_embedding_corpus_defaults_when_config_is_minimal(monkeypatch):
         def __init__(self, **kwargs):
             seen["init"] = kwargs
 
-        def query(self, corpus_file, query, top_k=None):
+        def query(self, corpus_file, query, top_k=None, kind=None):
             return "RESULTS"
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    # Phase 1 style config: no image_model_path/multimodal/summary_name keys.
+    # Phase 1 style config: no image_model_path/multimodal/processed_name keys.
     brain = _bare_embedding_brain()
     brain.query_corpus("hi")
     assert seen["init"]["multimodal"] is False
     assert seen["init"]["image_model_path"] is None
-    assert seen["init"]["summary_name"] == "SUMMARY.md"
+    assert seen["init"]["processed_name"] == "PROCESSED.md"

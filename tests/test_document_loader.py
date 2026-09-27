@@ -1,10 +1,26 @@
 import importlib
+import io
 import sys
+from pathlib import Path
 
 import pytest
 
 import src.document_loader as loader
 from src.document_loader import Document, extract_html, extract_pdf, load_document
+
+
+def png_bytes(width=100, height=100, value=None):
+    """A valid PNG: a gradient (has detail) or a solid color when ``value`` is set."""
+    from PIL import Image
+
+    if value is None:
+        pixels = bytes((x * 7) % 256 for _ in range(height) for x in range(width))
+    else:
+        pixels = bytes([value]) * (width * height)
+    image = Image.frombytes("L", (width, height), pixels).convert("RGB")
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 class FakePdfPage:
@@ -16,20 +32,25 @@ class FakePdfPage:
         return self._text
 
     def get_images(self, full=True):
-        return [(xref, 0, 0, 0, 0, "", 0, 0, 0, 0) for xref in self._images]
+        infos = []
+        for item in self._images:
+            xref, smask, width, height = item if isinstance(item, tuple) else (item, 0, 100, 100)
+            infos.append((xref, smask, width, height, 8, "DeviceRGB", "", "", "", 0))
+        return infos
 
 
 class FakePdfDocument:
-    def __init__(self, pages):
+    def __init__(self, pages, image_data=None):
         self._pages = pages
         self.page_count = len(pages)
+        self._image_data = image_data or {}
         self.closed = False
 
     def __getitem__(self, index):
         return self._pages[index]
 
     def extract_image(self, xref):
-        return {"image": f"IMG{xref}".encode(), "ext": "png"}
+        return {"image": self._image_data.get(xref, png_bytes()), "ext": "png"}
 
     def close(self):
         self.closed = True
@@ -138,9 +159,67 @@ def test_extract_pdf_monkeypatched(tmp_path, monkeypatch):
 
     assert "page one text" in document.text and "page two text" in document.text
     assert document.pages == 2
+    assert document.sections == [(1, "page one text"), (2, "page two text")]
     assert len(document.images) == 1
     assert (image_dir / "report_p1_11.png").exists()
     assert fake.closed is True
+
+
+def test_strip_dot_leaders():
+    assert "Acronyms" in loader.strip_dot_leaders("Acronyms . . . . . . 21")
+    assert ". ." not in loader.strip_dot_leaders("Acronyms . . . . . . 21")
+    # A normal sentence and abbreviations must survive unchanged.
+    assert loader.strip_dot_leaders("End. Next sentence.") == "End. Next sentence."
+    assert loader.strip_dot_leaders("U.S.A. and e.g. text") == "U.S.A. and e.g. text"
+
+
+def test_extract_pdf_strips_toc_leaders(tmp_path, monkeypatch):
+    fake = FakePdfDocument([FakePdfPage("Acronyms . . . . . . . 21")])
+    monkeypatch.setattr(loader, "_open_pdf", lambda path: fake)
+    source = tmp_path / "toc.pdf"
+    source.write_bytes(b"%PDF")
+
+    document = extract_pdf(source, source="toc.pdf")
+    assert ". ." not in document.text
+    assert document.sections[0][0] == 1
+    assert document.sections[0][1].split() == ["Acronyms", "21"]
+
+
+def test_image_is_useful():
+    assert loader._image_is_useful(png_bytes(100, 100)) is True
+    assert loader._image_is_useful(png_bytes(100, 100, value=255)) is False
+    assert loader._image_is_useful(b"not an image") is False
+
+
+def test_extract_pdf_skips_tiny_and_blank_images(tmp_path, monkeypatch):
+    page = FakePdfPage(
+        "text",
+        images=[(1, 0, 100, 100), (2, 0, 20, 20), (3, 0, 100, 100)],
+    )
+    fake = FakePdfDocument(
+        [page],
+        image_data={1: png_bytes(100, 100), 2: png_bytes(20, 20), 3: png_bytes(100, 100, value=255)},
+    )
+    monkeypatch.setattr(loader, "_open_pdf", lambda path: fake)
+    source = tmp_path / "r.pdf"
+    source.write_bytes(b"%PDF")
+
+    document = extract_pdf(source, image_dir=tmp_path / "imgs", source="r.pdf")
+    # xref 2 is too small, xref 3 is a solid (blank) image -> only xref 1 survives.
+    assert [Path(p).name for p in document.images] == ["r_p1_1.png"]
+
+
+def test_extract_pdf_skips_duplicate_and_mask_xrefs(tmp_path, monkeypatch):
+    page = FakePdfPage("text", images=[(1, 2, 100, 100), (1, 2, 100, 100), (2, 0, 100, 100)])
+    fake = FakePdfDocument([page], image_data={1: png_bytes(100, 100), 2: png_bytes(100, 100)})
+    monkeypatch.setattr(loader, "_open_pdf", lambda path: fake)
+    source = tmp_path / "r.pdf"
+    source.write_bytes(b"%PDF")
+
+    document = extract_pdf(source, image_dir=tmp_path / "imgs", source="r.pdf")
+    # xref 1 repeated -> deduped; xref 2 is a soft mask -> skipped.
+    assert len(document.images) == 1
+    assert document.images[0].endswith("r_p1_1.png")
 
 
 # -------------------------------------------------------------------- office

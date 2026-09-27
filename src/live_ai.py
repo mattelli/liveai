@@ -15,7 +15,7 @@ from src.tools import (
 )
 from src.summarizer import TextSummarizer
 from src.embedding_search import (
-    DEFAULT_CHUNK_SIZE, DEFAULT_EXTENSIONS, DEFAULT_SUMMARY_NAME, DEFAULT_TOP_K, EmbeddingCorpus
+    DEFAULT_CHUNK_SIZE, DEFAULT_EXTENSIONS, DEFAULT_PROCESSED_NAME, DEFAULT_TOP_K, EmbeddingCorpus
 )
 from src.document_loader import IMAGE_EXTENSIONS
 
@@ -179,7 +179,7 @@ class Brain:
                 image_model_path=getattr(cfg, "image_model_path", None),
                 multimodal=getattr(cfg, "multimodal", False),
                 image_extensions=getattr(cfg, "image_extensions", IMAGE_EXTENSIONS),
-                summary_name=getattr(cfg, "summary_name", DEFAULT_SUMMARY_NAME),
+                processed_name=getattr(cfg, "processed_name", DEFAULT_PROCESSED_NAME),
             )
         return self._emb_corpus
 
@@ -196,14 +196,16 @@ class Brain:
             return f"Error: {e}"
 
     @dump_func_call
-    def query_corpus(self, query: str, corpus_file: str = "", top_k: int = 0) -> str:
+    def query_corpus(self, query: str, corpus_file: str = "", top_k: int = 0, kind: str = "") -> str:
         """
         Search a previously stored corpus for the content most relevant to a query text.
-        Useful when the user asks a question that should be answered from indexed documents.
+        Useful when the user asks a question that should be answered from indexed documents
+        or when looking for a matching image.
+        ``kind`` restricts results to 'text' or 'image'; leave it empty to search both.
         """
         try:
             target = corpus_file or str(self.config.embedding.corpus_path)
-            return self._embedding_corpus().query(target, query, top_k or None)
+            return self._embedding_corpus().query(target, query, top_k or None, kind or None)
         except Exception as e:
             return f"Error: {e}"
 

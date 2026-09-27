@@ -13,10 +13,10 @@ calibration_chunks = 20
 guard_factor = 1.0
 
 [brain] # llm configuration
-# model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
+model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
 # model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
 # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
-model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
+# model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
 # model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
 # model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
@@ -59,8 +59,8 @@ image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (
 multimodal = true          # true -> use image_model_path for BOTH text and images
 device = "cpu"             # "cpu" or "cuda"
 corpus_path = ".res/corpus/corpus.pkl"  # resolved relative to this config file
-summary_name = "SUMMARY.md"  # per-file summaries, next to the corpus file (NOT in the pkl)
+processed_name = "PROCESSED.md"  # list of processed document absolute paths (NOT in the pkl)
 extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx, png, jpg, jpeg, webp, bmp, tiff"
 image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
-chunk_size = 3             # sentences per indexed passage
+chunk_size = 5             # sentences per indexed passage
 top_k = 5                  # default number of results returned by query_corpus

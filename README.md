@@ -112,14 +112,15 @@ Legacy binary formats `.doc` and `.xls` are not supported (convert them to
 - `multimodal = false`: only text is embedded, with `model_path`
   (`.res/embedding/all-MiniLM-L6-v2`); image files are skipped.
 
-**Per-file summaries**
+**Processed documents list**
 
-After a successful build, a markdown summary is appended to `SUMMARY.md` next to
-the corpus file, with one `###` section per input file. Summaries are **not**
-stored in the corpus pickle. Set `summary_name` to change the filename.
+After a successful build, a `PROCESSED.md` manifest is appended next to the
+corpus file, with a build header and one absolute path per processed document
+(failed files are annotated with `— ERROR: ...`). The list is **not** stored in
+the corpus pickle. Set `processed_name` to change the filename.
 
 The model, corpus file and knobs are configured in `config.toml` (paths are
-resolved relative to `config.toml`; `summary_name` is relative to the corpus
+resolved relative to `config.toml`; `processed_name` is relative to the corpus
 file):
 
 ```toml
@@ -129,7 +130,7 @@ image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (
 multimodal = true          # true -> use image_model_path for BOTH text and images
 device = "cpu"             # "cpu" or "cuda"
 corpus_path = ".res/corpus/corpus.pkl"  # resolved relative to config.toml
-summary_name = "SUMMARY.md"  # per-file summaries, next to the corpus file (NOT in the pkl)
+processed_name = "PROCESSED.md"  # list of processed document absolute paths (NOT in the pkl)
 extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx, png, jpg, jpeg, webp, bmp, tiff"
 image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
 chunk_size = 3            # sentences per indexed passage
@@ -175,20 +176,34 @@ hf download sentence-transformers/quora-distilbert-multilingual \
 Usage:
 
 - `store_corpus(directory="docs")` writes the configured `corpus_path` and its
-  `SUMMARY.md`; pass `corpus_file=...` to write elsewhere and `overwrite=True`
+  `PROCESSED.md`; pass `corpus_file=...` to write elsewhere and `overwrite=True`
   to replace an existing file.
 - `query_corpus(query="what is quantum computing?")` searches the configured
   corpus; pass `corpus_file=...` for a different corpus and `top_k=...` to change
-  the number of results. Tune `chunk_size` to control passage length.
+  the number of results. Use `kind="text"` or `kind="image"` to restrict the
+  ranking to one record type (empty searches both). Tune `chunk_size` to control
+  passage length.
+- **Image search:** because text↔text CLIP scores are much higher than
+  text↔image scores, images are hidden when searching both. Use
+  `query_corpus(query="software cluster integration diagram", kind="image")`
+  to rank only image records; matches are returned as `[image] <path>` and the
+  files live under `.res/corpus/corpus_images/`.
+- **Image cleanup:** embedded PDF images are filtered on extraction — soft masks,
+  tiny icons (`< 64 px` on a side) and near-blank fills are skipped — and
+  byte-identical images are de-duplicated, so `corpus_images/` holds only
+  distinct, usable figures (its contents match the corpus records exactly).
 
 Notes:
 
+- Inspect a built corpus with `python inspect_corpus.py` (see `--help` for
+  filters such as `--sources`, `--kind image`, `--source`, `--grep`, `--record N`
+  and `--json`).
 - Requires `faiss-cpu`, `pymupdf`, `python-docx` and `openpyxl` (installed into
   `.lms` by `setup-lms-cpu.ps1`).
 - The corpus file is a pickle containing the records and their normalized
   embeddings; rebuild it whenever a model path, `extensions`, `multimodal` or
   `chunk_size` changes.
-- `.res/` is git-ignored, so downloaded weights, corpora and `SUMMARY.md` are
+- `.res/` is git-ignored, so downloaded weights, corpora and `PROCESSED.md` are
   never committed.
 
 

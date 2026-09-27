@@ -14,8 +14,9 @@ Two modes:
                    with the CLIP model at ``image_model_path``, so ``query`` can
                    return images as well.
 
-Per-file summaries are appended to a markdown file next to the corpus pickle and
-are deliberately **not** stored in the pickle.
+Per-file summaries were replaced by ``PROCESSED.md`` next to the corpus pickle:
+a build header followed by the absolute path of every processed document. The
+list is deliberately **not** stored in the pickle.
 
 Heavy dependencies (``faiss``, ``sentence_transformers``, ``PIL``) are imported
 lazily so this module can be imported -- and unit tested -- without loading a
@@ -24,7 +25,10 @@ real model or building a real index.
 
 from __future__ import annotations
 
+import hashlib
 import pickle
+import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
@@ -38,10 +42,12 @@ __all__ = [
     "DEFAULT_TOP_K",
     "DEFAULT_CHUNK_SIZE",
     "DEFAULT_EXTENSIONS",
-    "DEFAULT_SUMMARY_NAME",
+    "DEFAULT_PROCESSED_NAME",
+    "MIN_ALNUM_CHARS",
     "collect_texts",
     "normalize_rows",
     "build_passages",
+    "has_content",
     "load_corpus",
     "save_corpus",
     "EmbeddingCorpus",
@@ -50,7 +56,10 @@ __all__ = [
 DEFAULT_TOP_K = 5
 DEFAULT_CHUNK_SIZE = 3
 DEFAULT_EXTENSIONS = SUPPORTED_EXTENSIONS
-DEFAULT_SUMMARY_NAME = "SUMMARY.md"
+DEFAULT_PROCESSED_NAME = "PROCESSED.md"
+MIN_ALNUM_CHARS = 4  # drop passages with fewer letters/digits (TOC leaders, noise)
+
+_ALNUM = re.compile(r"[^\W_]", re.UNICODE)
 
 
 def _normalize_extensions(value) -> tuple[str, ...]:
@@ -115,6 +124,15 @@ def build_passages(texts, chunk_size=DEFAULT_CHUNK_SIZE, tokenizer=None) -> list
     return passages
 
 
+def has_content(text, min_alnum: int = MIN_ALNUM_CHARS) -> bool:
+    """True when ``text`` has at least ``min_alnum`` letters/digits.
+
+    Filters out junk passages such as TOC dot leaders (``. . .``), punctuation
+    runs and near-empty table cells.
+    """
+    return len(_ALNUM.findall(text or "")) >= max(1, int(min_alnum))
+
+
 def load_corpus(path) -> dict:
     """Load a v1 (``passages``) or v2 (``records``) corpus pickle and validate it."""
     with open(Path(path), "rb") as handle:
@@ -135,6 +153,28 @@ def save_corpus(path, payload: dict) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     with open(output, "wb") as handle:
         pickle.dump(payload, handle)
+
+
+def prune_orphan_images(image_dir, records) -> int:
+    """Delete image files under ``image_dir`` that no record references.
+
+    Deduplication keeps only the first copy of identical images; this removes the
+    leftover files so the image folder matches the corpus exactly.
+    """
+    directory = Path(image_dir)
+    if not directory.exists():
+        return 0
+    referenced = {
+        Path(record["image_path"]).resolve()
+        for record in records
+        if record.get("image_path")
+    }
+    removed = 0
+    for path in directory.iterdir():
+        if path.is_file() and path.resolve() not in referenced:
+            path.unlink(missing_ok=True)
+            removed += 1
+    return removed
 
 
 def _default_index_factory(embeddings):
@@ -167,8 +207,7 @@ class EmbeddingCorpus:
         image_model_path=None,
         multimodal: bool = False,
         image_extensions=IMAGE_EXTENSIONS,
-        summary_name: str = DEFAULT_SUMMARY_NAME,
-        summarizer_factory: Optional[Callable[[str, str], object]] = None,
+        processed_name: str = DEFAULT_PROCESSED_NAME,
         image_model_factory: Optional[Callable[[str, str], object]] = None,
     ):
         self.model_path = Path(model_path)
@@ -182,12 +221,10 @@ class EmbeddingCorpus:
         self.image_model_path = Path(image_model_path) if image_model_path else None
         self.multimodal = multimodal
         self.image_extensions = _normalize_extensions(image_extensions)
-        self.summary_name = summary_name
-        self._summarizer_factory = summarizer_factory
+        self.processed_name = processed_name
         self._image_model_factory = image_model_factory
         self._model = None
         self._image_model = None
-        self._summarizer = None
 
     # -------------------------------------------------------------- internals
 
@@ -290,31 +327,10 @@ class EmbeddingCorpus:
         embeddings = np.asarray(encoder.encode([query], convert_to_numpy=True), dtype=float)
         return normalize_rows(embeddings)[0]
 
-    def _summarizer_instance(self):
-        if self._summarizer is None:
-            if self._summarizer_factory is not None:
-                self._summarizer = self._summarizer_factory(str(self.model_path), self.device)
-            else:
-                from src.summarizer import TextSummarizer
-
-                self._summarizer = TextSummarizer(self.model_path, device=self.device)
-        return self._summarizer
-
-    def _summarize_document(self, document) -> str:
-        if document.error:
-            return f"ERROR: {document.error}"
-        if document.text and document.text.strip():
-            try:
-                return self._summarizer_instance().summarize(document.text).strip()
-            except Exception as exc:
-                return f"ERROR: {exc}"
-        if document.images:
-            return f"Image file '{document.source}' indexed as an image record."
-        return "No extractable text content."
-
-    def _append_summaries(self, output: Path, documents, n_text: int, n_image: int) -> Path:
-        summary_path = output.parent / self.summary_name
-        summary_path.parent.mkdir(parents=True, exist_ok=True)
+    def _append_processed(self, output: Path, documents, directory, n_text: int, n_image: int) -> Path:
+        processed_path = output.parent / self.processed_name
+        processed_path.parent.mkdir(parents=True, exist_ok=True)
+        root = Path(directory).resolve()
         timestamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         lines = [
             f"## Corpus build {timestamp} — {output.name}",
@@ -323,30 +339,45 @@ class EmbeddingCorpus:
             "",
         ]
         for document in documents:
-            lines.append(f"### {document.source}")
-            lines.append(self._summarize_document(document))
-            lines.append("")
-        with open(summary_path, "a", encoding="utf-8") as handle:
+            absolute = (root / document.source).resolve()
+            suffix = f" — ERROR: {document.error}" if document.error else ""
+            lines.append(f"- {absolute}{suffix}")
+        lines.append("")
+        with open(processed_path, "a", encoding="utf-8") as handle:
             handle.write("\n".join(lines) + "\n")
-        return summary_path
+        return processed_path
 
     def _build_records(self, documents) -> list[dict]:
         records: list[dict] = []
+        seen_image_hashes: set = set()
         for document in documents:
             if document.error:
                 continue
-            if document.kind == "text" and document.text and document.text.strip():
-                for passage in build_passages([document.text], self.chunk_size, self._tokenizer):
-                    records.append(
-                        {
-                            "kind": "text",
-                            "source": document.source,
-                            "text": passage,
-                            "page": document.pages,
-                        }
-                    )
+            if document.kind == "text":
+                # Paginated documents (PDF) expose per-page sections so each
+                # passage keeps its real page number.
+                sections = document.sections or [(document.pages, document.text)]
+                for page, section_text in sections:
+                    for passage in build_passages([section_text], self.chunk_size, self._tokenizer):
+                        if not has_content(passage):
+                            continue
+                        records.append(
+                            {
+                                "kind": "text",
+                                "source": document.source,
+                                "text": passage,
+                                "page": page,
+                            }
+                        )
             if self.multimodal:
                 for image_path in document.images:
+                    try:
+                        digest = hashlib.md5(Path(image_path).read_bytes()).hexdigest()
+                    except OSError:
+                        continue
+                    if digest in seen_image_hashes:
+                        continue
+                    seen_image_hashes.add(digest)
                     records.append(
                         {
                             "kind": "image",
@@ -366,6 +397,8 @@ class EmbeddingCorpus:
             return "File already exists."
 
         image_dir = output.parent / f"{output.stem}_images"
+        if image_dir.exists():
+            shutil.rmtree(image_dir, ignore_errors=True)
         documents = iter_documents(directory, self.extensions, image_dir=image_dir)
         if not documents:
             return f"No supported files found in '{directory}'"
@@ -388,20 +421,29 @@ class EmbeddingCorpus:
             "embeddings": embeddings,
         }
         save_corpus(output, payload)
+        prune_orphan_images(image_dir, records)
 
         n_text = sum(1 for record in records if record["kind"] == "text")
         n_image = sum(1 for record in records if record["kind"] == "image")
-        summary_path = self._append_summaries(output, documents, n_text, n_image)
+        processed_path = self._append_processed(output, documents, directory, n_text, n_image)
         return (
             f"Corpus with {n_text} text / {n_image} image records saved to '{output}'; "
-            f"summaries appended to '{summary_path}'"
+            f"processed list appended to '{processed_path}'"
         )
 
-    def query(self, corpus_file: str, query: str, top_k: Optional[int] = None) -> str:
-        """Return the ``top_k`` records most relevant to ``query``."""
+    def query(self, corpus_file: str, query: str, top_k: Optional[int] = None, kind: Optional[str] = None) -> str:
+        """Return the ``top_k`` records most relevant to ``query``.
+
+        ``kind`` restricts the ranking to ``"text"`` or ``"image"`` records;
+        ``None``/empty searches all records.
+        """
         query = (query or "").strip()
         if not query:
             return "No query provided."
+
+        kind = (kind or "").strip().lower() or None
+        if kind not in (None, "text", "image"):
+            return f"Invalid kind '{kind}'. Use 'text' or 'image'."
 
         path = Path(corpus_file).resolve()
         if not path.exists():
@@ -409,8 +451,8 @@ class EmbeddingCorpus:
 
         payload = load_corpus(path)
         if "records" in payload:
-            return self._query_v2(path, payload, query, top_k)
-        return self._query_v1(path, payload, query, top_k)
+            return self._query_v2(path, payload, query, top_k, kind)
+        return self._query_v1(path, payload, query, top_k, kind)
 
     # --------------------------------------------------------------- query impl
 
@@ -421,7 +463,7 @@ class EmbeddingCorpus:
         scores, ids = index.search(query_vec.reshape(1, -1), k)
         return k, np.ravel(scores), np.ravel(ids)
 
-    def _query_v2(self, path, payload, query, top_k) -> str:
+    def _query_v2(self, path, payload, query, top_k, kind=None) -> str:
         records = list(payload.get("records") or [])
         if not records:
             return "Corpus is empty."
@@ -437,14 +479,22 @@ class EmbeddingCorpus:
                 "rebuild the corpus with the configured model."
             )
 
-        k, scores, ids = self._rank(embeddings, query_vec, top_k, len(records))
-        lines = [f"Top {k} matches for '{query}':"]
+        if kind:
+            candidates = [i for i, record in enumerate(records) if record.get("kind", "text") == kind]
+        else:
+            candidates = list(range(len(records)))
+        if not candidates:
+            return f"No {kind} records found in the corpus."
+
+        k, scores, ids = self._rank(embeddings[candidates], query_vec, top_k, len(candidates))
+        label = f"{kind} " if kind else ""
+        lines = [f"Top {k} {label}matches for '{query}':"]
         rank = 0
-        for score, idx in zip(scores, ids):
-            idx = int(idx)
-            if idx < 0:
+        for score, local in zip(scores, ids):
+            local = int(local)
+            if local < 0:
                 continue
-            record = records[idx]
+            record = records[candidates[local]]
             source = record.get("source", "")
             rank += 1
             hit = f"{rank}) [{float(score):.3f}] ({source}) {record.get('text') or source}"
@@ -453,7 +503,9 @@ class EmbeddingCorpus:
             lines.append(hit)
         return "\n".join(lines)
 
-    def _query_v1(self, path, payload, query, top_k) -> str:
+    def _query_v1(self, path, payload, query, top_k, kind=None) -> str:
+        if kind == "image":
+            return "No image records found in the corpus."
         passages = list(payload.get("passages") or [])
         if not passages:
             return "Corpus is empty."

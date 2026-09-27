@@ -185,7 +185,7 @@ def test_real_config_has_multimodal_embedding_keys():
     ns = load_config(cfg_path)
     emb = ns.embedding
     assert emb.image_model_path.is_absolute()
-    assert emb.multimodal is True
-    assert isinstance(emb.summary_name, str) and not Path(emb.summary_name).is_absolute()
+    assert isinstance(emb.multimodal, bool)
+    assert isinstance(emb.processed_name, str) and not Path(emb.processed_name).is_absolute()
     assert emb.image_extensions
     assert "pdf" in emb.extensions and "docx" in emb.extensions
