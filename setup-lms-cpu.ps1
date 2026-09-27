@@ -40,6 +40,7 @@ pip install webdriver-manager
 # EMBEDDING
 pip install -U "sentence-transformers[image]"
 pip install nltk
+pip install faiss-cpu
 
 # DEV
 pip install pytest
