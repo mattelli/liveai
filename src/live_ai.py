@@ -13,6 +13,7 @@ from src.tools import (
     fetch_financial_data, save_financial_chart, 
     search_pattern_in_files, replace_string_in_file, search_in_file
 )
+from src.summarizer import TextSummarizer
 
 Role = Literal['system', 'user', 'assistant']
 
@@ -137,6 +138,32 @@ class Brain:
         return prediction.content
 
     @dump_func_call
+    def summarize_text(self, file: str, max_sentences: int = 0) -> str:
+        """
+        Summarize the text content of a file into its most important sentences.
+        Useful when the user asks to summarize, condense, shorten or outline a text file.
+        ``file`` is the path of the text file to read; ``max_sentences`` = 0 uses the
+        ratio configured in the ``[summarization]`` section.
+        """
+        file_path = pathlib.Path(file).resolve()
+        if not file_path.exists() or not file_path.is_file():
+            return f"Unable to read '{file_path}'"
+        try:
+            text = file_path.read_text(encoding="utf-8")
+            if getattr(self, "_summarizer", None) is None:
+                cfg = self.config.summarization
+                self._summarizer = TextSummarizer(
+                    model_path=cfg.model_path,
+                    device=getattr(cfg, "device", "cpu"),
+                    ratio=getattr(cfg, "ratio", 0.1),
+                    threshold=getattr(cfg, "threshold", 0.5),
+                    max_sentences=getattr(cfg, "max_sentences", 0),
+                )
+            return self._summarizer.summarize(text, max_sentences or None)
+        except Exception as e:
+            return f"Error: {e}"
+
+    @dump_func_call
     def allow_speech(self, enable:bool) -> str:
         """
         Enable or disable speech for Agent responses.
@@ -204,16 +231,11 @@ class Agent(Brain):
     """
     Agent class that extends the Brain with tool usage capabilities.
     """
-    def __init__(self, config: SimpleNamespace):
-        super().__init__(config)
-        self._fragments_buffer:list[str] = []
-        self.logger.info(
-            "✅ Agent with Model '%s' initialized. Setting up tools ...", 
-            self.config.brain.model
-        )
-        self.tools:list[Callable] = [
+    def _build_tools(self) -> list[Callable]:
+        return [
             self.model_info, self.recall_personal, self.store_personal,
             self.image_response, self.allow_speech, self.clear_chat,
+            self.summarize_text,
             capture_image, system_info, current_date_time, get_working_directory, 
             run_command, search_in_file, search_pattern_in_files, 
             read_text_file, replace_string_in_file, write_text_file,
@@ -221,6 +243,15 @@ class Agent(Brain):
             fetch_financial_data, save_financial_chart, 
             exit_gracefully
         ]
+
+    def __init__(self, config: SimpleNamespace):
+        super().__init__(config)
+        self._fragments_buffer:list[str] = []
+        self.logger.info(
+            "✅ Agent with Model '%s' initialized. Setting up tools ...", 
+            self.config.brain.model
+        )
+        self.tools:list[Callable] = self._build_tools()
         self.logger.info(
             "✅ Agent with Model '%s' is ready with [%d] tools.", 
             self.config.brain.model, len(self.tools)

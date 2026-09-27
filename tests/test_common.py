@@ -1,4 +1,5 @@
 import io
+from pathlib import Path
 
 from rich.console import Console
 
@@ -141,3 +142,19 @@ def test_load_config_resolves_input_history_file(tmp_path):
     cfg.write_text('[input]\nhistory_file = ".chat_history"\n')
     ns = load_config(cfg)
     assert ns.input.history_file == (tmp_path / ".chat_history").resolve()
+
+
+def test_load_config_resolves_summarization_model_path(tmp_path):
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[summarization]\nmodel_path = ".res/models/st"\n')
+    ns = load_config(cfg)
+    assert ns.summarization.model_path == (tmp_path / ".res/models/st").resolve()
+
+
+def test_real_config_has_summarization_block():
+    cfg_path = Path(__file__).parent.parent / "config.toml"
+    ns = load_config(cfg_path)
+    sm = ns.summarization
+    assert sm.model_path.is_absolute()
+    for key in ("device", "ratio", "threshold", "max_sentences"):
+        assert hasattr(sm, key)

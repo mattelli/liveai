@@ -42,7 +42,8 @@ in order. Each task is one commit.
 
 ### 1.3 Expected end state
 
-- A new tool `summarize_text(text, max_sentences=0)` is callable by the LLM agent.
+- A new tool `summarize_text(file, max_sentences=0)` is callable by the LLM agent;
+  it reads the text content from the given file path.
 - The sentence-embedding model is **not** downloaded at import time and is loaded
   only on first tool use, from a local folder configured in `config.toml`.
 - No network access and no real model are used by unit tests.
@@ -55,7 +56,7 @@ in order. Each task is one commit.
 ### 2.1 Architecture
 
 ```
-src/live_ai.py::Brain.summarize_text   (tool exposed to the LLM, reads config)
+src/live_ai.py::Brain.summarize_text   (tool exposed to the LLM; reads config + file)
         │  delegates to
         ▼
 src/summarizer.py::TextSummarizer      (pure pipeline + lazy model loading)
@@ -102,7 +103,7 @@ class TextSummarizer:
 # src/live_ai.py
 class Brain:
     @dump_func_call
-    def summarize_text(self, text: str, max_sentences: int = 0) -> str: ...
+    def summarize_text(self, file: str, max_sentences: int = 0) -> str: ...
 ```
 
 `model_factory` and `sentence_tokenizer` default to `None`; when `None` the class
@@ -161,14 +162,17 @@ containing either `modules.json` or `config_sentence_transformers.json` or
 
 ```python
 @dump_func_call
-def summarize_text(self, text: str, max_sentences: int = 0) -> str:
+def summarize_text(self, file: str, max_sentences: int = 0) -> str:
     """
-    Summarize a long text into its most important sentences (extractive summary).
-    Useful when the user asks to summarize, condense, shorten or outline a text.
-    ``max_sentences`` = 0 uses the ratio configured in the ``[summarization]`` section.
+    Summarize the text content of a file into its most important sentences.
+    Useful when the user asks to summarize, condense, shorten or outline a text file.
+    ``file`` is the path of the text file to read; ``max_sentences`` = 0 uses the
+    ratio configured in the ``[summarization]`` section.
     """
 ```
 
+- Read the file at ``file`` as UTF-8. If it is missing or not a regular file,
+  return ``f"Unable to read '{path}'"`` without loading the model.
 - Lazily build `self._summarizer = TextSummarizer(...)` from
   `self.config.summarization` using `getattr(cfg, "key", default)` for every
   optional key, then cache it.
@@ -275,7 +279,8 @@ implement the module so all T4 tests pass.
 builds `self.tools` inline without a summarization entry.
 
 **Expected behavior:**
-1. `Brain.summarize_text(text, max_sentences=0)` exists per §2.5, lazily creates
+1. `Brain.summarize_text(file, max_sentences=0)` exists per §2.5, reads the
+   file, lazily creates
    and caches `self._summarizer`, and is decorated with `@dump_func_call`.
 2. Import `TextSummarizer` from `src.summarizer` at the top of `src/live_ai.py`.
 3. Extract the tool list into a method so it can be unit-tested without loading a
@@ -372,7 +377,7 @@ that `Agent._build_tools` registers the new tool.
 
 **Expected behavior:** New tests in `tests/test_live_ai.py`:
 
-- `test_summarize_text_uses_config_and_caches`: monkeypatch
+- `test_summarize_text_reads_file_and_caches`: monkeypatch
   `live_ai_mod.TextSummarizer` with a `Recorder` class that stores `__init__`
   kwargs and returns a fixed string from `summarize`. Build a bare brain:
 
@@ -383,10 +388,13 @@ that `Agent._build_tools` registers the new tool.
       model_path="m", device="cpu", ratio=0.2, threshold=0.4, max_sentences=3))
   ```
 
-  Call `brain.summarize_text("long text")` twice. Assert: factory created once,
-  kwargs match the config, `summarize` called twice, result is the fixed string.
-- `test_summarize_text_forwards_max_sentences`: `brain.summarize_text("t", max_sentences=2)`
-  forwards `2` to `Recorder.summarize`.
+  Write two temp files and call `brain.summarize_text(str(path))` for each.
+  Assert: factory created once, kwargs match the config, `summarize` receives the
+  file contents (not the paths), result is the fixed string.
+- `test_summarize_text_missing_file_returns_message`: a non-existent path →
+  result contains `"Unable to read"` and no summarizer is created.
+- `test_summarize_text_forwards_max_sentences`:
+  `brain.summarize_text(str(path), max_sentences=2)` forwards `2`.
 - `test_summarize_text_reports_errors`: a `Recorder` whose `summarize` raises
   `RuntimeError("boom")` → result starts with `"Error:"` and contains `"boom"`.
 - `test_agent_build_tools_includes_summarize_text`:
@@ -414,8 +422,8 @@ Diffusers, but nothing about sentence-transformers / summarization.
 
 **Expected behavior:** Add a `## Text summarization` section that:
 
-1. States that `summarize_text` uses `all-MiniLM-L6-v2` + LexRank and loads the
-   model lazily on first use.
+1. States that `summarize_text` reads a UTF-8 text file, uses
+   `all-MiniLM-L6-v2` + LexRank, and loads the model lazily on first use.
 2. Shows the `[summarization]` block from §2.3 and explains that `model_path` is
    resolved relative to `config.toml`.
 3. Gives three ways to store the model in `.res/sentence-transformers/all-MiniLM-L6-v2`:
@@ -472,7 +480,7 @@ TOML block are valid and consistent with `config.toml` from T1.
 3. Manually smoke-test with a real model (optional, not part of CI):
 
    ```bash
-   python main.py --chat --prompt "Summarize: <paste a long text>"
+   python main.py --chat --prompt "Summarize the file notes.txt"
    ```
 
    If `.res/sentence-transformers/all-MiniLM-L6-v2` is absent, the agent must
@@ -490,7 +498,8 @@ TOML block are valid and consistent with `config.toml` from T1.
 - [ ] `config.toml` has a `[summarization]` block with a resolvable `model_path`.
 - [ ] `src/summarizer.py` imports no heavy ML package at module load and follows
       the §2.2 signatures.
-- [ ] `Brain.summarize_text` is a `@dump_func_call` tool that reads
+- [ ] `Brain.summarize_text` is a `@dump_func_call` tool that takes a file path,
+      reads the file content, reads
       `config.summarization`, caches the summarizer, and never raises to the caller.
 - [ ] `Agent._build_tools()` includes `summarize_text`.
 - [ ] `tests/test_lex_rank.py`, `tests/test_summarizer.py` and the new

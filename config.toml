@@ -14,9 +14,9 @@ guard_factor = 1.0
 
 [brain] # llm configuration
 # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
-model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
+# model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
 # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
-# model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
+model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
 # model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
 # model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
@@ -45,3 +45,10 @@ auto_suggest = true              # inline history suggestions
 completion = true                # complete /slash commands with Tab
 explicit_paste = true            # /paste ... . fallback for terminals without bracketed paste
 multiline = false                # true -> Esc+Enter to accept (advanced)
+
+[summarization] # extractive text summarization (LexRank + sentence embeddings)
+model_path = ".res/sentence-transformers/all-MiniLM-L6-v2"  # resolved relative to this config file
+device = "cpu"            # "cpu" or "cuda"
+ratio = 0.1               # fraction of sentences to keep (0 < ratio <= 1)
+threshold = 0.5           # LexRank similarity threshold in [0, 1)
+max_sentences = 0         # 0 -> derive from ratio; >0 -> hard cap
