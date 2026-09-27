@@ -1,6 +1,7 @@
 # ============================================
 # Live Assistant - Windows 11
 $target_py_version = "3.12"
+$environment_name = ".lms"
 # ============================================
 
 
@@ -13,12 +14,12 @@ if ($pyVersion -ne $target_py_version) {
 Write-Host "Python version OK: $pyVersion"
 
 Write-Host ""
-Write-Host "=== Activating .lms virtual environment ==="
-if (-not (Test-Path ".\.lms\Scripts\Activate.ps1")) {
-    Write-Host "ERROR: .lms virtual environment not found. Create it with: python -m venv .lms"
+Write-Host "=== Activating $environment_name virtual environment ==="
+if (-not (Test-Path ".\$environment_name\Scripts\Activate.ps1")) {
+    Write-Host "ERROR: $environment_name virtual environment not found. Create it with: python -m venv $environment_name"
     exit 1
 }
-& ".\.lms\Scripts\Activate.ps1"
+& ".\$environment_name\Scripts\Activate.ps1"
 Write-Host "Active python: $(python -c 'import sys; print(sys.executable)')"
 
 Write-Host ""

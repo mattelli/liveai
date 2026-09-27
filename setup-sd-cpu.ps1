@@ -2,6 +2,7 @@
 # Stable Diffusion CPU Windows 11
 # No way to install pakages to enable Windows 11 + AMD Radeon (680M)
 $target_py_version = "3.12"
+$environment_name = ".sd-cpu"
 # ============================================
 
 # The default <CACHE_DIR> is ~/.cache/huggingface/hub. 
@@ -24,6 +25,15 @@ if ($pyVersion -ne $target_py_version) {
     exit 1
 }
 Write-Host "Python version OK: $pyVersion"
+
+Write-Host ""
+Write-Host "=== Activating $environment_name virtual environment ==="
+if (-not (Test-Path ".\$environment_name\Scripts\Activate.ps1")) {
+    Write-Host "ERROR: $environment_name virtual environment not found. Create it with: python -m venv $environment_name"
+    exit 1
+}
+& ".\$environment_name\Scripts\Activate.ps1"
+Write-Host "Active python: $(python -c 'import sys; print(sys.executable)')"
 
 Write-Host ""
 Write-Host "=== Upgrading pip ==="
