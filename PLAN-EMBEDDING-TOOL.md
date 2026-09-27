@@ -3,14 +3,20 @@
 This plan adds two related **semantic search function tools** to the live
 assistant, derived from `samples/sentence_transformers/semantic_search_quora_faiss.py`:
 
-1. **`store_corpus`** — build a searchable corpus from a set of text files in a
-   directory and persist it to a single file.
+1. **`store_corpus`** — build a searchable corpus from a directory of documents
+   and persist it to a single file.
 2. **`query_corpus`** — query the stored corpus with a query text and return the
-   most relevant passages.
+   most relevant passages/images.
 
 It follows the same task-guide style as `PLAN.md` and `PLAN-SUMMARY-TOOL.md`
 (small, independent tasks; goals / current behavior / expected behavior;
 verified by unit tests).
+
+> **Status.** **Phase 1 (T0–T6) is already implemented** (text-only corpus:
+> `src/embedding_search.py`, `[embedding]` config, `store_corpus`/`query_corpus`,
+> tests). **Phase 2 (T7–T13)** is the amendment described below: multi-format
+> ingestion (pdf/txt/tex/md/html/excel/word), image records, and per-file
+> summaries in `SUMMARY.md`.
 
 The plan is written for a **small automated coding agent**. Execute the tasks in
 order. Each task is one commit and is not done until its tests pass.
@@ -24,44 +30,44 @@ order. Each task is one commit and is not done until its tests pass.
 `semantic_search_quora_faiss.py`:
 
 1. Collect a corpus of sentences.
-2. Embed them with a `SentenceTransformer` (the sample uses
-   `quora-distilbert-multilingual`).
+2. Embed them with a `SentenceTransformer`.
 3. L2-normalize the embeddings (so inner product == cosine similarity).
-4. Build a FAISS index (`IndexIVFFlat` in the sample; `IndexFlatIP` is the exact
-   equivalent without training).
+4. Build a FAISS index.
 5. For a query: embed + normalize the query, `index.search(query, top_k)`, then
    print `(score, sentence)` hits.
 
-The sample's ANN/IVF tuning (`n_clusters`, `nprobe`, Recall@k comparison) is
-**out of scope**. This plan uses an exact `IndexFlatIP` so results are
-deterministic; the search backend stays injectable so an IVF index can replace it
-later.
-
 ### 1.2 Current repository behavior
 
-- `src/summarizer.py` already loads a local `SentenceTransformer` lazily and
-  exposes `is_model_available` and `split_sentences`. It is the template to copy
-  for lazy loading + test seams.
-- `src/live_ai.py::Brain` holds config-driven, stateful tools
-  (`image_response`, `summarize_text`, `allow_speech`, ...); `Agent._build_tools`
-  registers callables for the LLM.
-- `config.toml` has `[summarization].model_path` pointing at
-  `.res/embedding/all-MiniLM-L6-v2`; `load_config` resolves any key ending in
-  `_path`/`_dir` relative to the config file.
-- `setup-lms-cpu.ps1` already installs `sentence-transformers` and `faiss-cpu`.
-- `.res/embedding/all-MiniLM-L6-v2` is present; `.res/` is git-ignored.
-- No corpus/semantic-search code or config exists yet.
+- `src/embedding_search.py` (Phase 1) reads only `.txt`/`.md`, chunks sentences
+  into passages with `src.summarizer.split_sentences`, embeds them with
+  `all-MiniLM-L6-v2`, and persists `{version, model_path, passages, embeddings}`.
+- `Brain.store_corpus(directory, corpus_file, overwrite)` and
+  `Brain.query_corpus(query, corpus_file, top_k)` wrap it; `EmbeddingCorpus` is
+  cached per `Brain`.
+- `src/summarizer.py` exposes `TextSummarizer` (LexRank extractive summary).
+- `config.toml` has `[embedding]` (`model_path`, `device`, `corpus_path`,
+  `extensions`, `chunk_size`, `top_k`).
+- `.res/embedding/all-MiniLM-L6-v2` and `.res/embedding/clip-ViT-B-32`
+  (2.3 GB, shared text+image space) are present; `.res/` is git-ignored.
+- `setup-lms-cpu.ps1` installs `sentence-transformers[image]` and `faiss-cpu`.
+- The active Python is the `.lms` virtual environment
+  (`C:\...\live_assistant\.lms\Scripts\python.exe`).
 
-### 1.3 Expected end state
+### 1.3 Expected end state (after Phase 2)
 
-- Two new tools callable by the LLM: `store_corpus(directory, corpus_file, overwrite)`
-  and `query_corpus(query, corpus_file, top_k)`.
-- The embedding model is **not** loaded at import time; it is loaded only on
-  first tool use from a local folder configured in `config.toml`.
-- Corpus data is persisted as a single `.pkl` file (passages + normalized
-  embeddings).
+- `store_corpus` ingests **pdf (including embedded images), txt, md, tex, html,
+  docx (Word), xlsx (Excel), csv, rst, log, and common images** (png/jpg/jpeg/
+  webp/bmp/tiff).
+- Image files and images extracted from PDFs are embedded with the **CLIP**
+  model and added to the corpus pickle as `image` records; text is embedded in
+  the same shared space (multimodal mode) or with the text model (text mode).
+- For every input file, an **extractive summary** is generated and **appended to
+  `SUMMARY.md`**, written next to the corpus pickle. Summaries are **never**
+  stored in the pickle.
+- `query_corpus` returns the most relevant text passages **and/or images**, with
+  their source path.
+- `setup-lms-cpu.ps1` installs the extra document-loader packages into `.lms`.
 - No network access and no real model are used by unit tests.
-- `README.md` documents how to store the embedding model and how to use the tools.
 
 ---
 
@@ -73,430 +79,458 @@ later.
 src/live_ai.py::Brain.store_corpus / query_corpus   (tools; read config, cache)
         │  delegates to
         ▼
-src/embedding_search.py::EmbeddingCorpus            (pipeline + lazy model/index)
+src/embedding_search.py::EmbeddingCorpus            (records, embeddings, index, summaries)
         │  uses
-        ├── src/summarizer.py::is_model_available, split_sentences
+        ├── src/document_loader.py                   (per-format text + image extraction)
+        ├── src/summarizer.py::TextSummarizer        (per-file summaries)
+        ├── sentence_transformers (text model or CLIP), lazily
         └── faiss.IndexFlatIP (lazy; injectable backend)
 ```
 
-Rationale: mirror the summarization design. Keep `src/live_ai.py` thin (it
-imports `lmstudio` at module level, so tests must `importorskip` it). All
-offline-testable logic lives in `src/embedding_search.py`, which must **not**
-import `faiss`, `sentence_transformers` or `torch` at module top level.
+`src/document_loader.py` must **not** import `pymupdf`, `docx`, `openpyxl`,
+`bs4`, `PIL` or `pandas` at module top level; import them inside the extractor
+functions so the module is import-safe and unit-testable with fakes.
 
-### 2.2 Locked public signatures
-
-Implement these exactly; tests and the plan rely on them.
+### 2.2 Locked public signatures (Phase 2 additions in **bold**)
 
 ```python
-# src/embedding_search.py
-DEFAULT_TOP_K = 5
-DEFAULT_CHUNK_SIZE = 3
-DEFAULT_EXTENSIONS = (".txt", ".md")
+# src/document_loader.py
+TEXT_EXTENSIONS = (".txt", ".md", ".markdown", ".tex", ".rst", ".log", ".csv")
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff")
+DOCUMENT_EXTENSIONS = (".pdf", ".docx", ".xlsx", ".html", ".htm")
+SUPPORTED_EXTENSIONS = TEXT_EXTENSIONS + DOCUMENT_EXTENSIONS + IMAGE_EXTENSIONS
 
-def collect_texts(directory, extensions=DEFAULT_EXTENSIONS) -> list[str]: ...
-def normalize_rows(matrix) -> "np.ndarray": ...
-def build_passages(texts, chunk_size=DEFAULT_CHUNK_SIZE, tokenizer=None) -> list[str]: ...
-def load_corpus(path) -> dict: ...
-def save_corpus(path, payload: dict) -> None: ...
+@dataclass
+class Document:
+    source: str                 # path relative to the scanned root (POSIX-style)
+    kind: str                   # "text" | "image"
+    text: str = ""              # extracted text ("" for pure images)
+    images: list = field(default_factory=list)   # absolute image paths
+    pages: int | None = None
+    error: str = ""
 
+def strip_tex(text: str) -> str: ...
+def extract_text(path) -> Document: ...
+def extract_html(path) -> Document: ...
+def extract_pdf(path, image_dir=None, source="") -> Document: ...
+def extract_docx(path) -> Document: ...
+def extract_xlsx(path) -> Document: ...
+def extract_image(path) -> Document: ...
+def load_document(path, root=None, image_dir=None) -> Document: ...
+def iter_documents(directory, extensions=None, image_dir=None) -> list[Document]: ...
+
+# src/embedding_search.py (amended)
 class EmbeddingCorpus:
     def __init__(
         self,
         model_path,
-        device: str = "cpu",
-        extensions=DEFAULT_EXTENSIONS,      # tuple of suffixes or a "txt, md" string
-        chunk_size: int = DEFAULT_CHUNK_SIZE,
-        top_k: int = DEFAULT_TOP_K,
-        model_factory=None,                 # test seam: factory(model_path, device) -> embedder
-        index_factory=None,                 # test seam: factory(embeddings) -> index with .search()
-        sentence_tokenizer=None,            # test seam: tokenizer(text) -> list[str]
+        device="cpu",
+        extensions=DEFAULT_EXTENSIONS,
+        chunk_size=DEFAULT_CHUNK_SIZE,
+        top_k=DEFAULT_TOP_K,
+        model_factory=None,
+        index_factory=None,
+        sentence_tokenizer=None,
+        image_model_path=None,          # CLIP model for image (and multimodal text) records
+        multimodal=False,               # True -> one shared CLIP space for text + images
+        image_extensions=IMAGE_EXTENSIONS,
+        summary_name="SUMMARY.md",      # written next to the pickle; NOT inside it
+        summarizer_factory=None,        # callable(model_path, device) -> object with .summarize(text)
+        image_model_factory=None,       # test seam for the CLIP embedder
     ): ...
-    def store(self, directory: str, output_file: str, overwrite: bool = False) -> str: ...
-    def query(self, corpus_file: str, query: str, top_k: int | None = None) -> str: ...
-
-# src/live_ai.py
-class Brain:
-    @dump_func_call
-    def store_corpus(self, directory: str, corpus_file: str = "", overwrite: bool = False) -> str: ...
-
-    @dump_func_call
-    def query_corpus(self, query: str, corpus_file: str = "", top_k: int = 0) -> str: ...
+    def store(self, directory, output_file, overwrite=False) -> str: ...
+    def query(self, corpus_file, query, top_k=None) -> str: ...
 ```
 
-`model_factory`, `index_factory` and `sentence_tokenizer` default to `None`; when
-`None` the class uses the real lazy loaders. Tests always inject fakes.
+`Brain.store_corpus` / `Brain.query_corpus` keep their Phase 1 signatures.
 
-Reuse `is_model_available` and `split_sentences` from `src/summarizer` instead of
-duplicating them.
-
-### 2.3 Config schema (new `[embedding]` block)
+### 2.3 Config schema (amended `[embedding]` block)
 
 ```toml
-[embedding] # semantic search over a local corpus (sentence embeddings + FAISS)
-model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to this config file
-device = "cpu"            # "cpu" or "cuda"
-corpus_path = ".res/corpus/corpus.pkl"  # default corpus file, resolved relative to config.toml
-extensions = "txt, md"    # comma-separated extensions collected from a directory
-chunk_size = 3            # sentences per indexed passage
-top_k = 5                 # default number of results returned by query_corpus
+[embedding] # semantic search over a local corpus (sentence/image embeddings + FAISS)
+model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
+image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)
+multimodal = true          # true -> use image_model_path for BOTH text and images
+device = "cpu"             # "cpu" or "cuda"
+corpus_path = ".res/corpus/corpus.pkl"  # resolved relative to this config file
+summary_name = "SUMMARY.md"  # per-file summaries, written next to the corpus file (NOT in the pkl)
+extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx, png, jpg, jpeg, webp, bmp, tiff"
+image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
+chunk_size = 3             # sentences per indexed passage
+top_k = 5                  # default number of results returned by query_corpus
 ```
 
-`model_path` and `corpus_path` end in `_path`, so `load_config` resolves them to
-absolute paths.
+**Important:** the key is `summary_name` (not `*_file`) so `load_config` does not
+resolve it against the config directory; it must be resolved **relative to the
+corpus pickle**, per §2.5 step 9.
 
-### 2.4 Corpus file format (single pickle)
+### 2.4 Corpus file format (version 2)
 
 ```python
 {
-    "version": 1,
-    "model_path": str,           # informational; used to warn on mismatch
-    "passages": list[str],       # indexed passages, in file order
-    "embeddings": np.ndarray,    # float32, L2-normalized, shape (N, dim)
+    "version": 2,
+    "mode": "multimodal" | "text",
+    "text_model_path": str,
+    "image_model_path": str,          # "" in text mode
+    "records": [
+        {"kind": "text",  "source": "docs/a.md",    "text": "passage ...", "page": None},
+        {"kind": "image", "source": "docs/img.png", "text": "img.png",     "image_path": "<abs>"},
+    ],
+    "embeddings": np.ndarray,          # float32, L2-normalized, shape (N, dim); row i -> records[i]
 }
 ```
 
-`save_corpus` creates parent directories and writes the pickle. `load_corpus`
-raises `ValueError` when a required key is missing.
+`load_corpus` must accept **both** v2 (`records`) and the Phase 1 v1
+(`passages` + `embeddings`) format, so existing corpora keep working.
 
-### 2.5 `EmbeddingCorpus.store` algorithm
+### 2.5 `EmbeddingCorpus.store` algorithm (amended)
 
 1. `output = Path(output_file).resolve()`. If it exists and `overwrite` is
-   `False` → return `"File already exists."` (do not modify it).
-2. `texts = collect_texts(directory, self.extensions)`. If empty → return
-   `f"No text files found in '{directory}'"`.
-3. `passages = build_passages(texts, self.chunk_size, self._tokenizer)`; drop
-   empty passages. If empty → return `"No passages extracted from the input files."`.
-4. `embeddings = normalize_rows(self._encode(passages))`.
-5. `save_corpus(output, {...})`.
-6. Return `f"Corpus with {len(passages)} passages saved to '{output}'"`.
+   `False` → return `"File already exists."`.
+2. `image_dir = output.parent / f"{output.stem}_images"`.
+3. `documents = iter_documents(directory, self.extensions, image_dir=image_dir)`.
+   If empty → return `f"No supported files found in '{directory}'"`.
+4. Build `records`:
+   - **text documents** (`doc.kind == "text"`): `build_passages([doc.text],
+     chunk_size, self._tokenizer)` → one `{"kind":"text","source":doc.source,
+     "text":passage,"page":doc.pages}` record per passage.
+   - **image documents / extracted PDF images**: one
+     `{"kind":"image","source":doc.source,"text":doc.source,"image_path":abs}`
+     record per image. In **text mode** image records are skipped.
+5. If no records → return `"No passages extracted from the input files."`.
+6. Embed:
+   - **multimodal**: build one embedding per record in order — text records via
+     the CLIP text encoder (`model.encode(list_of_texts)`), image records via the
+     CLIP image encoder (`model.encode([PIL.Image.open(p) ...])`) — then stack and
+     L2-normalize.
+   - **text mode**: embed text records with the text model.
+7. `save_corpus(output, {version: 2, mode, text_model_path, image_model_path,
+   records, embeddings})`.
+8. Build per-file summaries (not stored in the pickle):
+   - text: `self._summarizer().summarize(doc.text)` (truncate to a sane length).
+   - image-only: `f"Image file '{source}' indexed as an image record."` (plus
+     width×height when Pillow is available).
+   - extraction error: `f"ERROR: {doc.error}"`.
+9. Write `summary_path = output.parent / self.summary_name` in **append** mode:
+   append a build header (`## Corpus build <UTC timestamp> — <output.name>`),
+   record counts, then a `### <source>` section with the summary for each file.
+10. Return e.g.
+    `f"Corpus with {n_text} text / {n_image} image records saved to '{output}'; summaries appended to '{summary_path}'"`.
 
-### 2.6 `EmbeddingCorpus.query` algorithm
+### 2.6 `EmbeddingCorpus.query` algorithm (amended)
 
-1. `query = (query or "").strip()`. If empty → `"No query provided."`.
-2. `path = Path(corpus_file).resolve()`. If missing → return
-   `f"Corpus not found at '{path}'. Build it first with store_corpus."`.
-3. `payload = load_corpus(path)`; `passages = payload["passages"]`;
-   `embeddings = np.asarray(payload["embeddings"], dtype=float)`. If
-   `len(passages) == 0` → `"Corpus is empty."`.
-4. `query_vec = self._encode([query])[0]`. If its length differs from
-   `embeddings.shape[1]` → return a mismatch message mentioning the configured
-   model (`"Query embedding size does not match the corpus; rebuild the corpus."`).
-5. `index = (self._index_factory or _default_index_factory)(embeddings)`.
-6. `k = top_k or self.top_k`; clamp to `1..len(passages)`.
-7. `scores, ids = index.search(query_vec[None, :], k)`.
-8. Build lines from valid ids (`id >= 0`), format
-   `f"{rank}) [{score:.3f}] {passages[i]}"`, and return them joined by `"\n"`,
-   prefixed with `f"Top {k} matches for '{query}':"`.
-
-`_default_index_factory(embeddings)`:
-
-```python
-def _default_index_factory(embeddings):
-    import faiss
-    index = faiss.IndexFlatIP(int(embeddings.shape[1]))
-    index.add(np.ascontiguousarray(embeddings, dtype="float32"))
-    return index
-```
-
-`_encode(texts)` calls the lazily loaded embedder:
-`np.asarray(embedder.encode(list(texts), convert_to_numpy=True), dtype=float)`.
-`_embedder()` follows `TextSummarizer._embedder()`: use `model_factory` when
-provided, otherwise check `is_model_available` and raise `FileNotFoundError`
-mentioning `README.md`; import `SentenceTransformer` lazily. The model is cached
-on the instance so `store` + `query` load it once.
+1. Empty query → `"No query provided."`; missing corpus → friendly message.
+2. `load_corpus` (v2 **or** v1).
+3. **v2**: embed the query in the corpus `mode` (CLIP text encoder for
+   multimodal, text model otherwise); dimension check; FAISS search. Format each
+   hit as `f"{rank}) [{score:.3f}] ({source}) {text}"`, appending ` [image]` and
+   the image path for `image` records.
+4. **v1**: keep the Phase 1 behavior (`passages` + `embeddings`).
+5. Return a header line (`f"Top {k} matches for '{query}':"`) + ranked hits.
 
 ### 2.7 `Brain` tool behavior
 
-- Add `from src.embedding_search import EmbeddingCorpus` to `src/live_ai.py`.
-- Add a private `Brain._embedding_corpus()` helper that lazily creates and caches
-  `self._emb_corpus = EmbeddingCorpus(...)` from `self.config.embedding`, using
-  `getattr(cfg, "key", default)` for optional keys.
-- `store_corpus(directory, corpus_file="", overwrite=False)`:
-  - `output = corpus_file or str(self.config.embedding.corpus_path)`
-  - delegate to `self._embedding_corpus().store(directory, output, overwrite)`
-- `query_corpus(query, corpus_file="", top_k=0)`:
-  - `target = corpus_file or str(self.config.embedding.corpus_path)`
-  - delegate to `self._embedding_corpus().query(target, query, top_k or None)`
-- Both tools wrap the body in `try/except Exception` and return `f"Error: {e}"`.
-- Register both in `Agent._build_tools()` right after `self.summarize_text`.
+- `_embedding_corpus()` passes the new config keys with
+  `getattr(cfg, "key", default)` defaults:
+  `image_model_path`, `multimodal`, `image_extensions`, `summary_name`.
+- `store_corpus` / `query_corpus` bodies and signatures are unchanged; only the
+  richer behavior flows through `EmbeddingCorpus`.
 
 ### 2.8 Rules for the executing agent
 
 1. Do one task at a time, in order. A task is not done until its tests pass.
-2. Never download or load a real model, and never build a real FAISS index, in
-   tests. Inject `model_factory`, `index_factory` and `sentence_tokenizer` fakes.
-3. Never import `faiss`, `sentence_transformers` or `torch` at the top level of
-   `src/embedding_search.py`; import them lazily inside functions. `numpy` is fine.
+2. Never download or load a real model, never build a real FAISS index, and never
+   open a real PDF/DOCX/XLSX in tests. Inject `model_factory`,
+   `image_model_factory`, `index_factory`, `summarizer_factory`,
+   `sentence_tokenizer` and the `document_loader` extractor seams.
+3. Never import `faiss`, `sentence_transformers`, `torch`, `pymupdf`, `docx`,
+   `openpyxl`, `bs4`, `PIL` or `pandas` at module top level; import them lazily.
 4. Keep the signatures in §2.2 exactly.
-5. Run `python -m pytest tests/ -q` from the repo root before finishing a task.
+5. Summaries must **never** be written into the pickle (assert in a test).
+6. Run `python -m pytest tests/ -q` from the repo root before finishing a task.
 
 ---
 
-## 3. Tasks
+## 3. Phase 1 tasks (T0–T6) — already implemented
 
-### T0 — Add the `[embedding]` config section
+These are retained for reference. If re-running from scratch, implement them
+first; the current repository already satisfies them.
 
-**Goal:** Make the model folder, default corpus file and search knobs configurable.
+- **T0** `[embedding]` config block + config tests.
+- **T1** `src/embedding_search.py` (text-only build/query).
+- **T2** `tests/test_embedding_search.py`.
+- **T3** wire `Brain.store_corpus` / `query_corpus` + register in `_build_tools`.
+- **T4** `tests/test_live_ai.py` integration tests.
+- **T5** README `## Semantic search (corpus + FAISS)` section.
+- **T6** full-suite validation.
 
-**Current behavior:** `config.toml` has `[summarization]` but no embedding/search
-settings; the sample hardcodes the model and index parameters.
+Phase 2 amends T0/T1/T3/T5 and adds new tasks below.
 
-**Expected behavior:** `config.toml` contains the block from §2.3. Loading it with
-`src.common.load_config` returns `config.embedding.model_path` and
-`config.embedding.corpus_path` as absolute `Path`s, and
-`device`/`extensions`/`chunk_size`/`top_k` as plain values.
+---
+
+## 4. Phase 2 tasks (T7–T13)
+
+### T7 — Implement `src/document_loader.py`
+
+**Goal:** Extract text and images from the supported file types.
+
+**Current behavior:** Phase 1 reads only `.txt`/`.md` via `collect_texts` in
+`src/embedding_search.py`.
+
+**Expected behavior:** `src/document_loader.py` implements exactly the signatures
+and the `Document` dataclass from §2.2. Importing it must not import
+`pymupdf`/`docx`/`openpyxl`/`bs4`/`PIL`/`pandas`.
+
+Extraction rules:
+- `.txt`/`.md`/`.markdown`/`.rst`/`.log`/`.csv`: `read_text(encoding="utf-8",
+  errors="replace")`, `kind="text"`.
+- `.tex`: read text, then `strip_tex` removes `%` comments and simple
+  `\command{...}`/`\begin{...}`/`\end{...}`/`$...$` noise (regex; keep the
+  sentence text), `kind="text"`.
+- `.html`/`.htm`: `BeautifulSoup(text, "html.parser").get_text("\n")`,
+  `kind="text"`.
+- `.pdf`: `pymupdf.open(path)`; concatenate `page.get_text("text")`; set
+  `pages=doc.page_count`; extract embedded images with
+  `page.get_images(full=True)` + `doc.extract_image(xref)` and save them under
+  `image_dir` (created on demand) as `<safe-source>_p<page>_<xref>.<ext>`;
+  append their absolute paths to `doc.images`. `kind="text"` when text or images
+  exist (images become separate records in §2.5).
+- `.docx`: `docx.Document(path)`; join paragraphs and table cells; `kind="text"`.
+- `.xlsx`: `openpyxl.load_workbook(path, read_only=True, data_only=True)`; per
+  sheet, join non-empty cell values prefixed with the sheet name; `kind="text"`.
+- images (`.png`/`.jpg`/`.jpeg`/`.webp`/`.bmp`/`.tif`/`.tiff`):
+  `kind="image"`, `images=[str(path.resolve())]`, optional `(w, h)` in `text`.
+- Unsupported/corrupt files: return a `Document` with `error=str(exc)` instead of
+  raising, so one bad file never aborts a corpus build.
+- `iter_documents` walks `Path(directory).rglob("*")` sorted, filters by
+  normalized extensions, and calls `load_document` per file (relative `source`).
+
+**Test seams:** module-level indirection functions the tests monkeypatch, e.g.
+`_open_pdf`, `_open_docx`, `_open_xlsx`, `_open_image`. All imports stay lazy.
 
 **Files:**
-- Edit `config.toml` (append the `[embedding]` block after `[summarization]`).
+- Add `src/document_loader.py`.
+
+**Tests:** add `tests/test_document_loader.py` (see T8).
+
+**Verify:** `python -m pytest tests/test_document_loader.py -q`
+
+---
+
+### T8 — Unit tests for `src/document_loader.py`
+
+**Goal:** Prove multi-format extraction and image handling with no real
+documents and no heavy imports.
+
+**Current behavior:** No loader module or tests.
+
+**Expected behavior:** `tests/test_document_loader.py` passes with fakes.
+
+Recommended test list:
+- `test_import_is_lazy`: pop `pymupdf`, `docx`, `openpyxl`, `bs4`, `PIL`,
+  `pandas`; import `src.document_loader`; assert none are imported.
+- `test_extract_text_plain` and `test_extract_tex_strips_commands`
+  (`\section{X}` -> text, `% comment` removed).
+- `test_extract_html_uses_get_text`: write a small HTML file, assert tag text
+  present and tags stripped.
+- `test_extract_image_returns_image_record`: tiny file with an image extension,
+  assert `kind == "image"` and the absolute path is recorded.
+- `test_extract_pdf_monkeypatched`: monkeypatch `_open_pdf` to return a fake doc
+  with two pages and one embedded image; assert concatenated text, `pages == 2`,
+  and that the image was written under `image_dir` and recorded.
+- `test_extract_docx_monkeypatched` and `test_extract_xlsx_monkeypatched`.
+- `test_load_document_error_is_captured`: an unreadable file returns a `Document`
+  with a non-empty `error` and does not raise.
+- `test_iter_documents_filters_and_sorts`: directory with `.txt`, `.html`,
+  `.bin`, and a nested `.md`; assert sources are relative, sorted and `.bin` is
+  skipped.
+
+**Files:** Add `tests/test_document_loader.py`.
+
+**Verify:** `python -m pytest tests/test_document_loader.py -q`
+
+---
+
+### T9 — Extend `EmbeddingCorpus` (v2 records, multimodal, summaries)
+
+**Goal:** Build v2 corpora from all supported files, embed images with CLIP, and
+emit per-file summaries to `SUMMARY.md`.
+
+**Current behavior:** `store` handles only `.txt`/`.md`, writes v1 `passages` +
+`embeddings`, and produces no summaries.
+
+**Expected behavior:** Implement the amended signatures and the algorithms in
+§2.4–§2.6:
+- New `__init__` parameters (`image_model_path`, `multimodal`,
+  `image_extensions`, `summary_name`, `summarizer_factory`,
+  `image_model_factory`).
+- `store` uses `src.document_loader.iter_documents`, builds `text` and `image`
+  records, embeds them (one shared CLIP space when `multimodal`, else text model
+  only; images skipped in text mode), writes the v2 pickle, then **appends**
+  summaries to `SUMMARY.md` next to the pickle.
+- `query` supports v2 `records` (returning text sources and image paths) and
+  remains backward compatible with v1 `passages`.
+- `load_corpus` accepts both versions (or add a `corpus_version(payload)` helper).
+- `_default_index_factory` and `_encode`/`_encode_multimodal` stay lazy.
+- The `summarizer_factory` default builds `src.summarizer.TextSummarizer(
+  self.model_path, device=self.device)`; the `image_model_factory` default builds
+  a `SentenceTransformer(self.image_model_path, device=self.device)` after
+  `is_model_available`.
+
+**Files:**
+- Edit `src/embedding_search.py`.
+
+**Tests:** extend `tests/test_embedding_search.py` (see T10).
+
+**Verify:** `python -m pytest tests/test_embedding_search.py -q`
+
+---
+
+### T10 — Unit tests for the extended corpus
+
+**Goal:** Prove v2 records, image embedding, and the SUMMARY.md contract.
+
+**Current behavior:** `tests/test_embedding_search.py` only covers v1.
+
+**Expected behavior:** New tests (inject all seams; no real files unless easy
+text files are used):
+- `test_store_v2_writes_records_not_summaries`: build from a dir with one `.txt`
+  and one image; assert the pickle has `version == 2`, `records`, and
+  `embeddings`; assert **no** summary text is present anywhere in the pickle and
+  no `summary` key exists.
+- `test_store_appends_summary_md`: after two `store` calls (different corpus
+  files in the same dir or overwrite), `SUMMARY.md` exists next to the pickle and
+  contains a `###` section per input file, appended (two build headers).
+- `test_store_image_records_in_multimodal`: with a fake `image_model_factory`
+  that records whether images were encoded, assert image records exist and the
+  image encoder was used; assert the embeddings matrix has one row per record and
+  rows are unit norm.
+- `test_store_text_mode_skips_images`: `multimodal=False` → no image records.
+- `test_query_v2_formats_sources`: query a v2 corpus, assert each hit shows
+  `(<source>)` and image hits show ` [image]`.
+- `test_query_reads_v1_corpus`: a manually written v1 pickle still returns hits.
+- `test_store_summarizer_failure_is_isolated`: a `summarizer_factory` whose
+  `summarize` raises still produces a corpus and writes an `ERROR:`/fallback
+  line in `SUMMARY.md`.
+- `test_missing_image_model_raises_friendly_error`: multimodal with a bad
+  `image_model_path` and no factory raises `FileNotFoundError` mentioning the
+  path.
+
+**Files:** Edit `tests/test_embedding_search.py`.
+
+**Verify:** `python -m pytest tests/test_embedding_search.py -q`
+
+---
+
+### T11 — Wire the new config into `Brain` + tests
+
+**Goal:** `Brain` passes the Phase 2 config keys to `EmbeddingCorpus`.
+
+**Current behavior:** `_embedding_corpus()` passes only Phase 1 keys.
+
+**Expected behavior:** `_embedding_corpus()` also passes
+`image_model_path=getattr(cfg, "image_model_path", None)`,
+`multimodal=getattr(cfg, "multimodal", False)`,
+`image_extensions=getattr(cfg, "image_extensions", ...)`,
+`summary_name=getattr(cfg, "summary_name", "SUMMARY.md")`.
+
+**Files:**
+- Edit `src/live_ai.py`.
+
+**Tests:** extend `tests/test_live_ai.py`
+- `test_store_corpus_passes_multimodal_config`: the `Recorder.__init__` kwargs
+  include `image_model_path`, `multimodal is True`, `summary_name`.
+- Keep the existing Phase 1 tests green (they use partial configs; the defaults
+  must not break them).
+
+**Verify:** `python -m pytest tests/test_live_ai.py -q`
+
+---
+
+### T12 — Config, setup script, and README
+
+**Goal:** Expose the new keys, install the new packages into `.lms`, and document
+the behavior.
+
+**Current behavior:** `config.toml` has Phase 1 keys only;
+`setup-lms-cpu.ps1` lacks the document loaders; README documents text-only
+semantic search.
+
+**Expected behavior:**
+1. Update `config.toml` `[embedding]` to the block in §2.3 (`image_model_path`,
+   `multimodal`, `summary_name`, expanded `extensions`, `image_extensions`).
+2. Amend `setup-lms-cpu.ps1`:
+   - Activate `.lms` before installing, so packages land in the active venv:
+
+     ```powershell
+     Write-Host "=== Activating .lms virtual environment ==="
+     if (-not (Test-Path ".\.lms\Scripts\Activate.ps1")) {
+         Write-Host "ERROR: .lms virtual environment not found. Create it with: python -m venv .lms"
+         exit 1
+     }
+     & ".\.lms\Scripts\Activate.ps1"
+     ```
+   - Add under a new comment:
+
+     ```powershell
+     # DOCUMENT LOADERS (store_corpus: pdf/docx/xlsx + images)
+     pip install pymupdf
+     pip install python-docx
+     pip install openpyxl
+     ```
+3. Extend the README semantic-search section:
+   - List the supported formats (pdf incl. embedded images, txt, md, tex, rst,
+     csv, html/htm, docx, xlsx, and common images); note legacy `.doc`/`.xls`
+     are not supported.
+   - Explain multimodal mode: `image_model_path` = CLIP
+     (`.res/embedding/clip-ViT-B-32`) encodes text **and** images into one shared
+     space, so `query_corpus` can return images too.
+   - Document the CLIP model storage command
+     (`hf download sentence-transformers/clip-ViT-B-32 --local-dir
+     .res/embedding/clip-ViT-B-32`) and that `.res/` is git-ignored.
+   - Document `SUMMARY.md`: per-file summaries are written next to the corpus
+     pickle and are **not** part of the pickle; set `summary_name` to change the
+     filename.
+4. Install the new packages in the active `.lms` environment now:
+   `python -m pip install pymupdf python-docx openpyxl`
+   (already done during plan authoring; re-run if missing).
+
+**Files:**
+- Edit `config.toml`, `setup-lms-cpu.ps1`, `README.md`.
 
 **Tests:** extend `tests/test_common.py`
-- `test_load_config_resolves_embedding_paths`: a temp config with
-  `[embedding]\nmodel_path = ".res/models/st"\ncorpus_path = ".res/corpus/c.pkl"`
-  → both attributes equal the resolved `(tmp_path / ...)` paths.
-- `test_real_config_has_embedding_block`: load the repo `config.toml` and assert
-  `model_path`/`corpus_path` are absolute and `extensions`, `chunk_size`, `top_k`
-  are present.
+- `test_real_config_has_multimodal_embedding_keys`: assert `image_model_path`,
+  `multimodal`, `summary_name`, `image_extensions` exist; `image_model_path` is
+  absolute; `summary_name` is a plain string (not resolved to a path).
 
 **Verify:** `python -m pytest tests/test_common.py -q`
 
 ---
 
-### T1 — Implement `src/embedding_search.py`
+### T13 — Final validation (integration gate)
 
-**Goal:** Implement the offline-testable corpus build + query pipeline.
-
-**Current behavior:** No embedding-search module exists.
-
-**Expected behavior:** `src/embedding_search.py` implements exactly the signatures
-and algorithms in §2.2/§2.4–§2.6. Importing it must not import `faiss`,
-`sentence_transformers` or `torch`.
-
-Implementation notes:
-- `collect_texts` walks the directory recursively with `Path.rglob("*")`,
-  includes files whose lowercase suffix is in the normalized extensions, reads
-  UTF-8, skips unreadable/empty files, and returns texts sorted by path for
-  determinism. Raises `FileNotFoundError` when the directory is missing and
-  `NotADirectoryError` when the path is not a directory.
-- `normalize_rows` handles 1-D input and zero-norm rows (guard with `1.0`).
-- `build_passages` calls `split_sentences` (or the injected tokenizer) per text,
-  then groups `chunk_size` consecutive sentences into one space-joined passage.
-- Normalize `extensions`: accept a `"txt, md"` string or a tuple of suffixes.
-
-**Files:**
-- Add `src/embedding_search.py`.
-
-**Tests:** add `tests/test_embedding_search.py` (see T2 for the full list). At
-minimum implement the module so all T2 tests pass.
-
-**Verify:** `python -m pytest tests/test_embedding_search.py -q`
-
----
-
-### T2 — Unit tests for `src/embedding_search.py`
-
-**Goal:** Prove corpus building and querying work without a real model or FAISS.
-
-**Current behavior:** No tests for embedding search.
-
-**Expected behavior:** `tests/test_embedding_search.py` passes with injected fakes.
-Shared fakes (define in the test module):
-
-```python
-class FakeEmbedder:
-    """Deterministic text -> vector mapping; falls back to one-hot."""
-    def __init__(self, mapping=None, dim=4): ...
-    def encode(self, texts, convert_to_numpy=True): ...
-
-class FakeIndex:
-    """Exact inner-product search, mimicking faiss.IndexFlatIP.search()."""
-    def __init__(self, embeddings): self.embeddings = embeddings
-    def search(self, query_vec, k): ...   # -> (scores (1×k), ids (1×k))
-```
-
-Recommended test list:
-- `test_import_is_lazy`: pop `faiss`, `sentence_transformers`, `torch` from
-  `sys.modules`, import `src.embedding_search`, assert none are imported.
-- `test_normalize_rows_unit_norm_and_zero_safe`.
-- `test_collect_texts_reads_supported_files`: `a.txt`/`b.md` collected, `c.bin`
-  ignored, order deterministic.
-- `test_collect_texts_missing_dir_raises` / `test_collect_texts_not_a_dir_raises`.
-- `test_build_passages_chunks`: injected tokenizer + `chunk_size=2` groups
-  sentences correctly; `chunk_size=1` yields one passage per sentence.
-- `test_store_writes_pickle`: fake embedder; assert the output exists,
-  `load_corpus` returns the right passages and normalized embeddings, and the
-  status string contains the passage count.
-- `test_store_refuses_existing_by_default`: existing output + `overwrite=False`
-  → `"File already exists."` and file unchanged.
-- `test_store_overwrite_true`.
-- `test_store_no_text_files_returns_message`.
-- `test_store_missing_model_raises_friendly_error`: no `model_factory`,
-  non-existent `model_path`, valid input dir → `FileNotFoundError` mentioning the path.
-- `test_query_returns_ranked_hits`: build a corpus, then `query` with a fake index
-  → hits ordered by score and formatted (`"1) [0.9]"`-style).
-- `test_query_missing_corpus_returns_message`.
-- `test_query_empty_query_returns_message`.
-- `test_query_dimension_mismatch_returns_message`: stored dim ≠ query dim.
-- `test_model_loaded_once_across_store_and_query`: factory counter == 1.
-- `test_query_uses_instance_top_k_when_not_overridden`.
-
-**Files:**
-- Add `tests/test_embedding_search.py`.
-
-**Verify:** `python -m pytest tests/test_embedding_search.py -q`
-
----
-
-### T3 — Wire the tools into `src/live_ai.py`
-
-**Goal:** Expose `store_corpus` and `query_corpus` to the LLM.
-
-**Current behavior:** `Brain` has no corpus methods and `Agent._build_tools`
-does not register them.
-
-**Expected behavior:**
-1. Import `EmbeddingCorpus` at the top of `src/live_ai.py`.
-2. Add `Brain._embedding_corpus()`, `Brain.store_corpus` and `Brain.query_corpus`
-   exactly as specified in §2.7, both decorated with `@dump_func_call`.
-3. Add `self.store_corpus` and `self.query_corpus` to `Agent._build_tools()`
-   immediately after `self.summarize_text`.
-
-```python
-def _embedding_corpus(self):
-    if getattr(self, "_emb_corpus", None) is None:
-        cfg = self.config.embedding
-        self._emb_corpus = EmbeddingCorpus(
-            model_path=cfg.model_path,
-            device=getattr(cfg, "device", "cpu"),
-            extensions=getattr(cfg, "extensions", DEFAULT_EXTENSIONS),
-            chunk_size=getattr(cfg, "chunk_size", DEFAULT_CHUNK_SIZE),
-            top_k=getattr(cfg, "top_k", DEFAULT_TOP_K),
-        )
-    return self._emb_corpus
-```
-
-(`DEFAULT_EXTENSIONS`/`DEFAULT_CHUNK_SIZE`/`DEFAULT_TOP_K` should be imported
-from `src.embedding_search` or replaced with literal defaults.)
-
-**Files:**
-- Edit `src/live_ai.py`.
-
-**Tests:** extend `tests/test_live_ai.py` (see T4).
-
-**Verify:** `python -m pytest tests/test_live_ai.py -q`
-
----
-
-### T4 — Unit tests for the live_ai integration
-
-**Goal:** Prove both tools read config, cache the `EmbeddingCorpus`, forward
-arguments, and that `_build_tools` registers them.
-
-**Current behavior:** `tests/test_live_ai.py` covers `allow_speech` and
-`summarize_text` only.
-
-**Expected behavior:** New tests in `tests/test_live_ai.py`. Add a bare-brain
-helper:
-
-```python
-def _bare_embedding_brain(**overrides):
-    cfg = dict(model_path="m", device="cpu", extensions="txt, md",
-               chunk_size=3, top_k=5, corpus_path="corpus.pkl")
-    cfg.update(overrides)
-    brain = live_ai_mod.Brain.__new__(live_ai_mod.Brain)
-    brain.logger = getLogger("test")
-    brain.config = SimpleNamespace(embedding=SimpleNamespace(**cfg))
-    return brain
-```
-
-Recommended tests:
-- `test_store_corpus_uses_config_and_caches`: monkeypatch
-  `live_ai_mod.EmbeddingCorpus` with a `Recorder` that stores `__init__` kwargs
-  and implements `store`/`query`. Call `store_corpus(str(dir))` twice; assert the
-  corpus object is created once, kwargs match the config, and the configured
-  `corpus_path` is used as the output when `corpus_file=""`.
-- `test_store_corpus_forwards_explicit_file_and_overwrite`.
-- `test_query_corpus_forwards_query_and_top_k`: assert `query_corpus("hello", top_k=2)`
-  forwards `("corpus.pkl", "hello", 2)` (with the configured default file).
-- `test_query_corpus_uses_explicit_corpus_file`.
-- `test_store_corpus_reports_errors` / `test_query_corpus_reports_errors`: a
-  `Recorder` that raises `RuntimeError("boom")` → result starts with `"Error:"`
-  and contains `"boom"`.
-- `test_agent_build_tools_includes_embedding_tools`: `_build_tools()` callable
-  names include `"store_corpus"` and `"query_corpus"`.
-- `test_agent_build_tools_keeps_summarize_text`: `"summarize_text"` is still present.
-
-Because `src/live_ai.py` imports `lmstudio`, keep the existing
-`pytest.importorskip("lmstudio", ...)` at the top of the test module.
-
-**Files:**
-- Edit `tests/test_live_ai.py`.
-
-**Verify:** `python -m pytest tests/test_live_ai.py -q`
-
----
-
-### T5 — Document model storage and usage in `README.md`
-
-**Goal:** Tell the user how to store the embedding model and how to use the tools.
-
-**Current behavior:** `README.md` documents summarization but nothing about
-corpus/semantic search.
-
-**Expected behavior:** Add a `## Semantic search (corpus + FAISS)` section that:
-
-1. States that `store_corpus` indexes all `.txt`/`.md` files in a directory and
-   `query_corpus` returns the most relevant passages, using `all-MiniLM-L6-v2`
-   (sentence embeddings) + `faiss.IndexFlatIP` (cosine similarity). Note that the
-   multilingual sample model `sentence-transformers/quora-distilbert-multilingual`
-   can be used instead by changing `model_path`.
-2. Shows the `[embedding]` block from §2.3 and explains that `model_path` and
-   `corpus_path` are resolved relative to `config.toml`.
-3. Gives three ways to store the model in `.res/embedding/all-MiniLM-L6-v2`
-   (Hugging Face CLI `hf download`, `git lfs` clone, Python `.save()`), mirroring
-   the summarization section, plus the multilingual alternative.
-4. Notes the tool usage: `store_corpus(directory="docs")` writes the configured
-   corpus file, and `query_corpus(query="...")` searches it; tune `chunk_size`,
-   `top_k`, and pass `corpus_file` to use a different corpus.
-5. Notes that `faiss-cpu` must be installed (already in `setup-lms-cpu.ps1`) and
-   that `.res/` is git-ignored.
-
-**Files:**
-- Edit `README.md` (insert after the summarization section).
-
-**Tests:** documentation only; no unit test. Manual check:
-`grep -n "embedding\|Semantic search" README.md config.toml`.
-
-**Verify:** `grep -n "Semantic search\|\[embedding\]" README.md config.toml`
-
----
-
-### T6 — Final validation (integration gate)
-
-**Goal:** Confirm the whole feature is wired and nothing regressed.
-
-**Current behavior:** N/A.
-
-**Expected behavior:** The full suite passes and both tools are discoverable.
+**Goal:** Confirm the whole amended feature is wired and nothing regressed.
 
 **Steps:**
 1. Run the full suite: `python -m pytest tests/ -q` → all tests pass.
-2. Static check that the tools are registered:
+2. Static checks:
 
    ```bash
-   python -c "import src.live_ai as m; names=[f.__name__ for f in m.Agent._build_tools(m.Agent.__new__(m.Agent))]; print('store_corpus' in names and 'query_corpus' in names)"
+   python -c "import src.live_ai as m; n=[f.__name__ for f in m.Agent._build_tools(m.Agent.__new__(m.Agent))]; print('store_corpus' in n and 'query_corpus' in n)"
+   python -c "import src.document_loader, sys; print(all(x not in sys.modules for x in ('pymupdf','docx','openpyxl','bs4','PIL')))"
    ```
 
-   Must print `True`.
-3. Manual smoke test with real models (optional, not part of CI):
+   Both must print `True`.
+3. Manual smoke test with real models and documents (optional, not CI):
+   put a `.pdf`, a `.docx`, an `.xlsx`, a `.md` and a `.png` in a folder, then:
 
    ```bash
    python main.py --chat --prompt "Store a corpus from the directory docs"
    python main.py --chat --prompt "Query the corpus: what is quantum computing?"
    ```
 
-   If `.res/embedding/all-MiniLM-L6-v2` is absent, both tools must return a
-   friendly `Error:` string instead of crashing.
+   Expect a `SUMMARY.md` next to the corpus pickle and ranked text/image hits.
+   If a model is absent, the tools must return a friendly `Error:` string.
 
 **Files:** none (verification only).
 
@@ -504,22 +538,27 @@ corpus/semantic search.
 
 ---
 
-## 4. Acceptance checklist
+## 5. Acceptance checklist
 
-- [ ] `config.toml` has an `[embedding]` block with resolvable `model_path` and
-      `corpus_path`.
-- [ ] `src/embedding_search.py` imports no `faiss`/`sentence_transformers`/`torch`
-      at module load and follows the §2.2 signatures.
-- [ ] The corpus file is a single pickle containing `passages` + normalized
-      `embeddings`.
-- [ ] `Brain.store_corpus` builds a corpus from a directory and writes it to the
-      configured (or explicit) file; it refuses to overwrite unless asked.
-- [ ] `Brain.query_corpus` loads the corpus, embeds the query, searches with
-      FAISS (or the injected backend), and returns ranked passages.
-- [ ] Both tools cache the `EmbeddingCorpus` on the `Brain` and never raise to
-      the caller.
-- [ ] `Agent._build_tools()` includes `store_corpus` and `query_corpus`.
-- [ ] `tests/test_embedding_search.py` and the new `tests/test_live_ai.py` tests
-      pass with no model download, no network and no real FAISS index.
-- [ ] `README.md` documents how to store the embedding model and use the tools.
+- [ ] `src/document_loader.py` extracts text from txt/md/tex/rst/log/csv/html/
+      pdf/docx/xlsx and produces image paths from pdfs and image files, with lazy
+      imports and no heavy imports at module load.
+- [ ] `setup-lms-cpu.ps1` activates `.lms` and installs `pymupdf`,
+      `python-docx`, `openpyxl` into it; README documents this.
+- [ ] `[embedding]` has `image_model_path`, `multimodal`, `summary_name`,
+      `image_extensions`; `summary_name` is not path-resolved.
+- [ ] `EmbeddingCorpus.store` writes a **v2** pickle with `records` +
+      `embeddings`; text uses the text model (or CLIP in multimodal mode) and
+      images use the CLIP image encoder; images are skipped in text mode.
+- [ ] Per-file summaries are **appended** to `SUMMARY.md` next to the pickle and
+      are **never** written into the pickle (asserted by a test).
+- [ ] `EmbeddingCorpus.query` handles v2 records (text + image sources) and still
+      reads v1 corpora.
+- [ ] `Brain._embedding_corpus` forwards the new config keys; existing tools and
+      tests stay green.
+- [ ] `tests/test_document_loader.py` and the extended
+      `tests/test_embedding_search.py` / `test_live_ai.py` / `test_common.py`
+      tests pass with no network and no real model/document.
+- [ ] README documents supported formats, multimodal CLIP mode, `SUMMARY.md`,
+      and model storage for both `all-MiniLM-L6-v2` and `clip-ViT-B-32`.
 - [ ] `python -m pytest tests/ -q` is green.

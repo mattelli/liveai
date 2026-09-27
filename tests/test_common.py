@@ -178,3 +178,14 @@ def test_real_config_has_embedding_block():
     assert emb.corpus_path.is_absolute()
     for key in ("device", "extensions", "chunk_size", "top_k"):
         assert hasattr(emb, key)
+
+
+def test_real_config_has_multimodal_embedding_keys():
+    cfg_path = Path(__file__).parent.parent / "config.toml"
+    ns = load_config(cfg_path)
+    emb = ns.embedding
+    assert emb.image_model_path.is_absolute()
+    assert emb.multimodal is True
+    assert isinstance(emb.summary_name, str) and not Path(emb.summary_name).is_absolute()
+    assert emb.image_extensions
+    assert "pdf" in emb.extensions and "docx" in emb.extensions

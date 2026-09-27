@@ -13,6 +13,15 @@ if ($pyVersion -ne $target_py_version) {
 Write-Host "Python version OK: $pyVersion"
 
 Write-Host ""
+Write-Host "=== Activating .lms virtual environment ==="
+if (-not (Test-Path ".\.lms\Scripts\Activate.ps1")) {
+    Write-Host "ERROR: .lms virtual environment not found. Create it with: python -m venv .lms"
+    exit 1
+}
+& ".\.lms\Scripts\Activate.ps1"
+Write-Host "Active python: $(python -c 'import sys; print(sys.executable)')"
+
+Write-Host ""
 Write-Host "=== Upgrading pip ==="
 python -m pip install --upgrade pip
 
@@ -41,6 +50,11 @@ pip install webdriver-manager
 pip install -U "sentence-transformers[image]"
 pip install nltk
 pip install faiss-cpu
+
+# DOCUMENT LOADERS (store_corpus: pdf incl. images, word, excel, html)
+pip install pymupdf
+pip install python-docx
+pip install openpyxl
 
 # DEV
 pip install pytest

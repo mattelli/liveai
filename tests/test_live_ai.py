@@ -284,3 +284,44 @@ def test_agent_build_tools_keeps_summarize_text():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
     assert "summarize_text" in names
+
+
+def test_store_corpus_passes_multimodal_config(monkeypatch):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+
+        def store(self, directory, output, overwrite=False):
+            return "STORED"
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    brain = _bare_embedding_brain(
+        image_model_path="clip", multimodal=True, summary_name="SUM.md",
+        image_extensions="png, jpg",
+    )
+    assert brain.store_corpus("/docs") == "STORED"
+    assert seen["init"]["image_model_path"] == "clip"
+    assert seen["init"]["multimodal"] is True
+    assert seen["init"]["summary_name"] == "SUM.md"
+    assert seen["init"]["image_extensions"] == "png, jpg"
+
+
+def test_embedding_corpus_defaults_when_config_is_minimal(monkeypatch):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+
+        def query(self, corpus_file, query, top_k=None):
+            return "RESULTS"
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    # Phase 1 style config: no image_model_path/multimodal/summary_name keys.
+    brain = _bare_embedding_brain()
+    brain.query_corpus("hi")
+    assert seen["init"]["multimodal"] is False
+    assert seen["init"]["image_model_path"] is None
+    assert seen["init"]["summary_name"] == "SUMMARY.md"

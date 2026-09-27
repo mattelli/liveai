@@ -88,46 +88,84 @@ Notes:
 
 ## Semantic search (corpus + FAISS)
 
-The `store_corpus` tool indexes all `.txt`/`.md` files in a directory and saves
-the embedded passages to a single corpus file. The `query_corpus` tool then
-returns the passages most relevant to a query text. Both use sentence embeddings
-(`all-MiniLM-L6-v2` by default) plus a FAISS exact inner-product index
-(`IndexFlatIP`), which is cosine similarity on L2-normalized vectors.
+The `store_corpus` tool indexes the documents in a directory and saves the
+embedded passages and images to a single corpus file. The `query_corpus` tool
+then returns the most relevant passages (and images). Both use a FAISS exact
+inner-product index (`IndexFlatIP`), which is cosine similarity on L2-normalized
+vectors.
 
-The model and corpus file are configured in `config.toml` (paths are resolved
-relative to `config.toml`):
+**Supported formats**
+
+- Text-like: `.txt`, `.md`, `.markdown`, `.tex`, `.rst`, `.log`, `.csv`
+- Markup: `.html`, `.htm`
+- Office: `.pdf` (text plus embedded images), `.docx` (Word), `.xlsx` (Excel)
+- Images: `.png`, `.jpg`, `.jpeg`, `.webp`, `.bmp`, `.tif`, `.tiff`
+
+Legacy binary formats `.doc` and `.xls` are not supported (convert them to
+`.docx`/`.xlsx` first).
+
+**Embedding modes**
+
+- `multimodal = true` (default): text and images are embedded into one shared
+  space with the CLIP model at `image_model_path`
+  (`.res/embedding/clip-ViT-B-32`), so a text query can return images too.
+- `multimodal = false`: only text is embedded, with `model_path`
+  (`.res/embedding/all-MiniLM-L6-v2`); image files are skipped.
+
+**Per-file summaries**
+
+After a successful build, a markdown summary is appended to `SUMMARY.md` next to
+the corpus file, with one `###` section per input file. Summaries are **not**
+stored in the corpus pickle. Set `summary_name` to change the filename.
+
+The model, corpus file and knobs are configured in `config.toml` (paths are
+resolved relative to `config.toml`; `summary_name` is relative to the corpus
+file):
 
 ```toml
 [embedding]
-model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to config.toml
-device = "cpu"            # "cpu" or "cuda"
-corpus_path = ".res/corpus/corpus.pkl"  # default corpus file
-extensions = "txt, md"    # comma-separated extensions collected from a directory
+model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
+image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)
+multimodal = true          # true -> use image_model_path for BOTH text and images
+device = "cpu"             # "cpu" or "cuda"
+corpus_path = ".res/corpus/corpus.pkl"  # resolved relative to config.toml
+summary_name = "SUMMARY.md"  # per-file summaries, next to the corpus file (NOT in the pkl)
+extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx, png, jpg, jpeg, webp, bmp, tiff"
+image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
 chunk_size = 3            # sentences per indexed passage
 top_k = 5                 # default number of results returned by query_corpus
 ```
 
 The tools fail gracefully with a clear message until the model is stored in
-`model_path`. Pick one of the following ways to store it:
+`model_path` (text mode) / `image_model_path` (multimodal). Store a model with
+one of the following methods (shown for `all-MiniLM-L6-v2`; substitute
+`sentence-transformers/clip-ViT-B-32` and `.res/embedding/clip-ViT-B-32` for the
+multimodal model):
 
 ```bash
 # A) Hugging Face CLI (recommended)
 pip install -U huggingface_hub
 hf download sentence-transformers/all-MiniLM-L6-v2 \
     --local-dir .res/embedding/all-MiniLM-L6-v2
+hf download sentence-transformers/clip-ViT-B-32 \
+    --local-dir .res/embedding/clip-ViT-B-32
 
 # B) git + git-lfs
 git lfs install
 git clone https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 \
     .res/embedding/all-MiniLM-L6-v2
+git clone https://huggingface.co/sentence-transformers/clip-ViT-B-32 \
+    .res/embedding/clip-ViT-B-32
 
 # C) Python (downloads into the HF cache, then saves a local copy)
 python -c "from sentence_transformers import SentenceTransformer; \
 SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')"
+python -c "from sentence_transformers import SentenceTransformer; \
+SentenceTransformer('sentence-transformers/clip-ViT-B-32').save('.res/embedding/clip-ViT-B-32')"
 ```
 
-For multilingual corpora, use the sample's aligned model instead by changing
-`model_path` (and re-building the corpus):
+For multilingual text corpora, use the sample's aligned model instead by
+changing `model_path` (and re-building the corpus):
 
 ```bash
 hf download sentence-transformers/quora-distilbert-multilingual \
@@ -136,19 +174,22 @@ hf download sentence-transformers/quora-distilbert-multilingual \
 
 Usage:
 
-- `store_corpus(directory="docs")` writes the configured `corpus_path`;
-  pass `corpus_file=...` to write elsewhere and `overwrite=True` to replace an
-  existing file.
+- `store_corpus(directory="docs")` writes the configured `corpus_path` and its
+  `SUMMARY.md`; pass `corpus_file=...` to write elsewhere and `overwrite=True`
+  to replace an existing file.
 - `query_corpus(query="what is quantum computing?")` searches the configured
   corpus; pass `corpus_file=...` for a different corpus and `top_k=...` to change
   the number of results. Tune `chunk_size` to control passage length.
 
 Notes:
 
-- Requires `faiss-cpu` (already installed by `setup-lms-cpu.ps1`).
-- The corpus file is a pickle containing the passages and their normalized
-  embeddings; rebuild it whenever `model_path`, `extensions` or `chunk_size` change.
-- `.res/` is git-ignored, so downloaded weights and corpora are never committed.
+- Requires `faiss-cpu`, `pymupdf`, `python-docx` and `openpyxl` (installed into
+  `.lms` by `setup-lms-cpu.ps1`).
+- The corpus file is a pickle containing the records and their normalized
+  embeddings; rebuild it whenever a model path, `extensions`, `multimodal` or
+  `chunk_size` changes.
+- `.res/` is git-ignored, so downloaded weights, corpora and `SUMMARY.md` are
+  never committed.
 
 
 ## Setup (Python 3.12.10)

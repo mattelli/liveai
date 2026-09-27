@@ -15,8 +15,9 @@ from src.tools import (
 )
 from src.summarizer import TextSummarizer
 from src.embedding_search import (
-    DEFAULT_CHUNK_SIZE, DEFAULT_EXTENSIONS, DEFAULT_TOP_K, EmbeddingCorpus
+    DEFAULT_CHUNK_SIZE, DEFAULT_EXTENSIONS, DEFAULT_SUMMARY_NAME, DEFAULT_TOP_K, EmbeddingCorpus
 )
+from src.document_loader import IMAGE_EXTENSIONS
 
 Role = Literal['system', 'user', 'assistant']
 
@@ -175,6 +176,10 @@ class Brain:
                 extensions=getattr(cfg, "extensions", DEFAULT_EXTENSIONS),
                 chunk_size=getattr(cfg, "chunk_size", DEFAULT_CHUNK_SIZE),
                 top_k=getattr(cfg, "top_k", DEFAULT_TOP_K),
+                image_model_path=getattr(cfg, "image_model_path", None),
+                multimodal=getattr(cfg, "multimodal", False),
+                image_extensions=getattr(cfg, "image_extensions", IMAGE_EXTENSIONS),
+                summary_name=getattr(cfg, "summary_name", DEFAULT_SUMMARY_NAME),
             )
         return self._emb_corpus
 
