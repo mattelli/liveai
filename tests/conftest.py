@@ -1,5 +1,50 @@
 import pytest
 
+import numpy as np
+from types import SimpleNamespace
+
+
+class FakeDevice:
+    """Stand-in for InputAudioDevice; no hardware touched."""
+
+    name = "Fake Mic"
+    index = 0
+    default_samplerate = 16000
+    max_channel = 1
+
+
+class FakeStream:
+    """Context-managed InputStream double.
+
+    chunks: iterable of fixed-size numpy arrays returned by read().
+    Raises StopIteration when exhausted (the caller must bound the loop).
+    """
+
+    def __init__(self, chunks):
+        self._it = iter(chunks)
+        self.read_count = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self, chunk_size):
+        self.read_count += 1
+        return next(self._it), False
+
+
+class FakeWhisperModel:
+    """Returns one fixed segment so transcribe() can be tested without weights."""
+
+    def __init__(self, text="fake transcript"):
+        self.text = text
+        self.calls = 0
+
+    def transcribe(self, audio, language=None, beam_size=None):
+        self.calls += 1
+        return [SimpleNamespace(text=self.text)], None
 
 class Frag:
     def __init__(self, content):

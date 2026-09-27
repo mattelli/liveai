@@ -2,7 +2,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from src.common import load_config, prompt_input
+from src.common import cprint, load_config, prompt_input
 
 WORK_DIR = Path(__file__).parent.resolve()
 CONFIG_FILE = WORK_DIR / "config.toml"
@@ -39,12 +39,22 @@ def main(argv=None) -> int:
             reader = _build_chat_reader(config, ConversationSession)
             read_prompt = lambda: reader.read("[You] (type / for hints): ")  # noqa: E731
         else:
-            from src.audio_wrapper import SpeechDetector  # lazy import
-            detector = SpeechDetector(
-                model_path=config.speech_det.model_path,
-                language=config.speech_det.language,
-                show_levels=True,
-            )
+            from src.audio_wrapper import AudioDeviceError, SpeechDetector  # lazy import
+
+            try:
+                detector = SpeechDetector(
+                    model_path=config.speech_det.model_path,
+                    language=config.speech_det.language,
+                    beam_size=getattr(config.speech_det, "beam_size", 5),
+                    show_levels=getattr(config.speech_det, "show_levels", True),
+                    model_backend=getattr(config.speech_det, "device", "auto"),
+                    compute_type=getattr(config.speech_det, "compute_type", "int8"),
+                    calibration_chunks=getattr(config.speech_det, "calibration_chunks", 20),
+                    guard_factor=getattr(config.speech_det, "guard_factor", 1.0),
+                )
+            except AudioDeviceError as exc:
+                cprint(f"❌ {exc}", "red")
+                return 1
             read_prompt = lambda: detector.listen_and_transcribe(  # noqa: E731
                 silence_timeout_s=config.speech_det.silence_timeout_s
             )

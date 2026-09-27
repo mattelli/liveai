@@ -204,3 +204,80 @@ def test_main_closes_reader_on_exception(monkeypatch):
     with pytest.raises(RuntimeError):
         main_mod.main(["--chat"])
     assert created["closed"] is True
+
+
+# --------------------------------------------------- A8 speech_det wiring
+
+
+def test_voice_passes_speech_det_config(monkeypatch):
+    import src.audio_wrapper as aw
+
+    seen = {}
+
+    class RecorderDetector:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def listen_and_transcribe(self, silence_timeout_s):
+            return "/quit"
+
+    class StubSession:
+        COMMANDS = ()
+
+        def __init__(self, agent, read_prompt, use_tools=True):
+            pass
+
+        def run(self):
+            return 0
+
+    cfg = types.SimpleNamespace(
+        brain=types.SimpleNamespace(model="m"),
+        agent=types.SimpleNamespace(bootstrap_prompt=""),
+        speech_det=types.SimpleNamespace(
+            model_path="m", language="en", silence_timeout_s=2.0,
+            beam_size=7, show_levels=False, device="cpu",
+            compute_type="int8", calibration_chunks=3, guard_factor=2.0,
+        ),
+    )
+    monkeypatch.setattr(aw, "SpeechDetector", RecorderDetector)
+    monkeypatch.setattr(session_mod, "ConversationSession", StubSession)
+    monkeypatch.setattr(live_ai_mod, "Agent", lambda config: object())
+    monkeypatch.setattr(main_mod, "load_config", lambda p: cfg)
+
+    assert main_mod.main([]) == 0
+    assert seen["beam_size"] == 7 and seen["show_levels"] is False
+    assert seen["model_backend"] == "cpu" and seen["calibration_chunks"] == 3
+    assert seen["guard_factor"] == 2.0
+
+
+def test_voice_missing_device_returns_error(monkeypatch, capsys):
+    import src.audio_wrapper as aw
+
+    class NoDeviceDetector:
+        def __init__(self, **kw):
+            raise aw.AudioDeviceError("no mic")
+
+    class StubSession:
+        COMMANDS = ()
+
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self):
+            return 0
+
+    cfg = types.SimpleNamespace(
+        brain=types.SimpleNamespace(model="m"),
+        agent=types.SimpleNamespace(bootstrap_prompt=""),
+        speech_det=types.SimpleNamespace(
+            model_path="m", language="en", silence_timeout_s=2.0,
+        ),
+    )
+    monkeypatch.setattr(aw, "SpeechDetector", NoDeviceDetector)
+    monkeypatch.setattr(session_mod, "ConversationSession", StubSession)
+    monkeypatch.setattr(live_ai_mod, "Agent", lambda config: object())
+    monkeypatch.setattr(main_mod, "load_config", lambda p: cfg)
+
+    assert main_mod.main([]) == 1
+    out = capsys.readouterr().out.lower()
+    assert "no mic" in out or "microphone" in out

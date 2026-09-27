@@ -2,6 +2,12 @@
 model_path= ".res/faster-whisper-medium"
 silence_timeout_s = 2.0
 language = "en"
+beam_size = 5
+show_levels = true
+device = "auto"
+compute_type = "int8"
+calibration_chunks = 20
+guard_factor = 1.0
 
 [brain] # llm configuration
 # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)

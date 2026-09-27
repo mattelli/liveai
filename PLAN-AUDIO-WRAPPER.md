@@ -492,6 +492,7 @@ def capture_speech(
     silent_chunks = 0
     start_chunk = 0
     start_time = time_func()
+    read_count = 0
 
     with stream_factory(
         samplerate=samplerate, channels=channels, dtype=datatype,
@@ -499,6 +500,7 @@ def capture_speech(
     ) as stream:
         while True:
             chunk, _ = stream.read(chunk_size)
+            read_count += 1
             chunks.append(chunk)
             level = rms(chunk)
             if on_level is not None:
@@ -519,15 +521,15 @@ def capture_speech(
                 silent_chunks = 0
                 start_time = time_func()
 
-            if max_record_chunks is not None and len(chunks) >= max_record_chunks:
+            if max_record_chunks is not None and read_count >= max_record_chunks:
                 break
 
     empty = np.empty(0, dtype=datatype)
     if not speech_started or not chunks:
         return empty
     tolerance = timeout_chunks // 2
-    begin = max(0, start_chunk - tolerance)
-    end = max(begin, len(chunks) - tolerance)
+    begin = start_chunk - tolerance if start_chunk > tolerance else 0
+    end = len(chunks) - tolerance if len(chunks) > tolerance else len(chunks)
     audio = np.concatenate(chunks[begin:end], axis=0)
     if rms(audio) < threshold:
         return empty
@@ -706,13 +708,14 @@ def test_wav_buffer_rejects_empty():
 
 
 def test_transcribe_accepts_file_like_buffer():
+    model = FakeWhisperModel("hello")
     fake_self = SimpleNamespace(
-        model=FakeWhisperModel("hello"), language="en", beam_size=5,
-        _ensure_model=lambda: None, logger=getLogger("test"),
+        model=model, language="en", beam_size=5,
+        _ensure_model=lambda: model, logger=getLogger("test"),
     )
     buf = audio_to_wav_buffer(get_audio_tone(0.02, samplerate=8000), 8000)
     text = SpeechDetector.transcribe(fake_self, buf)
-    assert text == "hello" and fake_self.model.calls == 1
+    assert text == "hello" and model.calls == 1
 
 
 def test_listen_and_transcribe_empty_audio_skips_model():
@@ -1001,11 +1004,10 @@ functions; `audio_to_wav`'s default arg type was inconsistent with its annotatio
 def test_end_to_end_capture_then_transcribe(monkeypatch, tmp_path):
     model_dir = tmp_path / "m"; model_dir.mkdir()
 
-    stream = FakeStream([_loud(8), _silent(8), _silent(8)])
     detector = aw.SpeechDetector(
         model_path=model_dir,
         device=FakeDevice(),
-        stream_factory=lambda **kw: stream,
+        stream_factory=lambda **kw: FakeStream([_loud(8), _silent(8), _silent(8)]),
         time_func=_Clock(),
         model=FakeWhisperModel("end to end"),
         calibration_chunks=2,
