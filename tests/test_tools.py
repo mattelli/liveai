@@ -1,0 +1,359 @@
+import subprocess
+import sys
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+import src.tools as tools
+
+
+# ------------------------------------------------------------------ T0 lazy imports
+
+
+def test_import_tools_is_lazy():
+    import importlib
+
+    heavy = ("cv2", "selenium", "yfinance", "matplotlib", "bs4")
+    for name in heavy:
+        sys.modules.pop(name, None)
+    sys.modules.pop("src.tools", None)
+    importlib.import_module("src.tools")
+    for name in heavy:
+        assert name not in sys.modules, f"{name} imported at module load"
+
+
+def test_public_tools_are_callable():
+    for name in ("system_info", "read_text_file", "write_text_file", "run_command",
+                 "web_search", "capture_image", "fetch_financial_data",
+                 "save_financial_chart", "search_in_file", "search_pattern_in_files",
+                 "replace_string_in_file"):
+        assert callable(getattr(tools, name))
+
+
+# ------------------------------------------------------------------ T1 read-only
+
+
+def test_validyf_interval_has_no_leading_space():
+    assert " 5m" not in tools.ValidYF.interval.__args__
+    assert "5m" in tools.ValidYF.interval.__args__
+
+
+def test_system_info_mentions_platform():
+    assert isinstance(tools.system_info(), str) and tools.system_info()
+
+
+def test_current_date_time_is_a_string():
+    assert isinstance(tools.current_date_time(), str)
+
+
+def test_get_working_directory_is_absolute(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert Path(tools.get_working_directory()) == tmp_path.resolve()
+
+
+def test_read_text_file_roundtrip(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("hello", encoding="utf-8")
+    assert tools.read_text_file(str(target)) == "hello"
+
+
+def test_read_text_file_missing_returns_error(tmp_path):
+    assert "Unable to read" in tools.read_text_file(str(tmp_path / "nope.txt"))
+
+
+# ------------------------------------------------------------------ T2 write_text_file
+
+
+def test_write_text_file_creates_parent_dirs(tmp_path):
+    target = tmp_path / "nested" / "dir" / "a.txt"
+    out = tools.write_text_file(str(target), "body")
+    assert target.read_text(encoding="utf-8") == "body"
+    assert "File created" in out
+
+
+def test_write_text_file_refuses_existing_by_default(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old", encoding="utf-8")
+    assert tools.write_text_file(str(target), "new") == "File already exists."
+    assert target.read_text(encoding="utf-8") == "old"
+
+
+def test_write_text_file_overwrite_true(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old", encoding="utf-8")
+    tools.write_text_file(str(target), "new", overwrite=True)
+    assert target.read_text(encoding="utf-8") == "new"
+
+
+def test_write_text_file_rejects_directory(tmp_path):
+    assert "is a directory" in tools.write_text_file(str(tmp_path), "x")
+
+
+# ------------------------------------------------------------------ T3 search/replace
+
+
+def test_search_in_file_finds_lines(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("alpha\nneedle\nbeta needle\n", encoding="utf-8")
+    out = tools.search_in_file("needle", str(target))
+    assert "2" in out and "3" in out
+
+
+def test_search_in_file_missing(tmp_path):
+    assert "does not exist" in tools.search_in_file("x", str(tmp_path / "nope.txt"))
+
+
+def test_replace_string_counts_literally(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("a.b aXb", encoding="utf-8")
+    out = tools.replace_string_in_file(str(target), "a.b", "Z")
+    assert "1" in out
+    assert target.read_text(encoding="utf-8") == "Z aXb"
+
+
+def test_replace_string_missing_file(tmp_path):
+    assert "not found" in tools.replace_string_in_file(
+        str(tmp_path / "nope.txt"), "a", "b"
+    )
+
+
+# ------------------------------------------------------------------ T4 run_command
+
+
+def test_run_command_returns_output():
+    out = tools.run_command(f'"{sys.executable}" -c "print(42)"')
+    assert out.strip() == "42"
+
+
+def test_run_command_nonzero_returns_code():
+    out = tools.run_command(f'"{sys.executable}" -c "raise SystemExit(3)"')
+    assert "Return code [3]" in out
+
+
+def test_run_command_timeout(monkeypatch):
+    class FakeProcess:
+        returncode = None
+
+        def communicate(self, timeout=None):
+            if timeout is not None:
+                raise subprocess.TimeoutExpired("cmd", timeout)
+            return "", ""
+
+        def kill(self):
+            FakeProcess.killed = True
+
+    FakeProcess.killed = False
+    monkeypatch.setattr(tools.subprocess, "Popen", lambda *a, **k: FakeProcess())
+    out = tools.run_command("sleep 100", timeout_s=0.5)
+    assert "timed out" in out and FakeProcess.killed is True
+
+
+def test_run_command_honours_cwd(tmp_path):
+    out = tools.run_command(
+        f'"{sys.executable}" -c "import os;print(os.getcwd())"', cwd=str(tmp_path)
+    )
+    assert str(tmp_path) in out
+
+
+def test_exit_gracefully_raises_system_exit():
+    with pytest.raises(SystemExit) as exc:
+        tools.exit_gracefully()
+    assert exc.value.code == 0
+
+
+# ------------------------------------------------------------------ T5 webpages
+
+
+class FakeResponse:
+    def __init__(self, text, status=200):
+        self.text = text
+        self._status = status
+
+    def raise_for_status(self):
+        if self._status >= 400:
+            raise RuntimeError(f"HTTP {self._status}")
+
+
+def test_webpage_headlines(monkeypatch):
+    html = (
+        "<h1>Big headline number one</h1>"
+        "<h2>small</h2>"
+        "<h1>Another long headline here</h1>"
+    )
+    monkeypatch.setattr(tools.requests, "get", lambda url, timeout: FakeResponse(html))
+    out = tools.webpage_headlines("http://x", relevant_text_length=5)
+    assert "Big headline number one" in out and "Another long headline here" in out
+    assert "small" not in out
+
+
+def test_webpage_content(monkeypatch):
+    html = "<p>a paragraph long enough here</p><p>tiny</p>"
+    monkeypatch.setattr(tools.requests, "get", lambda url, timeout: FakeResponse(html))
+    out = tools.webpage_content("http://x", relevant_text_length=5)
+    assert "a paragraph long enough here" in out and "tiny" not in out
+
+
+def test_webpage_fetch_error(monkeypatch):
+    monkeypatch.setattr(
+        tools.requests, "get", lambda url, timeout: FakeResponse("", status=500)
+    )
+    assert "Error fetching URL" in tools.webpage_content("http://x")
+
+
+# ------------------------------------------------------------------ T6 web_search
+
+
+class FakeDriver:
+    def __init__(self):
+        self.quit_calls = 0
+
+    def quit(self):
+        self.quit_calls += 1
+
+
+def test_format_search_results_limits_and_formats():
+    out = tools.format_search_results(["a › b", "c", "d"], n_results=2)
+    assert "1) a/b" in out and "2) c" in out and "3)" not in out
+
+
+def test_web_search_formats_results(monkeypatch):
+    monkeypatch.setattr(tools, "_create_chrome_driver", lambda: FakeDriver())
+    monkeypatch.setattr(tools, "_collect_results", lambda driver, query, timeout: ["a › b"])
+    out = tools.web_search("q", n_results=1)
+    assert "a/b" in out
+
+
+def test_web_search_quits_owned_driver(monkeypatch):
+    fake = FakeDriver()
+    monkeypatch.setattr(tools, "_create_chrome_driver", lambda: fake)
+    monkeypatch.setattr(tools, "_collect_results", lambda driver, query, timeout: ["a"])
+    assert "1) a" in tools.web_search("q")
+    assert fake.quit_calls == 1
+
+
+def test_web_search_reports_errors(monkeypatch):
+    monkeypatch.setattr(tools, "_create_chrome_driver", lambda: FakeDriver())
+
+    def boom(driver, query, timeout):
+        raise RuntimeError("no chrome")
+
+    monkeypatch.setattr(tools, "_collect_results", boom)
+    assert "no chrome" in tools.web_search("q")
+
+
+# ------------------------------------------------------------------ T7 financial
+
+
+def test_select_flat_columns():
+    frame = pd.DataFrame({
+        "Date": ["2024-01-01", "2024-01-02"],
+        "Open": [1.0, 2.0],
+        "Close": [1.5, 2.5],
+        "High": [9, 9],
+    })
+    out = tools.select_financial_columns(frame, "AAPL")
+    assert list(out.columns) == ["Date", "Open", "Close"]
+    assert out["Date"].dt.tz is None
+
+
+def test_select_multiindex_columns():
+    cols = pd.MultiIndex.from_tuples(
+        [("Date", ""), ("Open", "AAPL"), ("Close", "AAPL"), ("High", "AAPL")]
+    )
+    frame = pd.DataFrame([["2024-01-01", 1.0, 1.5, 9]], columns=cols)
+    out = tools.select_financial_columns(frame, "AAPL")
+    assert list(out.columns) == ["Date", "Open", "Close"]
+
+
+def test_select_empty_returns_message():
+    assert "No data found" in tools.select_financial_columns(pd.DataFrame(), "AAPL")
+
+
+def test_select_missing_columns_returns_message():
+    frame = pd.DataFrame({"Date": ["2024-01-01"], "Open": [1.0]})
+    assert "required columns" in tools.select_financial_columns(frame, "AAPL")
+
+
+@pytest.mark.parametrize("symbol,expected", [
+    ("^GSPC", "GSPC"),
+    ("BRK/B", "BRK_B"),
+    ("AAPL", "AAPL"),
+])
+def test_safe_filename(symbol, expected):
+    assert tools.safe_filename(symbol) == expected
+
+
+# ------------------------------------------------------------------ T8 file search
+
+
+def test_normalize_extensions():
+    assert tools.normalize_extensions("py, .MD ,txt") == [".py", ".md", ".txt"]
+    assert tools.normalize_extensions("") == []
+
+
+def test_search_pattern_in_files_filters_extensions(tmp_path):
+    (tmp_path / "a.py").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("needle\n", encoding="utf-8")
+    out = tools.search_pattern_in_files("needle", str(tmp_path), include_extensions="py")
+    assert "a.py" in out and "b.txt" not in out
+
+
+def test_search_pattern_in_files_excludes_extension(tmp_path):
+    (tmp_path / "a.py").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("needle\n", encoding="utf-8")
+    out = tools.search_pattern_in_files("needle", str(tmp_path), exclude_extensions=".txt")
+    assert "a.py" in out and "b.txt" not in out
+
+
+def test_search_pattern_in_files_missing_dir(tmp_path):
+    assert "does not exist" in tools.search_pattern_in_files("x", str(tmp_path / "nope"))
+
+
+# ------------------------------------------------------------------ T9 capture/cleanup
+
+
+class FakeCamera:
+    def __init__(self, opened=True, ok=True):
+        self._opened, self._ok = opened, ok
+        self.released = 0
+
+    def isOpened(self):
+        return self._opened
+
+    def read(self):
+        return self._ok, object()
+
+    def release(self):
+        self.released += 1
+
+
+def test_capture_image_success(tmp_path, monkeypatch):
+    out = tmp_path / "shot.jpg"
+    camera = FakeCamera()
+    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: camera)
+    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda path, frame: True)
+    result = tools.capture_image(out_file=str(out))
+    assert result == str(out.resolve()) and camera.released == 1
+
+
+def test_capture_image_no_webcam(monkeypatch):
+    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera(opened=False))
+    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda p, f: True)
+    assert "not available" in tools.capture_image()
+
+
+def test_capture_image_save_failure(monkeypatch):
+    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera())
+    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda p, f: False)
+    assert "Unable to save" in tools.capture_image()
+
+
+def test_module_exports_public_tools():
+    for name in tools.__all__:
+        assert hasattr(tools, name)
+
+
+def test_source_has_no_bare_exit():
+    text = Path(tools.__file__).read_text(encoding="utf-8")
+    assert "exit(0)" not in text

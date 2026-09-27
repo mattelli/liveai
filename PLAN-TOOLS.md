@@ -46,9 +46,14 @@ may shift as tasks land.
    model.
 4. Never call `sys.exit`/`exit` inside `src/`; raise `SystemExit` where an exit is the
    intended effect.
-5. Tests must not import `selenium`, `cv2`, `yfinance`, or `matplotlib`; if a test needs a
+5. Every tool parameter that has a default **must** have a type annotation that LM Studio's
+   schema builder accepts. `get_type_hints` drops unannotated parameters and the LM Studio
+   SDK then raises `KeyError: '<param>'`; `str | Path | None` unions are rejected with a
+   `TypeError`. Use `str | None` / `Any`, or keep test-only seams out of the signature
+   entirely (module-level hooks such as `_VIDEO_CAPTURE_FACTORY`).
+6. Tests must not import `selenium`, `cv2`, `yfinance`, or `matplotlib`; if a test needs a
    behaviour behind one of them, use the injectable seam created in the task.
-6. `python -m pytest tests/ -q` must stay green at the end of every task.
+7. `python -m pytest tests/ -q` must stay green at the end of every task.
 
 ---
 
@@ -381,7 +386,7 @@ exit(0)                                                  # interactive helper
 **Expected behaviour.**
 
 ```python
-def run_command(cmd: str, timeout_s: float = 30.0, cwd: str | Path | None = None) -> str:
+def run_command(cmd: str, timeout_s: float = 30.0, cwd: str | None = None) -> str:
     """Run a shell command, returning stdout, stderr, or a timeout message."""
     try:
         process = subprocess.Popen(
@@ -604,19 +609,16 @@ def format_search_results(results: list[str], n_results: int = 5) -> str:
     return "\n".join(out) + "\n"
 
 
-def web_search(query: str, n_results: int = 5, timeout_s: float = 10.0, driver=None) -> str:
-    """Search the web. Pass `driver` to inject a fake in tests."""
-    owns_driver = driver is None
-    if owns_driver:
-        driver = _create_chrome_driver()
+def web_search(query: str, n_results: int = 5, timeout_s: float = 10.0) -> str:
+    """Search the web. `_create_chrome_driver`/`_collect_results` are the test seams."""
+    driver = _create_chrome_driver()
     try:
         results = _collect_results(driver, query, timeout_s)
         return format_search_results(results, n_results)
     except Exception as exc:
         return f"Error: {exc!r}"
     finally:
-        if owns_driver:
-            driver.quit()
+        driver.quit()
 ```
 
 **Files.** `src/tools.py`; `tests/test_tools.py`.
@@ -636,11 +638,11 @@ def test_format_search_results_limits_and_formats():
     assert "1) a/b" in out and "2) c" in out and "3)" not in out
 
 
-def test_web_search_uses_injected_driver_and_does_not_quit(monkeypatch):
+def test_web_search_formats_results(monkeypatch):
+    monkeypatch.setattr(tools, "_create_chrome_driver", lambda: FakeDriver())
     monkeypatch.setattr(tools, "_collect_results", lambda driver, query, timeout: ["a › b"])
-    fake = FakeDriver()
-    out = tools.web_search("q", n_results=1, driver=fake)
-    assert "a/b" in out and fake.quit_calls == 0
+    out = tools.web_search("q", n_results=1)
+    assert "a/b" in out
 
 
 def test_web_search_quits_owned_driver(monkeypatch):
@@ -652,10 +654,11 @@ def test_web_search_quits_owned_driver(monkeypatch):
 
 
 def test_web_search_reports_errors(monkeypatch):
+    monkeypatch.setattr(tools, "_create_chrome_driver", lambda: FakeDriver())
     def boom(driver, query, timeout):
         raise RuntimeError("no chrome")
     monkeypatch.setattr(tools, "_collect_results", boom)
-    assert "no chrome" in tools.web_search("q", driver=FakeDriver())
+    assert "no chrome" in tools.web_search("q")
 ```
 
 **Validation.** `python -m pytest tests/test_tools.py -q`
@@ -837,9 +840,10 @@ are hard-wired, so no branch can be tested without hardware.
 **Expected behaviour.**
 
 ```python
-def capture_image(out_file: str = CAPTURED_IMAGE, camera_index: int = 0,
-                  capture_factory=None, imwrite=None) -> str:
-    """Capture one frame and save it. Pass factories to inject fakes in tests."""
+def capture_image(out_file: str = CAPTURED_IMAGE, camera_index: int = 0) -> str:
+    """Capture one frame and save it. `_VIDEO_CAPTURE_FACTORY`/`_IMAGE_WRITER` are the test seams."""
+    capture_factory = _VIDEO_CAPTURE_FACTORY
+    imwrite = _IMAGE_WRITER
     if capture_factory is None or imwrite is None:
         import cv2
         capture_factory = capture_factory or cv2.VideoCapture
@@ -889,26 +893,25 @@ class FakeCamera:
         self.released += 1
 
 
-def test_capture_image_success(tmp_path):
+def test_capture_image_success(tmp_path, monkeypatch):
     out = tmp_path / "shot.jpg"
     camera = FakeCamera()
-    result = tools.capture_image(
-        out_file=str(out), capture_factory=lambda i: camera,
-        imwrite=lambda path, frame: True,
-    )
+    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: camera)
+    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda path, frame: True)
+    result = tools.capture_image(out_file=str(out))
     assert result == str(out.resolve()) and camera.released == 1
 
 
-def test_capture_image_no_webcam():
-    result = tools.capture_image(capture_factory=lambda i: FakeCamera(opened=False),
-                                 imwrite=lambda p, f: True)
-    assert "not available" in result
+def test_capture_image_no_webcam(monkeypatch):
+    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera(opened=False))
+    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda p, f: True)
+    assert "not available" in tools.capture_image()
 
 
-def test_capture_image_save_failure():
-    result = tools.capture_image(capture_factory=lambda i: FakeCamera(),
-                                 imwrite=lambda p, f: False)
-    assert "Unable to save" in result
+def test_capture_image_save_failure(monkeypatch):
+    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera())
+    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda p, f: False)
+    assert "Unable to save" in tools.capture_image()
 
 
 def test_module_exports_public_tools():
