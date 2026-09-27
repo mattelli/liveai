@@ -63,16 +63,16 @@ stored in `model_path`. Pick one of the following ways to store it:
 # A) Hugging Face CLI (recommended)
 pip install -U huggingface_hub
 hf download sentence-transformers/all-MiniLM-L6-v2 \
-    --local-dir .res/sentence-transformers/all-MiniLM-L6-v2
+    --local-dir .res/embedding/all-MiniLM-L6-v2
 
 # B) git + git-lfs
 git lfs install
 git clone https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 \
-    .res/sentence-transformers/all-MiniLM-L6-v2
+    .res/embedding/all-MiniLM-L6-v2
 
 # C) Python (downloads into the HF cache, then saves a local copy)
 python -c "from sentence_transformers import SentenceTransformer; \
-SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/sentence-transformers/all-MiniLM-L6-v2')"
+SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')"
 ```
 
 Notes:

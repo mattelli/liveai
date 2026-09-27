@@ -47,7 +47,7 @@ explicit_paste = true            # /paste ... . fallback for terminals without b
 multiline = false                # true -> Esc+Enter to accept (advanced)
 
 [summarization] # extractive text summarization (LexRank + sentence embeddings)
-model_path = ".res/sentence-transformers/all-MiniLM-L6-v2"  # resolved relative to this config file
+model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to this config file
 device = "cpu"            # "cpu" or "cuda"
 ratio = 0.1               # fraction of sentences to keep (0 < ratio <= 1)
 threshold = 0.5           # LexRank similarity threshold in [0, 1)
