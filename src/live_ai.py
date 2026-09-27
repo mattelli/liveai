@@ -145,15 +145,21 @@ class Brain:
         """
         if enable and not hasattr(self, "speech"):
             self.logger.info("Initializing Speech Generator ...")
+            gen_cfg = self.config.speech_gen
             self.speech = SpeechGenerator(
-                model_path=self.config.speech_gen.model_path,
-                samplerate=self.config.speech_gen.samplerate,
-                volume=self.config.speech_gen.volume,
-                speech_speed=self.config.speech_gen.speech_speed
+                model_path=gen_cfg.model_path,
+                samplerate=gen_cfg.samplerate,
+                volume=gen_cfg.volume,
+                speech_speed=gen_cfg.speech_speed,
+                speaker_id=getattr(gen_cfg, "speaker_id", None),
+                noise_scale=getattr(gen_cfg, "noise_scale", 1.0),
+                noise_w_scale=getattr(gen_cfg, "noise_w_scale", 1.0),
+                normalize_audio=getattr(gen_cfg, "normalize_audio", False),
             )
             return "Speech Generator initialized"
         elif not enable and hasattr(self, "speech"):
             self.logger.info("Releasing Speech Generator ...")
+            self.speech.close()
             del self.speech
             return "Speech Generator released"
 
