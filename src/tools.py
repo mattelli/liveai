@@ -1,8 +1,6 @@
 import re
 import platform
-import requests
 import subprocess
-import pandas as pd
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Literal
@@ -77,6 +75,8 @@ def select_financial_columns(data, symbol: str):
     Accepts both flat and MultiIndex column layouts. Returns a DataFrame, or an
     error string when the data is empty or a required column is missing.
     """
+    import pandas as pd
+
     if data is None or data.empty:
         return f"No data found for {symbol}."
     frame = data.copy()
@@ -106,6 +106,7 @@ def safe_filename(symbol: str) -> str:
 
 def _fetch_soup(url: str, timeout_s: int = 10):
     """Fetch a URL and return a BeautifulSoup document, or an error string."""
+    import requests
     from bs4 import BeautifulSoup
 
     try:
@@ -337,7 +338,7 @@ def fetch_financial_data(
         start_date: str = None,  # YYYY-MM-DD
         end_date: str = None,  # YYYY-MM-DD
         to_string: bool = True
-    ) -> pd.DataFrame | str:
+    ) -> "pd.DataFrame | str":
     """
     Fetch closing price of a stock symbol within a time period with a time interval.
     Useful when user asks for getting financial info of a financial product given its symbol. 
@@ -508,6 +509,19 @@ def replace_string_in_file(path: str, old_string: str, new_string: str) -> str:
         return f"Error: File '{_file_path}' not found."
     except Exception as e:
         return f"Error: {e}"
+
+
+def __getattr__(name: str):
+    """Lazily resolve optional heavy dependencies kept for API compatibility.
+
+    ``requests`` is imported on first access (instead of at module import) so
+    that importing ``src.tools`` stays cheap for callers that never fetch the
+    web. Test seams such as ``tools.requests`` continue to work.
+    """
+    if name == "requests":
+        import requests
+        return requests
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 if __name__ == "__main__":

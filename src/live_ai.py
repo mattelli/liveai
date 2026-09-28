@@ -1,11 +1,11 @@
 import inspect
 import pathlib
+import sys
 import lmstudio as lms
 from lmstudio.sync_api import PredictionStream
 from typing import Callable, Literal, get_type_hints
 from logging import getLogger
 from datetime import datetime, timezone
-from src.audio_generator import SpeechGenerator
 from src.common import SimpleNamespace, dump_func_call, cprint, StreamPrinter
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
@@ -22,6 +22,17 @@ from src.embedding_search import (
 from src.document_loader import IMAGE_EXTENSIONS
 
 Role = Literal['system', 'user', 'assistant']
+
+
+def __getattr__(name: str):
+    """Lazily expose ``SpeechGenerator`` so importing this module does not pull
+    in the heavy ``piper``/``sounddevice`` stack. The name stays patchable on
+    the module for callers (and tests) that override it.
+    """
+    if name == "SpeechGenerator":
+        from src.audio_generator import SpeechGenerator
+        return SpeechGenerator
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _camelize(name: str) -> str:
@@ -293,6 +304,7 @@ class Brain:
         if enable and not hasattr(self, "speech"):
             self.logger.info("Initializing Speech Generator ...")
             gen_cfg = self.config.speech_gen
+            SpeechGenerator = getattr(sys.modules[__name__], "SpeechGenerator")
             self.speech = SpeechGenerator(
                 model_path=gen_cfg.model_path,
                 samplerate=gen_cfg.samplerate,
