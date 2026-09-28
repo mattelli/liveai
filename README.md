@@ -256,9 +256,21 @@ explicit_paste = true
 multiline = false                # true -> Enter inserts newline, Esc+Enter accepts
 ```
 
-`Ctrl-C` exits the loop cleanly (exit code 0); `Ctrl-D` (EOF) exits via the EOF
-path. If prompt_toolkit is missing or disabled, input falls back to the builtin
-`input()` with no line editing or history.
+`Ctrl-C` stops the response being generated (the chat session keeps running);
+at the input prompt it clears the line (re-prompt). `Ctrl-D` (EOF) exits via
+the EOF path. If prompt_toolkit is missing or disabled, input falls back to the
+builtin `input()` with no line editing or history.
+
+Stopping a response uses the LM Studio SDK with a local patch (see
+`patches/lmstudio-1.5.0-act-on_prediction_stream.patch`, re-applied by
+`setup-lms-cpu.ps1`): `act()` hands each prediction round's stream to the new
+`on_prediction_stream` callback, so Ctrl+C cancels generation server-side
+(`stop_reason = userStopped`), the partial answer stays in the chat history
+(a minimal placeholder is recorded if the model was stopped before generating
+anything, keeping user/assistant role alternation intact for the next
+request), and any further tool-call rounds are skipped. Before each new
+prompt, the agent also repairs the history from older cancelled/failed turns
+(drops unanswered prompts, pads empty assistant turns).
 
 
 ## System Notes

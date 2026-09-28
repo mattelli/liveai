@@ -1,9 +1,45 @@
 from __future__ import annotations
 
+import contextlib
 import inspect
+import signal
 from typing import Callable
 
 from src.common import cprint
+
+
+@contextlib.contextmanager
+def _generation_sigint_guard(agent):
+    """Route SIGINT to ``agent.cancel_generation`` while a generation runs.
+
+    A plain KeyboardInterrupt unwinds the streaming loop before the prediction
+    stream can be cancelled, leaving LM Studio generating an abandoned
+    response. The temporary handler instead asks the agent to cancel first
+    (server-side stop); the agent's own callbacks then raise to unwind the
+    generation promptly. Agents without ``cancel_generation`` keep the default
+    Ctrl+C behaviour.
+    """
+    cancel = getattr(agent, "cancel_generation", None)
+    if not callable(cancel):
+        yield
+        return
+    previous = signal.getsignal(signal.SIGINT)
+
+    def _on_sigint(signum, frame):
+        try:
+            cancel()
+        except Exception:  # never let the handler explode
+            pass
+
+    try:
+        signal.signal(signal.SIGINT, _on_sigint)
+    except (ValueError, OSError):  # e.g. not the main thread
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 class ConversationSession:
@@ -15,16 +51,21 @@ class ConversationSession:
 
     COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info")
 
-    def __init__(self, agent, read_prompt: Callable[[], str | None], use_tools: bool = True):
+    def __init__(self, agent, read_prompt: Callable[[], str | None], use_tools: bool = True,
+                 quit_on_prompt_interrupt: bool = False):
         """
         agent: object exposing act/model_fragments/print_fragment/flush_stream/
                clear_chat/allow_speech/model_info (FakeAgent in tests)
         read_prompt: Callable[[], str | None]; None means EOF
         use_tools: bool
+        quit_on_prompt_interrupt: Ctrl+C while waiting for input exits instead of
+              re-prompting (voice / non-interactive prompt sources; in chat mode
+              Ctrl+C clears the line and Ctrl+D exits)
         """
         self.agent = agent
         self.read_prompt = read_prompt
         self.use_tools = use_tools
+        self._quit_on_prompt_interrupt = quit_on_prompt_interrupt
         self.should_quit = False
         self._iteration = 0
         self._speech_enabled = False
@@ -36,20 +77,17 @@ class ConversationSession:
         self.banner()
         bootstrap = getattr(self.agent, "bootstrap", None)
         if callable(bootstrap):
-            try:
-                bootstrap()
-            except KeyboardInterrupt:
-                return self.shutdown()
-            except Exception as exc:
-                cprint(f"❌ {exc}", "red")
-            finally:
-                self._flush()
+            self._run_generation_step(bootstrap)
 
         while not self.should_quit:
             try:
                 prompt = self.read_prompt()
             except KeyboardInterrupt:
-                break
+                # Ctrl+C while waiting for input: quit for voice / non-interactive
+                # prompt sources, otherwise clear the line and prompt again.
+                if self._quit_on_prompt_interrupt:
+                    break
+                continue
             if prompt is None:  # EOF
                 break
             text = prompt.strip()
@@ -59,16 +97,29 @@ class ConversationSession:
             # like a command; only a single-line string may be a command.
             if "\n" not in text and self.handle_command(text):
                 continue
-            try:
-                self._run_turn(text)
-            except KeyboardInterrupt:
-                self.should_quit = True
-            except Exception as exc:
-                cprint(f"❌ {exc}", "red")
-            finally:
-                self._flush()
+            self._run_generation_step(lambda: self._run_turn(text))
             cprint("")  # blank separator line after each turn
         return self.shutdown()
+
+    def _run_generation_step(self, step: Callable[[], None]) -> None:
+        """Run one agent generation (bootstrap or user turn) with Ctrl+C support.
+
+        Ctrl+C cancels the current generation; the session keeps running. The
+        ``SIGINT`` swap gives agents with ``cancel_generation`` a best-effort
+        server-side stop before the streaming loop unwinds.
+        """
+        interrupted = False
+        try:
+            with _generation_sigint_guard(self.agent):
+                step()
+        except KeyboardInterrupt:
+            interrupted = True
+        except Exception as exc:
+            cprint(f"❌ {exc}", "red")
+        finally:
+            self._flush()
+            if interrupted or getattr(self.agent, "cancel_requested", False):
+                cprint(" ⏹  generation cancelled", "yellow")
 
     def _run_turn(self, text: str) -> None:
         if self.use_tools:
@@ -126,6 +177,8 @@ class ConversationSession:
         cprint("  /voice on|off      - toggle speech output", "cyan")
         cprint("  /tools             - list and run an available tool", "cyan")
         cprint("  /info              - show model/context info", "cyan")
+        cprint("  Ctrl+C             - stop the response being generated", "cyan")
+        cprint("  Ctrl+D             - exit the session", "cyan")
 
     def _cmd_clear(self) -> None:
         if hasattr(self.agent, "clear_chat"):
@@ -279,7 +332,13 @@ class ConversationSession:
     # ---------------------------------------------------------------- banner
 
     def banner(self) -> None:
+        hint = (
+            ""
+            if self._quit_on_prompt_interrupt
+            else " Ctrl+C stops a response; Ctrl+D quits."
+        )
         cprint(
-            f"Agent ready. Tools are {'enabled' if self.use_tools else 'disabled'}.",
+            f"Agent ready. Tools are {'enabled' if self.use_tools else 'disabled'}."
+            f"{hint}",
             "green",
         )

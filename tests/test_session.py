@@ -222,15 +222,33 @@ def test_turn_error_is_recovered(capsys):
 # ------------------------------------------------------ T11 KeyboardInterrupt
 
 
-def test_ctrl_c_on_prompt_exits():
+def test_ctrl_c_on_prompt_prompts_again(capsys):
+    """Ctrl+C while waiting for input clears the line; EOF quits."""
+    state = {"n": 0}
+
+    def reader():
+        state["n"] += 1
+        if state["n"] == 1:
+            raise KeyboardInterrupt
+        return "/quit"
+
+    agent = FakeAgent()
+    assert ConversationSession(agent, reader).run() == 0
+    assert agent.acted == []
+
+
+def test_ctrl_c_on_prompt_exits_in_non_interactive_mode():
+    """Voice / non-interactive prompt sources keep the old semantics."""
     def reader():
         raise KeyboardInterrupt
 
     agent = FakeAgent()
-    assert ConversationSession(agent, reader).run() == 0
+    session = ConversationSession(agent, reader, quit_on_prompt_interrupt=True)
+    assert session.run() == 0
 
 
-def test_ctrl_c_during_turn_exits(capsys):
+def test_ctrl_c_during_turn_cancels_but_keeps_session(capsys):
+    """Ctrl+C during a response stops the turn, not the session."""
     class Interrupting(FakeAgent):
         def act(self, prompt):
             raise KeyboardInterrupt
@@ -243,7 +261,87 @@ def test_ctrl_c_during_turn_exits(capsys):
 
     agent = Interrupting()
     assert ConversationSession(agent, reader).run() == 0
-    assert "Bye" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "cancelled" in out.lower()
+    assert "Bye" in out  # session survived and exited via /quit
+
+
+# ------------------------------------------------- T11b cancel_generation flow
+
+
+def test_graceful_cancel_after_sigint_reports_and_continues(capsys):
+    """SIGINT-driven cancel that ends the stream gracefully is reported."""
+    from tests.conftest import Frag
+
+    class CancelStreamAgent(FakeAgent):
+        def __init__(self):
+            super().__init__()
+            self._cancel_requested = False
+
+        @property
+        def cancel_requested(self):
+            return self._cancel_requested
+
+        def cancel_generation(self):
+            self._cancel_requested = True
+
+        def model_fragments(self, prompt):
+            # Simulate: SIGINT handler fired mid-stream and the prediction
+            # stream ended gracefully after the server-side cancel.
+            self.cancel_generation()
+            return [Frag("partial")]
+
+    counter = {"n": 0}
+
+    def reader():
+        counter["n"] += 1
+        return "hi" if counter["n"] == 1 else "/quit"
+
+    agent = CancelStreamAgent()
+    assert ConversationSession(agent, reader, use_tools=False).run() == 0
+    out = capsys.readouterr().out
+    assert agent.printed == ["partial"]
+    assert "cancelled" in out.lower()
+    assert "Bye" in out
+
+
+def test_sigint_during_generation_hits_cancel_handler():
+    """The temporary SIGINT handler routes Ctrl+C to agent.cancel_generation()."""
+    import signal
+
+    class SigintAgent(FakeAgent):
+        def __init__(self):
+            super().__init__()
+            self.cancel_calls = 0
+            self._cancel_requested = False
+
+        @property
+        def cancel_requested(self):
+            return self._cancel_requested
+
+        def cancel_generation(self):
+            self.cancel_calls += 1
+            self._cancel_requested = True
+
+        def act(self, prompt):
+            handler = signal.getsignal(signal.SIGINT)
+            assert handler is not signal.default_int_handler  # guard installed
+            handler(signal.SIGINT, None)  # simulate Ctrl+C reaching the handler
+            raise KeyboardInterrupt  # simulated abort from the stream callbacks
+
+    counter = {"n": 0}
+
+    def reader():
+        counter["n"] += 1
+        return "hi" if counter["n"] == 1 else "/quit"
+
+    agent = SigintAgent()
+    previous = signal.getsignal(signal.SIGINT)
+    try:
+        assert ConversationSession(agent, reader).run() == 0
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    assert agent.cancel_calls == 1
 
 
 # ------------------------------------------------------------- T12 quit aliases

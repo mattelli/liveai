@@ -14,14 +14,16 @@ guard_factor = 1.0
 
 [brain] # llm configuration
 # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
-# model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
+model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
 # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
-model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
+# model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
 # model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
 # model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 history_path = "chat_history.log"
 temperature = 0.6
+max_response_tokens = 0.2                   # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
+
 
 [agent]
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."

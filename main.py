@@ -59,7 +59,12 @@ def main(argv=None) -> int:
                 silence_timeout_s=config.speech_det.silence_timeout_s
             )
 
-        return ConversationSession(agent, read_prompt, use_tools=not args.no_tools).run()
+        return ConversationSession(
+            agent,
+            read_prompt,
+            use_tools=not args.no_tools,
+            quit_on_prompt_interrupt=not args.chat,  # voice: Ctrl+C quits
+        ).run()
     finally:
         if reader is not None:
             reader.close()

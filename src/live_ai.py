@@ -23,6 +23,11 @@ from src.document_loader import IMAGE_EXTENSIONS
 
 Role = Literal['system', 'user', 'assistant']
 
+# Padded into the history when a generation is cancelled before any text was
+# produced: an empty assistant turn would be dropped by the model's prompt
+# template and break user/assistant role alternation on the next request.
+CANCELLED_PLACEHOLDER = "(generation cancelled by user)"
+
 
 def __getattr__(name: str):
     """Lazily expose ``SpeechGenerator`` so importing this module does not pull
@@ -85,6 +90,33 @@ def _camel_tool_definition(tool: Callable) -> dict:
     }
 
 
+def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
+    """Resolve ``[brain] max_response_tokens`` into a per-generation cap.
+
+    The config value is a ratio of the model's context window, so the cap
+    self-adapts to whichever model is loaded: ``0.1`` on a 4k-window model
+    caps a response at ~409 tokens. Valid range is 0 < ratio < 1; unset/0
+    keeps the historical default of the full context window (no practical
+    cap). The cap bounds any single generation - including one LM Studio
+    cannot stop instantly after Ctrl+C (e.g. cancelled during prompt
+    processing) - so a stale prediction can never monopolise the model.
+    """
+    if not max_response_tokens:
+        return context_window
+    try:
+        ratio = float(max_response_tokens)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"brain.max_response_tokens must be a number (got {max_response_tokens!r})"
+        ) from exc
+    if not 0 < ratio < 1:
+        raise ValueError(
+            "brain.max_response_tokens must be a ratio with 0 < ratio < 1, "
+            f"got {max_response_tokens!r}"
+        )
+    return max(1, int(context_window * ratio))
+
+
 class Brain:
     """
     Brain class that connects to the LLM model.
@@ -114,15 +146,87 @@ class Brain:
         self._context_window = self._info.context_length
         self._chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
         self._stream = StreamPrinter(text_color="cyan")
+        self._cancel_requested = False
+        self._active_stream: PredictionStream | None = None
         self._chat_cfg = {
             "temperature": self.config.brain.temperature,
-            "maxTokens": self._context_window,  # max tokens to generate per response
+            "maxTokens": _response_token_cap(
+                getattr(self.config.brain, "max_response_tokens", 0),
+                self._context_window,
+            ),
         }
         self.logger.info("✅ LLM Model '%s' connected.", self.config.brain.model)
 
     def _add_user_prompt(self, prompt: str):
+        self._repair_history()
         self._chat.add_user_message(prompt)
         self.logger.debug("Prompt:\n%s", prompt)
+
+    @staticmethod
+    def _message_text(message) -> str:
+        """Concatenated text parts of a chat message (tool parts ignored)."""
+        texts = []
+        for part in getattr(message, "content", None) or []:
+            text = part.get("text", "") if isinstance(part, dict) else getattr(part, "text", "")
+            if isinstance(text, str):
+                texts.append(text)
+        return "".join(texts)
+
+    def _repair_history(self) -> None:
+        """Keep the chat history template-valid across cancelled/failed turns.
+
+        LM Studio prompt templates require user/assistant roles to alternate
+        (tool-call/result sequences excepted). Two failure modes break that:
+
+        * a Ctrl+C-cancelled generation can end in an *empty* assistant
+          message; templates drop empty turns, which leaves a tool result
+          directly followed by a user message and fails rendering with
+          "conversation roles must alternate ...";
+        * a turn that errored or was cancelled before any response leaves the
+          user prompt unanswered, so the next prompt would render as two
+          consecutive user messages.
+
+        Called before each new prompt: pad the empty assistant turn with a
+        minimal placeholder and drop a trailing unanswered user prompt.
+        """
+        messages = self._chat._messages
+        while messages:
+            role = getattr(messages[-1], "role", None)
+            if role == "assistant":
+                if not self._message_text(messages[-1]).strip():
+                    messages.pop()
+                    self._chat.append(
+                        {"role": "assistant", "content": {"text": CANCELLED_PLACEHOLDER}}
+                    )
+                break
+            if role == "user":
+                messages.pop()  # unanswered prompt from a failed/aborted turn
+                continue
+            break  # tool/system endings are left to the SDK layer
+
+    @property
+    def cancel_requested(self) -> bool:
+        """True while a user cancel (Ctrl+C) is pending for the current turn."""
+        return self._cancel_requested
+
+    def cancel_generation(self) -> str:
+        """
+        Stop the in-flight model response as soon as possible (best effort).
+        Not exposed to the LLM; invoked by the session's Ctrl+C handling.
+        Cancels the active prediction stream server-side (stop reason
+        ``userStopped``) for both streamed responses and ``act()`` rounds
+        (via the SDK's ``on_prediction_stream`` callback); the pending flag
+        covers a cancel raised while a tool is running (between rounds).
+        Partial output is kept in the chat history.
+        """
+        self._cancel_requested = True
+        stream, self._active_stream = self._active_stream, None
+        if stream is not None:
+            try:
+                stream.cancel()
+            except Exception as exc:
+                self.logger.debug("Cancelling prediction stream failed: %s", exc)
+        return "Cancel requested"
 
     def model_fragments(self, prompt: str) -> PredictionStream:
         """
@@ -131,11 +235,13 @@ class Brain:
         """
         self.logger.info("Sending to Model [🤖: %s] ...", self.config.brain.model)
         self._add_user_prompt(prompt)
+        self._cancel_requested = False  # fresh turn
         resp_stream = self._model.respond_stream(
             self._chat,
             on_message=self._chat.append,
             config=self._chat_cfg,
         )
+        self._active_stream = resp_stream
         return resp_stream
 
     def print_fragment(self, fragment):
@@ -396,6 +502,18 @@ class Agent(Brain):
         if self.config.agent.bootstrap_prompt:
             self.act(self.config.agent.bootstrap_prompt)
 
+    def _handle_prediction_stream(self, stream, round_index=0):
+        """Track each ``act()`` round's prediction stream for Ctrl+C support.
+
+        Called by the (patched) LM Studio SDK when each round's stream
+        starts. A cancel requested while a tool was running (between
+        rounds) is applied immediately here, so the new round stops
+        before generating.
+        """
+        if self._cancel_requested:
+            stream.cancel()
+        self._active_stream = stream
+
     def _handle_fragment(self, fragment, round_index=0):
         self._fragments_buffer.append(fragment.content)
         self.print_fragment(fragment)
@@ -408,7 +526,7 @@ class Agent(Brain):
         print()
         cprint("-"*50 + f"\ncontext: {context_usage_percentage:.2f} % [{int(self._context_window / 1000)}k]\n", "grey")
         response = " ".join(self._fragments_buffer).strip()
-        if hasattr(self, "speech"):
+        if not self._cancel_requested and hasattr(self, "speech"):
             self.speech.speak(response)
         self._fragments_buffer.clear()
 
@@ -420,11 +538,16 @@ class Agent(Brain):
         cprint(f"\n🤖 [{self.config.brain.model}]", "grey")
         self.logger.info("Sending to Agent [🤖: %s] ...", self.config.brain.model)
         self._add_user_prompt(prompt)
-        self._model.act(
-            self._chat,
-            self.tool_definitions,
-            on_message=self._chat.append,
-            config=self._chat_cfg,
-            on_prediction_fragment=self._handle_fragment,
-            on_round_end=self._handle_round_end
-        )
+        self._cancel_requested = False  # fresh turn
+        try:
+            self._model.act(
+                self._chat,
+                self.tool_definitions,
+                on_message=self._chat.append,
+                config=self._chat_cfg,
+                on_prediction_fragment=self._handle_fragment,
+                on_prediction_stream=self._handle_prediction_stream,
+                on_round_end=self._handle_round_end
+            )
+        finally:
+            self._active_stream = None

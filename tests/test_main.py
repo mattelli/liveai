@@ -79,7 +79,7 @@ def test_chat_builds_and_closes_reader(monkeypatch):
     class StubSession:
         COMMANDS = ("/help", "/quit")
 
-        def __init__(self, agent, read_prompt, use_tools=True):
+        def __init__(self, agent, read_prompt, use_tools=True, quit_on_prompt_interrupt=False):
             created["read_prompt"] = read_prompt
 
         def run(self):
@@ -113,7 +113,7 @@ def test_chat_reader_uses_input_config(monkeypatch):
     class StubSession:
         COMMANDS = ("/help", "/quit")
 
-        def __init__(self, agent, read_prompt, use_tools=True):
+        def __init__(self, agent, read_prompt, use_tools=True, quit_on_prompt_interrupt=False):
             pass
 
         def run(self):
@@ -153,7 +153,7 @@ def test_chat_prompt_toolkit_false_uses_fallback(monkeypatch):
     class StubSession:
         COMMANDS = ("/help", "/quit")
 
-        def __init__(self, agent, read_prompt, use_tools=True):
+        def __init__(self, agent, read_prompt, use_tools=True, quit_on_prompt_interrupt=False):
             pass
 
         def run(self):
@@ -188,7 +188,7 @@ def test_main_closes_reader_on_exception(monkeypatch):
     class BoomSession:
         COMMANDS = ("/help", "/quit")
 
-        def __init__(self, agent, read_prompt, use_tools=True):
+        def __init__(self, agent, read_prompt, use_tools=True, quit_on_prompt_interrupt=False):
             pass
 
         def run(self):
@@ -224,7 +224,7 @@ def test_voice_passes_speech_det_config(monkeypatch):
     class StubSession:
         COMMANDS = ()
 
-        def __init__(self, agent, read_prompt, use_tools=True):
+        def __init__(self, agent, read_prompt, use_tools=True, quit_on_prompt_interrupt=False):
             pass
 
         def run(self):

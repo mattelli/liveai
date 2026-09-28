@@ -1,0 +1,150 @@
+--- a/lmstudio/sync_api.py
++++ b/lmstudio/sync_api.py
+@@ -1339,6 +1339,8 @@
+         | None = None,
+         on_round_start: Callable[[int], Any] | None = None,
+         on_round_end: Callable[[int], Any] | None = None,
++        on_prediction_stream: Callable[[PredictionStream, int], Any]
++        | None = None,
+         on_prediction_completed: Callable[[PredictionRoundResult], Any] | None = None,
+         on_prompt_processing_progress: Callable[[float, int], Any] | None = None,
+         handle_invalid_tool_request: Callable[
+@@ -1348,6 +1350,14 @@
+     ) -> ActResult:
+         """Request a response (with implicit tool use) in an ongoing agent chat session.
+ 
++        The optional ``on_prediction_stream`` callback is invoked with each
++        round's :class:`PredictionStream` (and the round index) once the stream
++        has been started, so the application can cancel the round (and thus any
++        remaining rounds) by calling ``.cancel()`` on the stream. When a round
++        is cancelled the partial response is still reported via ``on_message``
++        and ``on_round_end``, and the agent loop ends without executing any
++        requested tool calls.
++
+         Note: details of configuration fields may change in SDK feature releases.
+         """
+         start_time = time.perf_counter()
+@@ -1437,6 +1447,13 @@
+                 )
+                 channel_cm = self._session._create_channel(endpoint)
+                 prediction_stream = PredictionStream(channel_cm, endpoint)
++                # Start the stream before notifying the application so that
++                # .cancel() is immediately available to the callback.
++                prediction_stream.start()
++                if on_prediction_stream is not None:
++                    err_msg = f"Prediction stream callback failed for {self!r}"
++                    with sdk_callback_invocation(err_msg, self._logger):
++                        on_prediction_stream(prediction_stream, round_index)
+                 tool_call_requests: list[ToolCallRequest] = []
+                 pending_tool_calls: dict[SyncFuture[Any], ToolCallRequest] = {}
+                 for event in prediction_stream._iter_events():
+@@ -1457,6 +1474,34 @@
+                     err_msg = f"Prediction completed callback failed for {self!r}"
+                     with sdk_callback_invocation(err_msg, self._logger):
+                         on_prediction_completed(round_result)
++                if (
++                    prediction.stats is not None
++                    and prediction.stats.stop_reason == "userStopped"
++                ):
++                    # The application cancelled this round via its prediction
++                    # stream: report the partial response, then end the agent
++                    # loop without executing any requested tool calls.
++                    # A cancelled round may have generated no text at all; an
++                    # empty assistant turn would be dropped by the model's
++                    # prompt template, leaving a tool result directly followed
++                    # by a user message (which fails role alternation). Keep a
++                    # minimal placeholder so the history stays renderable.
++                    if (
++                        isinstance(prediction.content, str)
++                        and prediction.content.strip()
++                    ):
++                        response = prediction
++                    else:
++                        response = "(generation cancelled by user)"
++                    if on_message is not None:
++                        err_msg = f"Final response message callback failed for {self!r}"
++                        with sdk_callback_invocation(err_msg, self._logger):
++                            on_message(agent_chat.add_assistant_response(response))
++                    if on_round_end is not None:
++                        err_msg = f"Round end callback failed for {self!r}"
++                        with sdk_callback_invocation(err_msg, self._logger):
++                            on_round_end(round_index)
++                    break
+                 if pending_tool_calls:
+ 
+                     def _finish_tool_call(fut: SyncFuture[Any]) -> Any:
+--- a/lmstudio/async_api.py
++++ b/lmstudio/async_api.py
+@@ -1288,6 +1288,8 @@
+         | None = None,
+         on_round_start: Callable[[int], Any] | None = None,
+         on_round_end: Callable[[int], Any] | None = None,
++        on_prediction_stream: Callable[[AsyncPredictionStream, int], Any]
++        | None = None,
+         on_prediction_completed: Callable[[PredictionRoundResult], Any] | None = None,
+         on_prompt_processing_progress: Callable[[float, int], Any] | None = None,
+         handle_invalid_tool_request: Callable[
+@@ -1297,6 +1299,14 @@
+     ) -> ActResult:
+         """Request a response (with implicit tool use) in an ongoing agent chat session.
+ 
++        The optional ``on_prediction_stream`` callback is invoked with each
++        round's :class:`AsyncPredictionStream` (and the round index) once the
++        stream has been started, so the application can cancel the round (and
++        thus any remaining rounds) by calling ``.cancel()`` on the stream. When
++        a round is cancelled the partial response is still reported via
++        ``on_message`` and ``on_round_end``, and the agent loop ends without
++        executing any requested tool calls.
++
+         Note: details of configuration fields may change in SDK feature releases.
+         """
+         start_time = time.perf_counter()
+@@ -1381,6 +1391,13 @@
+             )
+             channel_cm = self._session._create_channel(endpoint)
+             prediction_stream = AsyncPredictionStream(channel_cm, endpoint)
++            # Start the stream before notifying the application so that
++            # .cancel() is immediately available to the callback.
++            await prediction_stream.start()
++            if on_prediction_stream is not None:
++                err_msg = f"Prediction stream callback failed for {self!r}"
++                with sdk_callback_invocation(err_msg, self._logger):
++                    on_prediction_stream(prediction_stream, round_index)
+             tool_call_requests: list[ToolCallRequest] = []
+             parsed_tool_calls: list[AsyncToolCall] = []
+             async for event in prediction_stream._iter_events():
+@@ -1400,6 +1417,34 @@
+                 err_msg = f"Prediction completed callback failed for {self!r}"
+                 with sdk_callback_invocation(err_msg, self._logger):
+                     on_prediction_completed(round_result)
++            if (
++                prediction.stats is not None
++                and prediction.stats.stop_reason == "userStopped"
++            ):
++                # The application cancelled this round via its prediction
++                # stream: report the partial response, then end the agent
++                # loop without executing any requested tool calls.
++                # A cancelled round may have generated no text at all; an
++                # empty assistant turn would be dropped by the model's
++                # prompt template, leaving a tool result directly followed
++                # by a user message (which fails role alternation). Keep a
++                # minimal placeholder so the history stays renderable.
++                if (
++                    isinstance(prediction.content, str)
++                    and prediction.content.strip()
++                ):
++                    response = prediction
++                else:
++                    response = "(generation cancelled by user)"
++                if on_message is not None:
++                    err_msg = f"Final response message callback failed for {self!r}"
++                    with sdk_callback_invocation(err_msg, self._logger):
++                        on_message(agent_chat.add_assistant_response(response))
++                if on_round_end is not None:
++                    err_msg = f"Round end callback failed for {self!r}"
++                    with sdk_callback_invocation(err_msg, self._logger):
++                        on_round_end(round_index)
++                break
+             if parsed_tool_calls:
+                 if max_parallel_tool_calls is None:
+                     max_parallel_tool_calls = len(parsed_tool_calls)

@@ -119,7 +119,7 @@ class InputReader:
         """Return the entered text (may contain newlines), or ``None`` on EOF.
 
         ``KeyboardInterrupt`` propagates to the caller (the session loop
-        already handles it and exits cleanly).
+        re-prompts on Ctrl+C and exits on EOF).
         """
         if not self._use_pt:
             return (self._fallback or prompt_input)(label)
