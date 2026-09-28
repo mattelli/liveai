@@ -236,10 +236,14 @@ class Brain:
         self.logger.info("Sending to Model [🤖: %s] ...", self.config.brain.model)
         self._add_user_prompt(prompt)
         self._cancel_requested = False  # fresh turn
+        self._stream.start_spinner("thinking")
         resp_stream = self._model.respond_stream(
             self._chat,
             on_message=self._chat.append,
             config=self._chat_cfg,
+            on_prompt_processing_progress=lambda p: self._stream.note(
+                f"processing prompt {min(100, int(p * 100))}%"
+            ),
         )
         self._active_stream = resp_stream
         return resp_stream
@@ -253,8 +257,9 @@ class Brain:
         self._stream.feed(fragment.content)
 
     def flush_stream(self) -> None:
-        """Flush any buffered text left after a streaming response ends."""
+        """Flush buffered text and stop the activity spinner (turn boundary)."""
         self._stream.flush()
+        self._stream.stop_spinner()
 
     def _get_messages(self) -> list[dict]:
         try:
@@ -522,9 +527,11 @@ class Agent(Brain):
         formatted = self._model.apply_prompt_template(self._chat)
         token_count = len(self._model.tokenize(formatted))
         context_usage_percentage = float(token_count/self._context_window) * 100
-        self.flush_stream()
-        print()
+        self._stream.flush()  # keep the spinner alive across rounds
+        cprint("")
         cprint("-"*50 + f"\ncontext: {context_usage_percentage:.2f} % [{int(self._context_window / 1000)}k]\n", "grey")
+        self._stream.mark_line_clean()  # spinner may resume for the next round
+        self._stream.note("working")
         response = " ".join(self._fragments_buffer).strip()
         if not self._cancel_requested and hasattr(self, "speech"):
             self.speech.speak(response)
@@ -539,6 +546,7 @@ class Agent(Brain):
         self.logger.info("Sending to Agent [🤖: %s] ...", self.config.brain.model)
         self._add_user_prompt(prompt)
         self._cancel_requested = False  # fresh turn
+        self._stream.start_spinner("thinking")
         try:
             self._model.act(
                 self._chat,
@@ -547,7 +555,11 @@ class Agent(Brain):
                 config=self._chat_cfg,
                 on_prediction_fragment=self._handle_fragment,
                 on_prediction_stream=self._handle_prediction_stream,
+                on_prompt_processing_progress=lambda p, _round=0: self._stream.note(
+                    f"processing prompt {min(100, int(p * 100))}%"
+                ),
                 on_round_end=self._handle_round_end
             )
         finally:
+            self._stream.stop_spinner()
             self._active_stream = None

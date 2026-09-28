@@ -261,6 +261,12 @@ at the input prompt it clears the line (re-prompt). `Ctrl-D` (EOF) exits via
 the EOF path. If prompt_toolkit is missing or disabled, input falls back to the
 builtin `input()` with no line editing or history.
 
+While a response generates, a braille-dots spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) animates whenever nothing
+visible is happening: during prompt processing (`processing prompt 42%`),
+tool execution and while fenced code blocks are buffered for syntax
+highlighting (`writing python code (812 chars)`). It is erased automatically
+before each piece of real output and at the end of the turn.
+
 Stopping a response uses the LM Studio SDK with a local patch (see
 `patches/lmstudio-1.5.0-act-on_prediction_stream.patch`, re-applied by
 `setup-lms-cpu.ps1`): `act()` hands each prediction round's stream to the new

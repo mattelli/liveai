@@ -1,15 +1,34 @@
+import sys
+import threading
+import time
 import tomllib
 import json
 import inspect
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Literal
+from typing import Callable, Literal
 
 from rich.console import Console
 from rich.syntax import Syntax
 
 Colors = Literal['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', 'reset']
+
+# Activity spinner: braille dots, redrawn every _SPIN_INTERVAL seconds
+# while a generation produces no visible output.
+_SPIN_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"  # braille dots
+_SPIN_INTERVAL = 0.12
+_SPIN_CLEAR = chr(13) + chr(27) + '[K'  # CR + erase to end of line
+
+# Optional pre-output callback (used to clear the activity spinner before raw
+# prints that bypass StreamPrinter, e.g. tool-call banners or round separators).
+_output_hook: Callable[[], None] | None = None
+
+
+def set_output_hook(hook: Callable[[], None] | None) -> None:
+    """Register/unregister a callback invoked before every ``cprint``."""
+    global _output_hook
+    _output_hook = hook
 
 def cprint(text: str, color: Colors = "reset", bold: bool = False, end: str = "\n", flush: bool = False) -> None:
     """
@@ -19,6 +38,8 @@ def cprint(text: str, color: Colors = "reset", bold: bool = False, end: str = "\
         cprint("Warning", "yellow", bold=True)
         cprint("Error", "red", end="", flush=True)
     """
+    if _output_hook is not None:
+        _output_hook()
     color_map = {
         "black": "30",
         "red": "31",
@@ -71,6 +92,19 @@ class StreamPrinter:
         self._code_lang = "text"
         self._code_lines: list[str] = []
         self._plain_started = False  # current line already partly emitted as text
+
+        # Activity spinner: animates while real output is absent (prompt
+        # processing, tool execution) or buffered (code blocks are held back
+        # until their closing fence). Any real emission erases it.
+        self._spin_active = False
+        self._spin_suppressed = False  # paused around external (raw) prints
+        self._spin_drawn = False
+        self._spin_note = ""
+        self._spin_t0 = 0.0
+        self._dirty_line = False     # cursor is inside streamed text
+        self._spin_lock = threading.Lock()
+        self._spin_stop = threading.Event()
+        self._spin_thread = None
 
     def feed(self, content: str) -> None:
         """Push a streamed fragment, emitting plain text as soon as it is safe."""
@@ -128,18 +162,24 @@ class StreamPrinter:
         self._emit("\n" if started else line + "\n")
 
     def _emit(self, text: str) -> None:
-        self.console.print(
-            text, end="", style=self.text_color, highlight=False, soft_wrap=True
-        )
+        with self._spin_lock:
+            self._erase_spinner_locked()
+            self.console.print(
+                text, end="", style=self.text_color, highlight=False, soft_wrap=True
+            )
+            self._dirty_line = not text.endswith(chr(10))
 
     def _flush_code(self) -> None:
         code = "".join(self._code_lines).rstrip("\n")
         self._code_lines = []
         if not code:
             return
-        self.console.print(
-            Syntax(code, self._code_lang, theme=self.code_theme, line_numbers=False)
-        )
+        with self._spin_lock:
+            self._erase_spinner_locked()
+            self.console.print(
+                Syntax(code, self._code_lang, theme=self.code_theme, line_numbers=False)
+            )
+            self._dirty_line = False
 
     def flush(self) -> None:
         """Flush any buffered partial line / unterminated code block."""
@@ -153,6 +193,87 @@ class StreamPrinter:
             return
         if line and not line.strip().startswith("```"):
             self._emit(line)
+
+    # -------------------------------------------------- activity spinner
+
+    def start_spinner(self, note: str = "working") -> None:
+        """Animate the spinner until the next :meth:`stop_spinner`.
+
+        The spinner only draws while the terminal line is clean; streamed
+        text, code flushing and raw cprint output all erase or suppress
+        it, so it never overwrites real content.
+        """
+        with self._spin_lock:
+            self._spin_active = True
+            self._spin_suppressed = False
+            self._spin_drawn = False
+            self._spin_note = note
+            self._spin_t0 = time.monotonic()
+            self._dirty_line = False
+            self._spin_stop.clear()
+        if self._spin_thread is None or not self._spin_thread.is_alive():
+            self._spin_thread = threading.Thread(
+                target=self._spin_loop, name="stream-spinner", daemon=True
+            )
+            self._spin_thread.start()
+        set_output_hook(self._suppress_spinner_for_output)
+
+    def stop_spinner(self) -> None:
+        """Erase the spinner (if drawn) and stop the animation thread."""
+        with self._spin_lock:
+            self._spin_active = False
+            self._spin_suppressed = False
+            self._erase_spinner_locked()
+        set_output_hook(None)
+        self._spin_stop.set()
+        thread = self._spin_thread
+        if thread is not None and thread is not threading.current_thread():
+            thread.join(timeout=0.5)
+        self._spin_thread = None
+
+    def note(self, text: str) -> None:
+        """Update the spinner caption (e.g. prompt-processing progress)."""
+        with self._spin_lock:
+            self._spin_note = text
+            self._spin_suppressed = False
+
+    def mark_line_clean(self) -> None:
+        """Declare the terminal line empty so the spinner may draw again."""
+        with self._spin_lock:
+            self._dirty_line = False
+
+    def _spin_loop(self) -> None:
+        while not self._spin_stop.wait(_SPIN_INTERVAL):
+            with self._spin_lock:
+                if (
+                    self._spin_active
+                    and not self._spin_suppressed
+                    and not self._dirty_line
+                ):
+                    self._draw_spinner_locked()
+
+    def _draw_spinner_locked(self) -> None:
+        elapsed = time.monotonic() - self._spin_t0
+        frame = _SPIN_FRAMES[int(elapsed / _SPIN_INTERVAL) % len(_SPIN_FRAMES)]
+        note = self._spin_note
+        if self._in_code:
+            buffered = sum(len(line) for line in self._code_lines) + len(self._line)
+            note = f"writing {self._code_lang} code ({buffered} chars)"
+        self.console.file.write(_SPIN_CLEAR + frame + " " + note)
+        self.console.file.flush()
+        self._spin_drawn = True
+
+    def _erase_spinner_locked(self) -> None:
+        if self._spin_drawn:
+            self.console.file.write(_SPIN_CLEAR)
+            self.console.file.flush()
+            self._spin_drawn = False
+
+    def _suppress_spinner_for_output(self) -> None:
+        """Output hook: erase the spinner before unrelated raw prints."""
+        with self._spin_lock:
+            self._erase_spinner_locked()
+            self._spin_suppressed = True
 
 
 def load_config(config_path: Path) -> SimpleNamespace:

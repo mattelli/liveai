@@ -3,7 +3,7 @@ from pathlib import Path
 
 from rich.console import Console
 
-from src.common import StreamPrinter, cprint, load_config, prompt_input
+from src.common import _SPIN_FRAMES, StreamPrinter, cprint, load_config, prompt_input
 
 
 def test_prompt_input_returns_line(monkeypatch):
@@ -196,3 +196,62 @@ def test_real_config_has_multimodal_embedding_keys():
     assert isinstance(emb.multimodal, bool)
     assert emb.image_extensions
     assert "pdf" in emb.extensions and "docx" in emb.extensions
+
+
+# ------------------------------------------------------------- activity spinner
+
+
+def test_spinner_draws_only_on_clean_line():
+    sp = _capture_printer()
+    sp._spin_active = True
+    sp._spin_note = "thinking"
+    with sp._spin_lock:
+        sp._draw_spinner_locked()
+    drawn = sp.console.file.getvalue()
+    assert drawn.startswith("\r\x1b[K")
+    assert any(frame in drawn for frame in _SPIN_FRAMES) and "thinking" in drawn
+    assert sp._spin_drawn is True
+
+    # real output erases the spinner and marks the line dirty
+    sp._emit("hello")
+    assert sp._dirty_line is True and sp._spin_drawn is False
+
+    # while the line is dirty the refresh loop must not draw again
+    n = len(sp.console.file.getvalue())
+    with sp._spin_lock:
+        if sp._spin_active and not sp._spin_suppressed and not sp._dirty_line:
+            sp._draw_spinner_locked()
+    assert len(sp.console.file.getvalue()) == n
+
+
+def test_spinner_reports_buffered_code():
+    sp = _capture_printer()
+    sp.feed("```python\nx = 1\n")
+    with sp._spin_lock:
+        sp._draw_spinner_locked()
+    assert "writing python code" in sp.console.file.getvalue()
+
+
+def test_spinner_stop_erases_and_clears_hook():
+    sp = _capture_printer()
+    sp._spin_active = True
+    with sp._spin_lock:
+        sp._draw_spinner_locked()
+    sp.stop_spinner()
+    # the erase sequence was written after the last draw
+    assert sp.console.file.getvalue().count("\r\x1b[K") >= 2
+    from src.common import _output_hook
+    assert _output_hook is None
+    assert sp._spin_active is False
+
+
+def test_cprint_invokes_output_hook(capsys):
+    from src.common import set_output_hook
+    calls = []
+    set_output_hook(lambda: calls.append(1))
+    try:
+        cprint("banner", "grey")
+    finally:
+        set_output_hook(None)
+    assert calls == [1]
+    assert "banner" in capsys.readouterr().out

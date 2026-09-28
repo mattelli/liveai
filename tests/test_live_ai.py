@@ -478,6 +478,12 @@ def test_cancelled_round_does_not_speak():
         def flush(self):
             pass
 
+        def mark_line_clean(self):
+            pass
+
+        def note(self, text):
+            pass
+
     agent = _BareAgent()
     agent.speech = FakeSpeech()
     agent._model = FakeModel()
