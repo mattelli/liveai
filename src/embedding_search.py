@@ -26,6 +26,7 @@ real model or building a real index.
 from __future__ import annotations
 
 import hashlib
+import json
 import pickle
 import re
 import shutil
@@ -42,8 +43,17 @@ __all__ = [
     "DEFAULT_TOP_K",
     "DEFAULT_CHUNK_SIZE",
     "DEFAULT_EXTENSIONS",
-    "DEFAULT_PROCESSED_NAME",
+    "DEFAULT_CORPORA_DIR",
+    "CORPUS_FILE",
+    "METADATA_FILE",
+    "PROCESSED_FILE",
+    "IMAGES_DIR",
     "MIN_ALNUM_CHARS",
+    "sanitize_corpus_name",
+    "resolve_corpus_dir",
+    "save_metadata",
+    "load_metadata",
+    "list_corpora",
     "collect_texts",
     "normalize_rows",
     "build_passages",
@@ -56,10 +66,15 @@ __all__ = [
 DEFAULT_TOP_K = 5
 DEFAULT_CHUNK_SIZE = 3
 DEFAULT_EXTENSIONS = SUPPORTED_EXTENSIONS
-DEFAULT_PROCESSED_NAME = "PROCESSED.md"
+DEFAULT_CORPORA_DIR = ".res/corpora"
+CORPUS_FILE = "corpus.pkl"
+METADATA_FILE = "metadata.json"
+PROCESSED_FILE = "processed.md"
+IMAGES_DIR = "images"
 MIN_ALNUM_CHARS = 4  # drop passages with fewer letters/digits (TOC leaders, noise)
 
 _ALNUM = re.compile(r"[^\W_]", re.UNICODE)
+_CORPUS_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 
 def _normalize_extensions(value) -> tuple[str, ...]:
@@ -72,6 +87,48 @@ def _normalize_extensions(value) -> tuple[str, ...]:
             continue
         result.append(item if item.startswith(".") else "." + item)
     return tuple(result)
+
+
+def sanitize_corpus_name(name: str) -> str:
+    """Validate a corpus name; raise ``ValueError`` for empty/path-like names."""
+    cleaned = (name or "").strip()
+    if not cleaned or cleaned in (".", "..") or not _CORPUS_NAME_RE.match(cleaned):
+        raise ValueError(f"invalid corpus name: {name!r}")
+    return cleaned
+
+
+def resolve_corpus_dir(corpus_name: str, corpora_dir) -> Path:
+    """Return the folder for ``corpus_name`` under ``corpora_dir``."""
+    return Path(corpora_dir) / sanitize_corpus_name(corpus_name)
+
+
+def save_metadata(corpus_dir, metadata: dict) -> None:
+    """Write ``metadata.json`` inside ``corpus_dir``."""
+    path = Path(corpus_dir) / METADATA_FILE
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+
+
+def load_metadata(corpus_dir) -> dict:
+    """Read ``metadata.json`` from ``corpus_dir``."""
+    path = Path(corpus_dir) / METADATA_FILE
+    if not path.exists():
+        raise FileNotFoundError(f"Corpus metadata not found: '{path}'")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def list_corpora(corpora_dir) -> list[dict]:
+    """Return every ``<corpora_dir>/*/metadata.json`` entry, sorted by name."""
+    root = Path(corpora_dir)
+    if not root.is_dir():
+        return []
+    entries: list[dict] = []
+    for metadata_file in root.glob(f"*/{METADATA_FILE}"):
+        try:
+            entries.append(json.loads(metadata_file.read_text(encoding="utf-8")))
+        except (OSError, json.JSONDecodeError):
+            continue
+    return sorted(entries, key=lambda entry: entry.get("name", ""))
 
 
 def collect_texts(directory, extensions=DEFAULT_EXTENSIONS) -> list[str]:
@@ -207,7 +264,6 @@ class EmbeddingCorpus:
         image_model_path=None,
         multimodal: bool = False,
         image_extensions=IMAGE_EXTENSIONS,
-        processed_name: str = DEFAULT_PROCESSED_NAME,
         image_model_factory: Optional[Callable[[str, str], object]] = None,
     ):
         self.model_path = Path(model_path)
@@ -221,7 +277,6 @@ class EmbeddingCorpus:
         self.image_model_path = Path(image_model_path) if image_model_path else None
         self.multimodal = multimodal
         self.image_extensions = _normalize_extensions(image_extensions)
-        self.processed_name = processed_name
         self._image_model_factory = image_model_factory
         self._model = None
         self._image_model = None
@@ -327,13 +382,14 @@ class EmbeddingCorpus:
         embeddings = np.asarray(encoder.encode([query], convert_to_numpy=True), dtype=float)
         return normalize_rows(embeddings)[0]
 
-    def _append_processed(self, output: Path, documents, directory, n_text: int, n_image: int) -> Path:
-        processed_path = output.parent / self.processed_name
+    def _append_processed(self, corpus_dir, documents, directory, n_text: int, n_image: int) -> Path:
+        corpus_dir = Path(corpus_dir)
+        processed_path = corpus_dir / PROCESSED_FILE
         processed_path.parent.mkdir(parents=True, exist_ok=True)
         root = Path(directory).resolve()
         timestamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
         lines = [
-            f"## Corpus build {timestamp} — {output.name}",
+            f"## Corpus build {timestamp} — {corpus_dir.name}",
             "",
             f"- Files: {len(documents)}  |  text records: {n_text}  |  image records: {n_image}",
             "",
@@ -390,22 +446,24 @@ class EmbeddingCorpus:
 
     # ----------------------------------------------------------------- public
 
-    def store(self, directory: str, output_file: str, overwrite: bool = False) -> str:
-        """Build a corpus from ``directory`` and persist it to ``output_file``."""
-        output = Path(output_file).resolve()
-        if output.exists() and not overwrite:
-            return "File already exists."
+    def store(self, directory: str, corpus_dir, overwrite: bool = False) -> str:
+        """Build a named corpus folder from ``directory``."""
+        corpus_dir = Path(corpus_dir)
+        pkl_path = corpus_dir / CORPUS_FILE
+        if pkl_path.exists() and not overwrite:
+            return "Corpus already exists."
 
-        image_dir = output.parent / f"{output.stem}_images"
+        image_dir = corpus_dir / IMAGES_DIR
         if image_dir.exists():
             shutil.rmtree(image_dir, ignore_errors=True)
+        image_dir.mkdir(parents=True, exist_ok=True)
         documents = iter_documents(directory, self.extensions, image_dir=image_dir)
         if not documents:
-            return f"No supported files found in '{directory}'"
+            return f"No supported content found in '{directory}'."
 
         records = self._build_records(documents)
         if not records:
-            return "No passages extracted from the input files."
+            return f"No supported content found in '{directory}'."
 
         if self.multimodal:
             embeddings = self._embed_records_multimodal(records)
@@ -420,18 +478,31 @@ class EmbeddingCorpus:
             "records": records,
             "embeddings": embeddings,
         }
-        save_corpus(output, payload)
+        save_corpus(pkl_path, payload)
         prune_orphan_images(image_dir, records)
 
         n_text = sum(1 for record in records if record["kind"] == "text")
         n_image = sum(1 for record in records if record["kind"] == "image")
-        processed_path = self._append_processed(output, documents, directory, n_text, n_image)
+        self._append_processed(corpus_dir, documents, directory, n_text, n_image)
+        save_metadata(corpus_dir, {
+            "name": corpus_dir.name,
+            "version": 2,
+            "mode": payload["mode"],
+            "text_model_path": payload["text_model_path"],
+            "image_model_path": payload["image_model_path"],
+            "source_dir": str(Path(directory).resolve()),
+            "records": len(records),
+            "text_records": n_text,
+            "image_records": n_image,
+            "sources": len({record["source"] for record in records if record.get("source")}),
+            "built_at": datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"),
+        })
         return (
-            f"Corpus with {n_text} text / {n_image} image records saved to '{output}'; "
-            f"processed list appended to '{processed_path}'"
+            f"Corpus '{corpus_dir.name}' saved to '{corpus_dir}' "
+            f"({n_text} text / {n_image} image records)."
         )
 
-    def query(self, corpus_file: str, query: str, top_k: Optional[int] = None, kind: Optional[str] = None) -> str:
+    def query(self, corpus_dir, query: str, top_k: Optional[int] = None, kind: Optional[str] = None) -> str:
         """Return the ``top_k`` records most relevant to ``query``.
 
         ``kind`` restricts the ranking to ``"text"`` or ``"image"`` records;
@@ -445,9 +516,12 @@ class EmbeddingCorpus:
         if kind not in (None, "text", "image"):
             return f"Invalid kind '{kind}'. Use 'text' or 'image'."
 
-        path = Path(corpus_file).resolve()
+        path = Path(corpus_dir) / CORPUS_FILE
         if not path.exists():
-            return f"Corpus not found at '{path}'. Build it first with store_corpus."
+            return (
+                f"Corpus not found at '{path}'. Use list_corpora() for available "
+                "names, or store_corpus(...) to build it."
+            )
 
         payload = load_corpus(path)
         if "records" in payload:

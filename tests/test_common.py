@@ -160,14 +160,12 @@ def test_real_config_has_summarization_block():
         assert hasattr(sm, key)
 
 
-def test_load_config_resolves_embedding_paths(tmp_path):
+def test_load_config_resolves_corpora_dir(tmp_path):
     cfg = tmp_path / "config.toml"
-    cfg.write_text(
-        '[embedding]\nmodel_path = ".res/models/st"\ncorpus_path = ".res/corpus/c.pkl"\n'
-    )
+    cfg.write_text('[embedding]\nmodel_path = ".res/models/st"\ncorpora_dir = ".res/corpora"\n')
     ns = load_config(cfg)
     assert ns.embedding.model_path == (tmp_path / ".res/models/st").resolve()
-    assert ns.embedding.corpus_path == (tmp_path / ".res/corpus/c.pkl").resolve()
+    assert ns.embedding.corpora_dir == (tmp_path / ".res/corpora").resolve()
 
 
 def test_real_config_has_embedding_block():
@@ -175,9 +173,19 @@ def test_real_config_has_embedding_block():
     ns = load_config(cfg_path)
     emb = ns.embedding
     assert emb.model_path.is_absolute()
-    assert emb.corpus_path.is_absolute()
+    assert emb.corpora_dir.is_absolute()
     for key in ("device", "extensions", "chunk_size", "top_k"):
         assert hasattr(emb, key)
+
+
+def test_real_config_has_corpora_keys():
+    cfg_path = Path(__file__).parent.parent / "config.toml"
+    ns = load_config(cfg_path)
+    emb = ns.embedding
+    assert emb.corpora_dir.is_absolute()
+    assert not hasattr(emb, "default_corpus")
+    assert not hasattr(emb, "corpus_path")
+    assert not hasattr(emb, "processed_name")
 
 
 def test_real_config_has_multimodal_embedding_keys():
@@ -186,6 +194,5 @@ def test_real_config_has_multimodal_embedding_keys():
     emb = ns.embedding
     assert emb.image_model_path.is_absolute()
     assert isinstance(emb.multimodal, bool)
-    assert isinstance(emb.processed_name, str) and not Path(emb.processed_name).is_absolute()
     assert emb.image_extensions
     assert "pdf" in emb.extensions and "docx" in emb.extensions

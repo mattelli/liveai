@@ -1,7 +1,8 @@
+import inspect
 import pathlib
 import lmstudio as lms
 from lmstudio.sync_api import PredictionStream
-from typing import Callable, Literal
+from typing import Callable, Literal, get_type_hints
 from logging import getLogger
 from datetime import datetime, timezone
 from src.audio_generator import SpeechGenerator
@@ -15,11 +16,63 @@ from src.tools import (
 )
 from src.summarizer import TextSummarizer
 from src.embedding_search import (
-    DEFAULT_CHUNK_SIZE, DEFAULT_EXTENSIONS, DEFAULT_PROCESSED_NAME, DEFAULT_TOP_K, EmbeddingCorpus
+    DEFAULT_CHUNK_SIZE, DEFAULT_CORPORA_DIR, DEFAULT_EXTENSIONS, DEFAULT_TOP_K,
+    EmbeddingCorpus, list_corpora, resolve_corpus_dir
 )
 from src.document_loader import IMAGE_EXTENSIONS
 
 Role = Literal['system', 'user', 'assistant']
+
+
+def _camelize(name: str) -> str:
+    """``corpus_name`` -> ``corpusName`` (single words are unchanged)."""
+    head, *rest = name.split("_")
+    return head + "".join(part.capitalize() for part in rest)
+
+
+def _camel_tool_definition(tool: Callable) -> dict:
+    """Describe ``tool`` to the LLM with camelCase parameter names.
+
+    LM Studio validates the arguments produced by the model against the names
+    advertised in the tool schema *before* calling the Python implementation.
+    Qwen-style models emit camelCase names (``corpusName``) even when the schema
+    uses snake_case (``corpus_name``), so argument parsing fails with
+    ``Object missing required field `corpus_name```.
+
+    We advertise the camelCase spelling and translate the incoming arguments
+    back to the real Python parameter names, so the model never sees a mismatch.
+    """
+    signature = inspect.signature(tool)
+    try:
+        hints = get_type_hints(tool, include_extras=True)
+    except Exception:
+        hints = getattr(tool, "__annotations__", {}) or {}
+
+    parameters: dict = {}
+    alias: dict[str, str] = {}
+    for name, param in signature.parameters.items():
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        camel = _camelize(name)
+        alias[camel] = name
+        annotation = hints.get(name, str)
+        if param.default is inspect.Parameter.empty:
+            parameters[camel] = annotation
+        else:
+            parameters[camel] = {"type": annotation, "default": param.default}
+
+    def implementation(**kwargs):
+        return tool(**{alias.get(key, key): value for key, value in kwargs.items()})
+
+    implementation.__name__ = getattr(tool, "__name__", "tool")
+    implementation.__doc__ = getattr(tool, "__doc__", "")
+    return {
+        "name": implementation.__name__,
+        "description": (implementation.__doc__ or "").strip(),
+        "parameters": parameters,
+        "implementation": implementation,
+    }
+
 
 class Brain:
     """
@@ -179,33 +232,54 @@ class Brain:
                 image_model_path=getattr(cfg, "image_model_path", None),
                 multimodal=getattr(cfg, "multimodal", False),
                 image_extensions=getattr(cfg, "image_extensions", IMAGE_EXTENSIONS),
-                processed_name=getattr(cfg, "processed_name", DEFAULT_PROCESSED_NAME),
             )
         return self._emb_corpus
 
     @dump_func_call
-    def store_corpus(self, directory: str, corpus_file: str = "", overwrite: bool = False) -> str:
+    def list_corpora(self) -> str:
         """
-        Build a searchable corpus from all text files in a directory and store it to a file.
+        List the available local corpora (name, mode, record counts, sources, built time).
+        Useful before query_corpus when the user refers to a topic instead of a corpus name.
+        """
+        entries = list_corpora(self.config.embedding.corpora_dir)
+        if not entries:
+            return "No corpora available."
+        lines = [f"Available corpora ({len(entries)}):"]
+        for e in entries:
+            lines.append(
+                f"- {e['name']}: mode={e['mode']}, records={e['records']} "
+                f"(text {e['text_records']} / image {e['image_records']}), "
+                f"sources={e['sources']}, built={e['built_at']}"
+            )
+        return "\n".join(lines)
+
+    @dump_func_call
+    def store_corpus(self, directory: str, corpus_name: str, overwrite: bool = False) -> str:
+        """
+        Build a named corpus from all supported files in a directory.
         Useful when the user asks to index, embed, or store documents for later semantic search.
         """
         try:
-            output = corpus_file or str(self.config.embedding.corpus_path)
-            return self._embedding_corpus().store(directory, output, overwrite)
+            if not corpus_name or not corpus_name.strip():
+                return "Error: a corpus name is required (call list_corpora to see available corpora)."
+            corpus_dir = resolve_corpus_dir(corpus_name, self.config.embedding.corpora_dir)
+            return self._embedding_corpus().store(directory, corpus_dir, overwrite)
         except Exception as e:
             return f"Error: {e}"
 
     @dump_func_call
-    def query_corpus(self, query: str, corpus_file: str = "", top_k: int = 0, kind: str = "") -> str:
+    def query_corpus(self, query: str, corpus_name: str, kind: str = "", top_k: int = 0) -> str:
         """
-        Search a previously stored corpus for the content most relevant to a query text.
+        Search a named corpus for the content most relevant to a query text.
         Useful when the user asks a question that should be answered from indexed documents
         or when looking for a matching image.
         ``kind`` restricts results to 'text' or 'image'; leave it empty to search both.
         """
         try:
-            target = corpus_file or str(self.config.embedding.corpus_path)
-            return self._embedding_corpus().query(target, query, top_k or None, kind or None)
+            if not corpus_name or not corpus_name.strip():
+                return "Error: a corpus name is required."
+            corpus_dir = resolve_corpus_dir(corpus_name, self.config.embedding.corpora_dir)
+            return self._embedding_corpus().query(corpus_dir, query, top_k or None, kind or None)
         except Exception as e:
             return f"Error: {e}"
 
@@ -282,7 +356,7 @@ class Agent(Brain):
             self.model_info, self.recall_personal, self.store_personal,
             self.image_response, self.allow_speech, self.clear_chat,
             self.summarize_text,
-            self.store_corpus, self.query_corpus,
+            self.list_corpora, self.store_corpus, self.query_corpus,
             capture_image, system_info, current_date_time, get_working_directory, 
             run_command, search_in_file, search_pattern_in_files, 
             read_text_file, replace_string_in_file, write_text_file,
@@ -299,6 +373,7 @@ class Agent(Brain):
             self.config.brain.model
         )
         self.tools:list[Callable] = self._build_tools()
+        self.tool_definitions:list[dict] = [_camel_tool_definition(tool) for tool in self.tools]
         self.logger.info(
             "✅ Agent with Model '%s' is ready with [%d] tools.", 
             self.config.brain.model, len(self.tools)
@@ -335,7 +410,7 @@ class Agent(Brain):
         self._add_user_prompt(prompt)
         self._model.act(
             self._chat,
-            self.tools,
+            self.tool_definitions,
             on_message=self._chat.append,
             config=self._chat_cfg,
             on_prediction_fragment=self._handle_fragment,

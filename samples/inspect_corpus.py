@@ -9,13 +9,13 @@ Works with both corpus formats:
 
 Examples
 --------
-    python inspect_corpus.py
-    python inspect_corpus.py .res/corpus/corpus.pkl
-    python inspect_corpus.py --sources
-    python inspect_corpus.py --kind image --limit 5
-    python inspect_corpus.py --source AUTOSAR --grep "readiness"
-    python inspect_corpus.py --record 0
-    python inspect_corpus.py --json
+    python samples/inspect_corpus.py --list
+    python samples/inspect_corpus.py --corpus autosar
+    python samples/inspect_corpus.py --corpus autosar --sources
+    python samples/inspect_corpus.py --corpus autosar --kind image --limit 5
+    python samples/inspect_corpus.py --corpus autosar --source AUTOSAR --grep "readiness"
+    python samples/inspect_corpus.py --corpus autosar --record 0
+    python samples/inspect_corpus.py --corpus autosar --json
 
 Note: ``pickle.load`` executes arbitrary code, so only inspect corpora you
 generated locally. The inspector never prints the full embeddings matrix.
@@ -33,7 +33,18 @@ from pathlib import Path
 import numpy as np
 
 WORK_DIR = Path(__file__).resolve().parent
-DEFAULT_CORPUS = WORK_DIR.parent / ".res" / "corpus" / "corpus.pkl"
+REPO_ROOT = WORK_DIR.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from src.embedding_search import (  # noqa: E402
+    CORPUS_FILE,
+    DEFAULT_CORPORA_DIR,
+    list_corpora,
+    resolve_corpus_dir,
+)
+
+DEFAULT_CORPORA_PATH = REPO_ROOT / DEFAULT_CORPORA_DIR
 
 
 # ------------------------------------------------------------------ loading
@@ -131,10 +142,12 @@ def select_records(records: list[dict], args) -> list[tuple[int, dict]]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Inspect a local corpus pickle.")
+    parser = argparse.ArgumentParser(description="Inspect a named local corpus.")
+    parser.add_argument("--corpus", help="corpus name (see --list)")
+    parser.add_argument("--list", action="store_true", dest="list_corpora", help="list available corpora")
     parser.add_argument(
-        "path", nargs="?", type=Path, default=DEFAULT_CORPUS,
-        help=f"corpus pickle (default: {DEFAULT_CORPUS})",
+        "--corpora-dir", type=Path, default=DEFAULT_CORPORA_PATH,
+        help=f"corpora root (default: {DEFAULT_CORPORA_PATH})",
     )
     parser.add_argument("--sources", action="store_true", help="list source files with record counts")
     parser.add_argument("--kind", choices=("text", "image"), help="only show records of this kind")
@@ -144,6 +157,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--record", type=int, metavar="N", help="print a single record by index (full text)")
     parser.add_argument("--json", action="store_true", help="emit JSON instead of text")
     return parser
+
+
+def _list_corpora(corpora_dir: Path) -> int:
+    entries = list_corpora(corpora_dir)
+    if not entries:
+        print("No corpora available.")
+        return 0
+    print(f"Available corpora ({len(entries)}):")
+    for e in entries:
+        print(
+            f"- {e.get('name')}: mode={e.get('mode')}, records={e.get('records')} "
+            f"(text {e.get('text_records')} / image {e.get('image_records')}), "
+            f"sources={e.get('sources')}, built={e.get('built_at')}"
+        )
+    return 0
 
 
 def _print_record(index: int, record: dict, embeddings: np.ndarray) -> None:
@@ -156,7 +184,21 @@ def _print_record(index: int, record: dict, embeddings: np.ndarray) -> None:
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    path: Path = args.path
+    corpora_dir: Path = args.corpora_dir
+
+    if args.list_corpora:
+        return _list_corpora(corpora_dir)
+
+    if not args.corpus:
+        print("--corpus <name> is required (or use --list)", file=sys.stderr)
+        return 1
+    try:
+        corpus_dir = resolve_corpus_dir(args.corpus, corpora_dir)
+    except ValueError as exc:
+        print(f"Invalid corpus name: {exc}", file=sys.stderr)
+        return 1
+
+    path: Path = corpus_dir / CORPUS_FILE
     if not path.exists():
         print(f"Corpus not found: {path}", file=sys.stderr)
         return 1

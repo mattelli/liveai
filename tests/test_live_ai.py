@@ -162,7 +162,7 @@ def test_agent_build_tools_keeps_existing_tools():
 
 def _bare_embedding_brain(**overrides):
     cfg = dict(model_path="m", device="cpu", extensions="txt, md",
-               chunk_size=3, top_k=5, corpus_path="corpus.pkl")
+               chunk_size=3, top_k=5, corpora_dir="/res/corpora")
     cfg.update(overrides)
     brain = live_ai_mod.Brain.__new__(live_ai_mod.Brain)
     brain.logger = getLogger("test")
@@ -170,124 +170,138 @@ def _bare_embedding_brain(**overrides):
     return brain
 
 
-def test_store_corpus_uses_config_and_caches(monkeypatch):
-    seen = {"count": 0}
+def test_store_corpus_requires_name(monkeypatch):
+    import inspect
 
-    class Recorder:
-        def __init__(self, **kwargs):
-            seen["init"] = kwargs
-            seen["count"] += 1
+    params = inspect.signature(live_ai_mod.Brain.store_corpus).parameters
+    assert params["corpus_name"].default is inspect.Parameter.empty
 
-        def store(self, directory, output, overwrite=False):
-            seen["store"] = (directory, output, overwrite)
-            return "STORED"
-
-        def query(self, corpus_file, query, top_k=None, kind=None):
-            raise AssertionError("query not expected")
-
-    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    brain = _bare_embedding_brain()
-    assert brain.store_corpus("/docs") == "STORED"
-    assert brain.store_corpus("/docs") == "STORED"
-
-    assert seen["count"] == 1  # corpus object created once and cached
-    assert seen["init"]["model_path"] == "m"
-    assert seen["init"]["chunk_size"] == 3
-    assert seen["init"]["top_k"] == 5
-    assert seen["store"] == ("/docs", "corpus.pkl", False)
-
-
-def test_store_corpus_forwards_explicit_file_and_overwrite(monkeypatch):
-    seen = {}
+    seen = {"store": 0}
 
     class Recorder:
         def __init__(self, **kwargs):
             pass
 
-        def store(self, directory, output, overwrite=False):
-            seen["store"] = (directory, output, overwrite)
+        def store(self, *args, **kwargs):
+            seen["store"] += 1
             return "STORED"
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    brain = _bare_embedding_brain()
-    assert brain.store_corpus("/docs", corpus_file="/tmp/c.pkl", overwrite=True) == "STORED"
-    assert seen["store"] == ("/docs", "/tmp/c.pkl", True)
+    out = _bare_embedding_brain().store_corpus("/docs", "")
+    assert out.startswith("Error: a corpus name is required")
+    assert seen["store"] == 0
 
 
-def test_query_corpus_forwards_query_and_top_k(monkeypatch):
+def test_query_corpus_requires_name(monkeypatch):
+    import inspect
+
+    params = inspect.signature(live_ai_mod.Brain.query_corpus).parameters
+    assert params["corpus_name"].default is inspect.Parameter.empty
+
+    seen = {"query": 0}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, *args, **kwargs):
+            seen["query"] += 1
+            return "RESULTS"
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    out = _bare_embedding_brain().query_corpus("hello", "")
+    assert out.startswith("Error: a corpus name is required")
+    assert seen["query"] == 0
+
+
+def test_store_corpus_uses_named_corpus(tmp_path, monkeypatch):
     seen = {}
 
     class Recorder:
         def __init__(self, **kwargs):
             pass
 
-        def query(self, corpus_file, query, top_k=None, kind=None):
-            seen["query"] = (corpus_file, query, top_k)
-            return "RESULTS"
+        def store(self, directory, corpus_dir, overwrite=False):
+            seen["store"] = (directory, str(corpus_dir), overwrite)
+            return "STORED"
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    brain = _bare_embedding_brain()
-    assert brain.query_corpus("hello", top_k=2) == "RESULTS"
-    assert seen["query"] == ("corpus.pkl", "hello", 2)
+    brain = _bare_embedding_brain(corpora_dir=str(tmp_path))
+    assert brain.store_corpus("/docs", "autosar", overwrite=True) == "STORED"
+    assert seen["store"] == ("/docs", str(tmp_path / "autosar"), True)
 
 
-def test_query_corpus_uses_explicit_corpus_file(monkeypatch):
+def test_store_corpus_invalid_name_returns_error(monkeypatch):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def store(self, *args, **kwargs):
+            raise AssertionError("store must not be called")
+
+    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
+    out = _bare_embedding_brain().store_corpus("/docs", "a/b")
+    assert out.startswith("Error:") and "corpus name" in out.lower()
+
+
+def test_query_corpus_resolves_name_and_forwards(tmp_path, monkeypatch):
     seen = {}
 
     class Recorder:
         def __init__(self, **kwargs):
             pass
 
-        def query(self, corpus_file, query, top_k=None, kind=None):
-            seen["query"] = (corpus_file, query, top_k)
+        def query(self, corpus_dir, query, top_k=None, kind=None):
+            seen["query"] = (str(corpus_dir), query, top_k, kind)
             return "RESULTS"
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    brain = _bare_embedding_brain()
-    brain.query_corpus("hello", corpus_file="/tmp/c.pkl")
-    assert seen["query"] == ("/tmp/c.pkl", "hello", None)
+    brain = _bare_embedding_brain(corpora_dir=str(tmp_path))
+    assert brain.query_corpus("hello", "autosar", kind="image", top_k=2) == "RESULTS"
+    assert seen["query"] == (str(tmp_path / "autosar"), "hello", 2, "image")
 
 
-def test_query_corpus_forwards_kind(monkeypatch):
-    seen = {}
+def test_list_corpora_formats_entries(monkeypatch):
+    entries = [
+        {"name": "autosar", "mode": "multimodal", "records": 10, "text_records": 8,
+         "image_records": 2, "sources": 3, "built_at": "2026-01-01 00:00:00 UTC"},
+        {"name": "quora", "mode": "text", "records": 5, "text_records": 5,
+         "image_records": 0, "sources": 1, "built_at": "2026-01-02 00:00:00 UTC"},
+    ]
+    monkeypatch.setattr(live_ai_mod, "list_corpora", lambda corpora_dir: entries)
+    out = _bare_embedding_brain().list_corpora()
+    assert "Available corpora (2)" in out
+    assert "autosar: mode=multimodal" in out and "quora: mode=text" in out
 
+
+def test_list_corpora_empty_returns_message(monkeypatch):
+    monkeypatch.setattr(live_ai_mod, "list_corpora", lambda corpora_dir: [])
+    assert _bare_embedding_brain().list_corpora() == "No corpora available."
+
+
+def test_store_corpus_reports_errors(tmp_path, monkeypatch):
     class Recorder:
         def __init__(self, **kwargs):
             pass
 
-        def query(self, corpus_file, query, top_k=None, kind=None):
-            seen["query"] = (corpus_file, query, top_k, kind)
-            return "RESULTS"
-
-    monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    brain = _bare_embedding_brain()
-    assert brain.query_corpus("cluster diagram", kind="image") == "RESULTS"
-    assert seen["query"] == ("corpus.pkl", "cluster diagram", None, "image")
-
-
-def test_store_corpus_reports_errors(monkeypatch):
-    class Recorder:
-        def __init__(self, **kwargs):
-            pass
-
-        def store(self, directory, output, overwrite=False):
+        def store(self, directory, corpus_dir, overwrite=False):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    out = _bare_embedding_brain().store_corpus("/docs")
+    out = _bare_embedding_brain(corpora_dir=str(tmp_path)).store_corpus("/docs", "autosar")
     assert out.startswith("Error:") and "boom" in out
 
 
-def test_query_corpus_reports_errors(monkeypatch):
+def test_query_corpus_reports_errors(tmp_path, monkeypatch):
     class Recorder:
         def __init__(self, **kwargs):
             pass
 
-        def query(self, corpus_file, query, top_k=None, kind=None):
+        def query(self, corpus_dir, query, top_k=None, kind=None):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    out = _bare_embedding_brain().query_corpus("hi")
+    out = _bare_embedding_brain(corpora_dir=str(tmp_path)).query_corpus("hi", "autosar")
     assert out.startswith("Error:") and "boom" in out
 
 
@@ -297,48 +311,77 @@ def test_agent_build_tools_includes_embedding_tools():
     assert "store_corpus" in names and "query_corpus" in names
 
 
-def test_agent_build_tools_keeps_summarize_text():
+def test_camel_tool_definition_advertises_and_translates():
+    def query_corpus(query: str, corpus_name: str, kind: str = "", top_k: int = 0) -> str:
+        """Search a named corpus."""
+        return f"{query}|{corpus_name}|{kind}|{top_k}"
+
+    definition = live_ai_mod._camel_tool_definition(query_corpus)
+    assert set(definition["parameters"]) == {"query", "corpusName", "kind", "topK"}
+    assert definition["parameters"]["corpusName"] is str
+    assert definition["parameters"]["topK"] == {"type": int, "default": 0}
+    # The model emits camelCase; the implementation maps it to the real names.
+    assert definition["implementation"](
+        query="q", corpusName="autosar", kind="image", topK=2
+    ) == "q|autosar|image|2"
+
+
+def test_camel_tool_definition_schema_uses_camel_case():
+    from lmstudio.json_api import ChatResponseEndpoint
+
+    def query_corpus(query: str, corpus_name: str, kind: str = "", top_k: int = 0) -> str:
+        """Search a named corpus."""
+        return "ok"
+
+    definition = live_ai_mod._camel_tool_definition(query_corpus)
+    tools, client_map = ChatResponseEndpoint.parse_tools([definition])
+    schema = tools.to_dict()["tools"][0]["function"]["parameters"]
+    assert schema["required"] == ["query", "corpusName"]
+    assert "corpusName" in schema["properties"] and "topK" in schema["properties"]
+    assert "corpus_name" not in schema["properties"]
+
+
+def test_agent_build_tools_includes_list_corpora():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
-    assert "summarize_text" in names
+    assert "list_corpora" in names
 
 
-def test_store_corpus_passes_multimodal_config(monkeypatch):
+def test_store_corpus_passes_multimodal_config(tmp_path, monkeypatch):
     seen = {}
 
     class Recorder:
         def __init__(self, **kwargs):
             seen["init"] = kwargs
 
-        def store(self, directory, output, overwrite=False):
+        def store(self, directory, corpus_dir, overwrite=False):
             return "STORED"
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
     brain = _bare_embedding_brain(
-        image_model_path="clip", multimodal=True, processed_name="PROC.md",
-        image_extensions="png, jpg",
+        corpora_dir=str(tmp_path),
+        image_model_path="clip", multimodal=True, image_extensions="png, jpg",
     )
-    assert brain.store_corpus("/docs") == "STORED"
+    assert brain.store_corpus("/docs", "autosar") == "STORED"
     assert seen["init"]["image_model_path"] == "clip"
     assert seen["init"]["multimodal"] is True
-    assert seen["init"]["processed_name"] == "PROC.md"
     assert seen["init"]["image_extensions"] == "png, jpg"
+    assert "processed_name" not in seen["init"]
 
 
-def test_embedding_corpus_defaults_when_config_is_minimal(monkeypatch):
+def test_embedding_corpus_defaults_when_config_is_minimal(tmp_path, monkeypatch):
     seen = {}
 
     class Recorder:
         def __init__(self, **kwargs):
             seen["init"] = kwargs
 
-        def query(self, corpus_file, query, top_k=None, kind=None):
+        def query(self, corpus_dir, query, top_k=None, kind=None):
             return "RESULTS"
 
     monkeypatch.setattr(live_ai_mod, "EmbeddingCorpus", Recorder)
-    # Phase 1 style config: no image_model_path/multimodal/processed_name keys.
-    brain = _bare_embedding_brain()
-    brain.query_corpus("hi")
+    brain = _bare_embedding_brain(corpora_dir=str(tmp_path))
+    brain.query_corpus("hi", "autosar")
     assert seen["init"]["multimodal"] is False
     assert seen["init"]["image_model_path"] is None
-    assert seen["init"]["processed_name"] == "PROCESSED.md"
+    assert "processed_name" not in seen["init"]

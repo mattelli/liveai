@@ -86,13 +86,23 @@ Notes:
 - Tune the summary length with `ratio` or the per-call `max_sentences` argument.
 
 
-## Semantic search (corpus + FAISS)
+## Semantic search (named corpora + FAISS)
 
-The `store_corpus` tool indexes the documents in a directory and saves the
-embedded passages and images to a single corpus file. The `query_corpus` tool
-then returns the most relevant passages (and images). Both use a FAISS exact
-inner-product index (`IndexFlatIP`), which is cosine similarity on L2-normalized
-vectors.
+`store_corpus` builds a **named corpus** from a directory of documents and saves
+it under `.res/corpora/<corpus_name>/`. `query_corpus` searches one named corpus,
+and `list_corpora` lists the corpora that exist. Everything uses a FAISS exact
+inner-product index (`IndexFlatIP`) - cosine similarity on L2-normalized vectors.
+
+**Layout**
+
+```
+.res/corpora/
+  autosar/
+    corpus.pkl        # records + embeddings
+    metadata.json     # name, mode, counts, source dir, built time
+    processed.md      # absolute paths of the processed documents
+    images/           # extracted figures (only referenced files)
+```
 
 **Supported formats**
 
@@ -112,29 +122,22 @@ Legacy binary formats `.doc` and `.xls` are not supported (convert them to
 - `multimodal = false`: only text is embedded, with `model_path`
   (`.res/embedding/all-MiniLM-L6-v2`); image files are skipped.
 
-**Processed documents list**
+**Tools**
 
-After a successful build, a `PROCESSED.md` manifest is appended next to the
-corpus file, with a build header and one absolute path per processed document
-(failed files are annotated with `— ERROR: ...`). The list is **not** stored in
-the corpus pickle. Set `processed_name` to change the filename.
+- `list_corpora()` - lists the available corpora (from `metadata.json`, without
+  loading any pickle). Call it first when the user refers to a topic.
+- `store_corpus(directory, corpus_name, overwrite=False)` - builds the named
+  corpus. `corpus_name` is **required**. Refuses to overwrite an existing corpus
+  unless `overwrite=True`.
+- `query_corpus(query, corpus_name, kind="", top_k=0)` - searches the named
+  corpus. `corpus_name` is **required**; unknown names return a friendly error.
+  `kind="text"` or `kind="image"` restricts results (empty searches both).
 
-The model, corpus file and knobs are configured in `config.toml` (paths are
-resolved relative to `config.toml`; `processed_name` is relative to the corpus
-file):
+Example:
 
-```toml
-[embedding]
-model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
-image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)
-multimodal = true          # true -> use image_model_path for BOTH text and images
-device = "cpu"             # "cpu" or "cuda"
-corpus_path = ".res/corpus/corpus.pkl"  # resolved relative to config.toml
-processed_name = "PROCESSED.md"  # list of processed document absolute paths (NOT in the pkl)
-extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx, png, jpg, jpeg, webp, bmp, tiff"
-image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
-chunk_size = 3            # sentences per indexed passage
-top_k = 5                 # default number of results returned by query_corpus
+```
+store_corpus(directory=".tmp/corpus", corpus_name="autosar")
+query_corpus(query="cross cluster communication", corpus_name="autosar", top_k=3)
 ```
 
 The tools fail gracefully with a clear message until the model is stored in
@@ -146,65 +149,66 @@ multimodal model):
 ```bash
 # A) Hugging Face CLI (recommended)
 pip install -U huggingface_hub
-hf download sentence-transformers/all-MiniLM-L6-v2 \
-    --local-dir .res/embedding/all-MiniLM-L6-v2
-hf download sentence-transformers/clip-ViT-B-32 \
-    --local-dir .res/embedding/clip-ViT-B-32
+hf download sentence-transformers/all-MiniLM-L6-v2     --local-dir .res/embedding/all-MiniLM-L6-v2
+hf download sentence-transformers/clip-ViT-B-32     --local-dir .res/embedding/clip-ViT-B-32
 
 # B) git + git-lfs
 git lfs install
-git clone https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 \
-    .res/embedding/all-MiniLM-L6-v2
-git clone https://huggingface.co/sentence-transformers/clip-ViT-B-32 \
-    .res/embedding/clip-ViT-B-32
+git clone https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2     .res/embedding/all-MiniLM-L6-v2
+git clone https://huggingface.co/sentence-transformers/clip-ViT-B-32     .res/embedding/clip-ViT-B-32
 
 # C) Python (downloads into the HF cache, then saves a local copy)
-python -c "from sentence_transformers import SentenceTransformer; \
-SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')"
-python -c "from sentence_transformers import SentenceTransformer; \
-SentenceTransformer('sentence-transformers/clip-ViT-B-32').save('.res/embedding/clip-ViT-B-32')"
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')"
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/clip-ViT-B-32').save('.res/embedding/clip-ViT-B-32')"
 ```
 
 For multilingual text corpora, use the sample's aligned model instead by
-changing `model_path` (and re-building the corpus):
+changing `model_path` (and rebuilding the corpus):
 
 ```bash
-hf download sentence-transformers/quora-distilbert-multilingual \
-    --local-dir .res/embedding/quora-distilbert-multilingual
+hf download sentence-transformers/quora-distilbert-multilingual     --local-dir .res/embedding/quora-distilbert-multilingual
 ```
 
-Usage:
+The corpora root is configured in `config.toml` (resolved relative to it):
 
-- `store_corpus(directory="docs")` writes the configured `corpus_path` and its
-  `PROCESSED.md`; pass `corpus_file=...` to write elsewhere and `overwrite=True`
-  to replace an existing file.
-- `query_corpus(query="what is quantum computing?")` searches the configured
-  corpus; pass `corpus_file=...` for a different corpus and `top_k=...` to change
-  the number of results. Use `kind="text"` or `kind="image"` to restrict the
-  ranking to one record type (empty searches both). Tune `chunk_size` to control
-  passage length.
-- **Image search:** because text↔text CLIP scores are much higher than
-  text↔image scores, images are hidden when searching both. Use
-  `query_corpus(query="software cluster integration diagram", kind="image")`
+```toml
+[embedding]
+model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
+image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)
+multimodal = true          # true -> use image_model_path for BOTH text and images
+device = "cpu"             # "cpu" or "cuda"
+corpora_dir = ".res/corpora"  # resolved relative to config.toml
+extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx, png, jpg, jpeg, webp, bmp, tiff"
+image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
+chunk_size = 5            # sentences per indexed passage
+top_k = 5                 # default number of results returned by query_corpus
+```
+
+**Image search and cleanup**
+
+- Because text-to-text CLIP scores are much higher than text-to-image scores,
+  images are hidden when searching both. Use
+  `query_corpus(query="software cluster integration diagram", corpus_name="autosar", kind="image")`
   to rank only image records; matches are returned as `[image] <path>` and the
-  files live under `.res/corpus/corpus_images/`.
-- **Image cleanup:** embedded PDF images are filtered on extraction — soft masks,
-  tiny icons (`< 64 px` on a side) and near-blank fills are skipped — and
-  byte-identical images are de-duplicated, so `corpus_images/` holds only
-  distinct, usable figures (its contents match the corpus records exactly).
+  files live under `.res/corpora/<corpus_name>/images/`.
+- Embedded PDF images are filtered on extraction - soft masks, tiny icons
+  (`< 64 px` on a side) and near-blank fills are skipped - and byte-identical
+  images are de-duplicated, so `images/` holds only distinct, usable figures.
+
+Each successful build also writes `.res/corpora/<corpus_name>/processed.md` with
+one absolute path per processed document (failed files are annotated); it is not
+stored in the pickle.
 
 Notes:
 
-- Inspect a built corpus with `python inspect_corpus.py` (see `--help` for
-  filters such as `--sources`, `--kind image`, `--source`, `--grep`, `--record N`
-  and `--json`).
+- Inspect a named corpus with `python samples/inspect_corpus.py --list` and
+  `python samples/inspect_corpus.py --corpus autosar` (filters: `--sources`,
+  `--kind image`, `--source`, `--grep`, `--record N`, `--json`).
 - Requires `faiss-cpu`, `pymupdf`, `python-docx` and `openpyxl` (installed into
   `.lms` by `setup-lms-cpu.ps1`).
-- The corpus file is a pickle containing the records and their normalized
-  embeddings; rebuild it whenever a model path, `extensions`, `multimodal` or
+- Rebuild a corpus whenever a model path, `extensions`, `multimodal` or
   `chunk_size` changes.
-- `.res/` is git-ignored, so downloaded weights, corpora and `PROCESSED.md` are
-  never committed.
+- `.res/` is git-ignored, so downloaded weights and corpora are never committed.
 
 
 ## Setup (Python 3.12.10)

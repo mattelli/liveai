@@ -13,10 +13,10 @@ calibration_chunks = 20
 guard_factor = 1.0
 
 [brain] # llm configuration
-model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
+# model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
 # model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
 # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
-# model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
+model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
 # model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
 # model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
@@ -53,13 +53,12 @@ ratio = 0.1               # fraction of sentences to keep (0 < ratio <= 1)
 threshold = 0.5           # LexRank similarity threshold in [0, 1)
 max_sentences = 0         # 0 -> derive from ratio; >0 -> hard cap
 
-[embedding] # semantic search over a local corpus (sentence/image embeddings + FAISS)
+[embedding] # semantic search over one or more named local corpora
 model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
 image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)
 multimodal = true          # true -> use image_model_path for BOTH text and images
 device = "cpu"             # "cpu" or "cuda"
-corpus_path = ".res/corpus/corpus.pkl"  # resolved relative to this config file
-processed_name = "PROCESSED.md"  # list of processed document absolute paths (NOT in the pkl)
+corpora_dir = ".res/corpora"  # resolved relative to this config file
 extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx, png, jpg, jpeg, webp, bmp, tiff"
 image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
 chunk_size = 5             # sentences per indexed passage

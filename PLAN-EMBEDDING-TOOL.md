@@ -1,5 +1,14 @@
 # PLAN-EMBEDDING-TOOL.md — Add corpus build + semantic query tools
 
+> **Superseded (multi-corpus).** The single-corpus API described below
+> (`corpus_path`, `corpus_file`, `processed_name`, one pickle per corpus) has
+> been replaced by **`PLAN-MULTI-CORPUS.md`**: corpora are now named folders
+> under `.res/corpora/<corpus_name>/` and the tools are
+> `store_corpus(directory, corpus_name, overwrite=False)`,
+> `query_corpus(query, corpus_name, kind="", top_k=0)` and `list_corpora()`.
+> The extraction, filtering, embedding and query logic below is still accurate;
+> only the file-location/API parts are historical.
+
 This plan adds two related **semantic search function tools** to the live
 assistant, derived from `samples/sentence_transformers/semantic_search_quora_faiss.py`:
 

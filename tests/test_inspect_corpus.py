@@ -21,6 +21,14 @@ def make_payload():
     }
 
 
+def write_corpus(tmp_path, name="autosar"):
+    corpus_dir = tmp_path / name
+    corpus_dir.mkdir(parents=True)
+    with open(corpus_dir / "corpus.pkl", "wb") as handle:
+        pickle.dump(make_payload(), handle)
+    return name
+
+
 def test_as_records_v2_passthrough():
     payload = make_payload()
     assert inspect_corpus.as_records(payload) == payload["records"]
@@ -62,17 +70,48 @@ def test_checks_reports_normalization():
     assert checks["L2-normalized"] is True
 
 
-def test_main_missing_file_returns_error(tmp_path, capsys):
-    assert inspect_corpus.main([str(tmp_path / "nope.pkl")]) == 1
+def test_main_requires_corpus_or_list(tmp_path, capsys):
+    assert inspect_corpus.main(["--corpora-dir", str(tmp_path)]) == 1
+    assert "--corpus" in capsys.readouterr().err
+
+
+def test_main_missing_corpus_returns_error(tmp_path, capsys):
+    assert inspect_corpus.main(["--corpus", "nope", "--corpora-dir", str(tmp_path)]) == 1
     assert "Corpus not found" in capsys.readouterr().err
 
 
-def test_main_json_lists_items(tmp_path, capsys):
-    path = tmp_path / "corpus.pkl"
-    with open(path, "wb") as handle:
-        pickle.dump(make_payload(), handle)
+def test_main_invalid_name_returns_error(tmp_path, capsys):
+    assert inspect_corpus.main(["--corpus", "a/b", "--corpora-dir", str(tmp_path)]) == 1
+    assert "Invalid corpus name" in capsys.readouterr().err
 
-    assert inspect_corpus.main([str(path), "--json", "--limit", "1"]) == 0
+
+def test_main_list_reads_metadata(tmp_path, capsys):
+    corpus_dir = tmp_path / "autosar"
+    corpus_dir.mkdir()
+    (corpus_dir / "metadata.json").write_text(
+        json.dumps({
+            "name": "autosar", "mode": "text", "records": 3,
+            "text_records": 3, "image_records": 0, "sources": 1, "built_at": "2026-01-01",
+        }),
+        encoding="utf-8",
+    )
+
+    assert inspect_corpus.main(["--list", "--corpora-dir", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "autosar" in out and "Available corpora (1)" in out
+
+
+def test_main_list_empty(tmp_path, capsys):
+    assert inspect_corpus.main(["--list", "--corpora-dir", str(tmp_path)]) == 0
+    assert "No corpora available." in capsys.readouterr().out
+
+
+def test_main_json_lists_items(tmp_path, capsys):
+    name = write_corpus(tmp_path)
+
+    assert inspect_corpus.main(
+        ["--corpus", name, "--corpora-dir", str(tmp_path), "--json", "--limit", "1"]
+    ) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["records"] == 2  # total count
     assert out["shown"] == 1
@@ -80,18 +119,19 @@ def test_main_json_lists_items(tmp_path, capsys):
 
 
 def test_main_record_json(tmp_path, capsys):
-    path = tmp_path / "corpus.pkl"
-    with open(path, "wb") as handle:
-        pickle.dump(make_payload(), handle)
+    name = write_corpus(tmp_path)
 
-    assert inspect_corpus.main([str(path), "--record", "1", "--json"]) == 0
+    assert inspect_corpus.main(
+        ["--corpus", name, "--corpora-dir", str(tmp_path), "--record", "1", "--json"]
+    ) == 0
     record = json.loads(capsys.readouterr().out)
     assert record["kind"] == "image" and record["image_path"] == "/tmp/a.png"
 
 
 def test_main_record_out_of_range(tmp_path, capsys):
-    path = tmp_path / "corpus.pkl"
-    with open(path, "wb") as handle:
-        pickle.dump(make_payload(), handle)
-    assert inspect_corpus.main([str(path), "--record", "99"]) == 1
+    name = write_corpus(tmp_path)
+
+    assert inspect_corpus.main(
+        ["--corpus", name, "--corpora-dir", str(tmp_path), "--record", "99"]
+    ) == 1
     assert "out of range" in capsys.readouterr().err
