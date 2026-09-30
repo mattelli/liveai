@@ -3,7 +3,7 @@ import pathlib
 import sys
 import lmstudio as lms
 from lmstudio.sync_api import PredictionStream
-from typing import Callable, Literal, get_type_hints
+from typing import Any, Callable, Literal, get_type_hints
 from logging import getLogger
 from datetime import datetime, timezone
 from src.common import SimpleNamespace, dump_func_call, cprint, StreamPrinter
@@ -127,21 +127,33 @@ class Brain:
         self.config = config
         self.logger.info("🚀 Connecting to LLM Model '%s' ...", config.brain.model)
         llm_only = lms.list_downloaded_models("llm")
+
+        def _match(model: Any) -> bool:
+            key = model.model_key
+            if config.brain.model == key:
+                return True
+            # Tolerate a missing/extra publisher prefix (e.g. "qwen3.5-0.8b"
+            # vs "qwen/qwen3.5-0.8b") by comparing the bare model name.
+            return config.brain.model.rsplit("/", 1)[-1] == key.rsplit("/", 1)[-1]
+
         for model in llm_only:
-            if config.brain.model == model.model_key:
+            if _match(model):
                 break
         else:
             raise ValueError(f"The configured Model '{config.brain.model}' is not available.")
+        # Use the exact key LM Studio reports for the matched model; a
+        # publisher-prefixed config value may not resolve on its own.
+        resolved_model_key = model.model_key
         try:
             current_model = lms.llm()
             current_model_info = current_model.get_info()
-            if current_model_info.model_key != config.brain.model:
+            if current_model_info.model_key != resolved_model_key:
                 self.logger.info("Unloading Model [%s]", current_model_info.model_key)
                 current_model.unload()
         except lms.LMStudioClientError:
             pass
 
-        self._model = lms.llm(config.brain.model)
+        self._model = lms.llm(resolved_model_key)
         self._info = self._model.get_info()
         self._context_window = self._info.context_length
         self._chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
