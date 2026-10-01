@@ -635,9 +635,9 @@ def _fake_openai(monkeypatch):
 
 def _remote_config(**brain_overrides):
     brain = dict(
-        provider="together", model="test-model", system_prompt="s",
+        model="test-model", system_prompt="s",
         history_path="h", temperature=0.6, max_response_tokens=0.2,
-        base_url="https://api.test/v1",
+        base_url="https://api.test/v1", api_key_env="TEST_API_KEY",
     )
     brain.update(brain_overrides)
     return SimpleNamespace(brain=SimpleNamespace(**brain))
@@ -671,27 +671,27 @@ def test_load_env_file_tolerates_missing_package(monkeypatch):
     live_ai_mod._load_env_file()  # must not raise
 
 
-def test_remote_agent_key_resolved_from_env_file(monkeypatch):
+def test_brain_key_resolved_from_env_file(monkeypatch):
     """With no shell env var, the key must come from the .env file."""
     pytest.importorskip("dotenv")
     _fake_openai(monkeypatch)
 
     def fake_load(dotenv_path=None, override=False, **kw):
-        monkeypatch.setenv("TOGETHER_API_KEY", "key-from-env")
+        monkeypatch.setenv("TEST_API_KEY", "key-from-env")
         return True
 
     monkeypatch.setattr("dotenv.load_dotenv", fake_load)
-    monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
+    monkeypatch.delenv("TEST_API_KEY", raising=False)
 
     agent = live_ai_mod.Brain(_remote_config())
     assert agent._client.api_key == "key-from-env"
     assert agent._base_url == "https://api.test/v1"  # explicit [brain] base_url
 
 
-def test_remote_agent_env_var_wins_over_env_file(monkeypatch):
+def test_brain_env_var_wins_over_env_file(monkeypatch):
     pytest.importorskip("dotenv")
     _fake_openai(monkeypatch)
-    monkeypatch.setenv("TOGETHER_API_KEY", "key-from-shell")
+    monkeypatch.setenv("TEST_API_KEY", "key-from-shell")
     monkeypatch.setattr("dotenv.load_dotenv", lambda **kw: True)  # file says otherwise
 
     agent = live_ai_mod.Brain(_remote_config())
@@ -699,23 +699,24 @@ def test_remote_agent_env_var_wins_over_env_file(monkeypatch):
 
 
 
-def test_remote_agent_missing_key_raises_with_env_name(monkeypatch):
+def test_brain_missing_key_raises_with_env_name(monkeypatch):
     _fake_openai(monkeypatch)
-    monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
+    monkeypatch.delenv("TEST_API_KEY", raising=False)
     monkeypatch.setattr(live_ai_mod, "_load_env_file", lambda: None)
-    with pytest.raises(ValueError, match="TOGETHER_API_KEY"):
+    with pytest.raises(ValueError, match="TEST_API_KEY"):
         live_ai_mod.Brain(_remote_config())
 
 
-def test_remote_agent_missing_provider_raises(monkeypatch):
+def test_brain_missing_base_url_raises(monkeypatch):
     _fake_openai(monkeypatch)
-    monkeypatch.setenv("TOGETHER_API_KEY", "abc")
-    with pytest.raises(ValueError, match="Unknown provider"):
-        live_ai_mod.Brain(_remote_config(provider=""))
-
-
-def test_remote_agent_missing_base_url_raises(monkeypatch):
-    _fake_openai(monkeypatch)
-    monkeypatch.setenv("TOGETHER_API_KEY", "abc")
+    monkeypatch.setenv("TEST_API_KEY", "abc")
     with pytest.raises(ValueError, match="base_url"):
         live_ai_mod.Brain(_remote_config(base_url=""))
+
+
+def test_brain_missing_api_key_env_raises(monkeypatch):
+    """The env var name must be configured ([brain] api_key_env)."""
+    _fake_openai(monkeypatch)
+    monkeypatch.setattr(live_ai_mod, "_load_env_file", lambda: None)
+    with pytest.raises(ValueError, match="API key not found"):
+        live_ai_mod.Brain(_remote_config(api_key_env=""))

@@ -203,13 +203,10 @@ class Brain:
         except ImportError as exc:
             raise ImportError("pip install openai  # required for the OpenAI-based Brain") from exc
 
-        provider = getattr(config.brain, "provider", "")
-        if not provider:
-            raise ValueError(f"Unknown provider '{provider}'")
         base_url = getattr(config.brain, "base_url", "")
         if not base_url:
             raise ValueError(f"Missing [brain] base_url")
-        api_key_env = getattr(config.brain, "api_key_env", "") or f"{provider.upper()}_API_KEY"
+        api_key_env = getattr(config.brain, "api_key_env", "")
         _load_env_file()  # fill unset variables from .env (real env vars win)
         api_key = os.environ.get(api_key_env)
         if not api_key:
