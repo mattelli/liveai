@@ -6,8 +6,6 @@ import os
 import pathlib
 import sys
 import types
-import lmstudio as lms
-from lmstudio.sync_api import PredictionStream
 from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 from logging import getLogger
 from datetime import datetime, timezone
@@ -15,8 +13,8 @@ from src.common import SimpleNamespace, dump_func_call, cprint, StreamPrinter
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command,
-    web_search, webpage_headlines, webpage_content, capture_image, 
-    fetch_financial_data, save_financial_chart, 
+    web_search, webpage_headlines, webpage_content, capture_image,
+    fetch_financial_data, save_financial_chart,
     search_pattern_in_files, replace_string_in_file, search_in_file
 )
 from src.summarizer import TextSummarizer
@@ -45,64 +43,14 @@ def __getattr__(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-def _camelize(name: str) -> str:
-    """``corpus_name`` -> ``corpusName`` (single words are unchanged)."""
-    head, *rest = name.split("_")
-    return head + "".join(part.capitalize() for part in rest)
-
-
-def _camel_tool_definition(tool: Callable) -> dict:
-    """Describe ``tool`` to the LLM with camelCase parameter names.
-
-    LM Studio validates the arguments produced by the model against the names
-    advertised in the tool schema *before* calling the Python implementation.
-    Qwen-style models emit camelCase names (``corpusName``) even when the schema
-    uses snake_case (``corpus_name``), so argument parsing fails with
-    ``Object missing required field `corpus_name```.
-
-    We advertise the camelCase spelling and translate the incoming arguments
-    back to the real Python parameter names, so the model never sees a mismatch.
-    """
-    signature = inspect.signature(tool)
-    try:
-        hints = get_type_hints(tool, include_extras=True)
-    except Exception:
-        hints = getattr(tool, "__annotations__", {}) or {}
-
-    parameters: dict = {}
-    alias: dict[str, str] = {}
-    for name, param in signature.parameters.items():
-        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
-            continue
-        camel = _camelize(name)
-        alias[camel] = name
-        annotation = hints.get(name, str)
-        if param.default is inspect.Parameter.empty:
-            parameters[camel] = annotation
-        else:
-            parameters[camel] = {"type": annotation, "default": param.default}
-
-    def implementation(**kwargs):
-        return tool(**{alias.get(key, key): value for key, value in kwargs.items()})
-
-    implementation.__name__ = getattr(tool, "__name__", "tool")
-    implementation.__doc__ = getattr(tool, "__doc__", "")
-    return {
-        "name": implementation.__name__,
-        "description": (implementation.__doc__ or "").strip(),
-        "parameters": parameters,
-        "implementation": implementation,
-    }
-
-
 def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
     """Resolve ``[brain] max_response_tokens`` into a per-generation cap.
 
     The config value is a ratio of the model's context window, so the cap
-    self-adapts to whichever model is loaded: ``0.1`` on a 4k-window model
+    self-adapts to whichever model is configured: ``0.1`` on a 4k-window model
     caps a response at ~409 tokens. Valid range is 0 < ratio < 1; unset/0
     keeps the historical default of the full context window (no practical
-    cap). The cap bounds any single generation - including one LM Studio
+    cap). The cap bounds any single generation - including one the provider
     cannot stop instantly after Ctrl+C (e.g. cancelled during prompt
     processing) - so a stale prediction can never monopolise the model.
     """
@@ -123,10 +71,8 @@ def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
 
 
 # ---------------------------------------------------------------------------
-# OpenAI-compatible remote providers (API-key models)
+# OpenAI-compatible providers (API-key models)
 # ---------------------------------------------------------------------------
-
-
 
 _JSON_TYPES: dict[type, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
 
@@ -163,9 +109,9 @@ def _json_schema(annotation: Any) -> dict:
 def _openai_tool_definition(tool: Callable) -> dict:
     """Describe ``tool`` in OpenAI function-calling (JSON Schema) format.
 
-    Unlike the LM Studio schema, parameter names keep their snake_case
-    spelling: cloud models handle it natively, and the arguments come back as
-    a JSON blob that can be passed to the implementation directly.
+    Parameter names keep their snake_case spelling: OpenAI-compatible models
+    handle it natively, and the arguments come back as a JSON blob that can be
+    passed to the implementation directly.
     """
     signature = inspect.signature(tool)
     try:
@@ -195,7 +141,7 @@ def _openai_tool_definition(tool: Callable) -> dict:
 
 
 def _default_tools(agent: "Brain") -> list[Callable]:
-    """Tool set shared by the local (LM Studio) and remote agents."""
+    """Tool set of the agent."""
     return [
         agent.model_info, agent.recall_personal, agent.store_personal,
         agent.image_response, agent.allow_speech, agent.clear_chat,
@@ -235,76 +181,74 @@ def _load_env_file(dotenv_path: pathlib.Path | None = None) -> None:
 
 class Brain:
     """
-    Brain class that connects to the LLM model.
-    Basic function calls like model response, streaming, and printing are available.
+    Brain that connects to an OpenAI-compatible chat API (API-key providers).
+
+    Talks to ``[brain] base_url`` with the ``openai`` client, so cloud models
+    (OpenAI, Mistral, Groq, OpenRouter, DeepSeek, Together, Gemini, xAI,
+    Anthropic, ...) work with the same session and tools as a local server.
+    The API key is read from the environment variable named by
+    ``[brain] api_key_env`` (default ``<PROVIDER>_API_KEY``, also resolved
+    from a project ``.env`` file) and must never be stored in config.toml.
+    Basic function calls like model response, streaming, and printing are
+    available.
     """
+
+    DEFAULT_CONTEXT_WINDOW = 128_000
+
     def __init__(self, config: SimpleNamespace):
         self.logger = getLogger(self.__class__.__name__)
         self.config = config
-        self.logger.info("🚀 Connecting to LLM Model '%s' ...", config.brain.model)
-        llm_only = lms.list_downloaded_models("llm")
-
-        def _match(model: Any) -> bool:
-            key = model.model_key
-            if config.brain.model == key:
-                return True
-            # Tolerate a missing/extra publisher prefix (e.g. "qwen3.5-0.8b"
-            # vs "qwen/qwen3.5-0.8b") by comparing the bare model name.
-            return config.brain.model.rsplit("/", 1)[-1] == key.rsplit("/", 1)[-1]
-
-        for model in llm_only:
-            if _match(model):
-                break
-        else:
-            raise ValueError(f"The configured Model '{config.brain.model}' is not available.")
-        # Use the exact key LM Studio reports for the matched model; a
-        # publisher-prefixed config value may not resolve on its own.
-        resolved_model_key = model.model_key
         try:
-            current_model = lms.llm()
-            current_model_info = current_model.get_info()
-            if current_model_info.model_key != resolved_model_key:
-                self.logger.info("Unloading Model [%s]", current_model_info.model_key)
-                current_model.unload()
-        except lms.LMStudioClientError:
-            pass
+            from openai import OpenAI  # lazy import: keeps startup light
+        except ImportError as exc:
+            raise ImportError("pip install openai  # required for the OpenAI-based Brain") from exc
 
-        self._model = lms.llm(resolved_model_key)
-        self._info = self._model.get_info()
-        self._context_window = self._info.context_length
-        self._chat = lms.Chat(initial_prompt=self.config.brain.system_prompt)
+        provider = getattr(config.brain, "provider", "")
+        if not provider:
+            raise ValueError(f"Unknown provider '{provider}'")
+        base_url = getattr(config.brain, "base_url", "")
+        if not base_url:
+            raise ValueError(f"Missing [brain] base_url")
+        api_key_env = getattr(config.brain, "api_key_env", "") or f"{provider.upper()}_API_KEY"
+        _load_env_file()  # fill unset variables from .env (real env vars win)
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            raise ValueError(
+                f"API key not found: set the '{api_key_env}' environment variable, "
+                f"e.g. put '{api_key_env}=sk-...' in the project .env file "
+                f"or run: setx {api_key_env} 'sk-...'")
+
+        self.logger.info("🚀 Connecting to remote model '%s' @ %s ...", config.brain.model, base_url)
+        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._model_name = config.brain.model
+        self._base_url = base_url
+        self._context_window = int(
+            getattr(config.brain, "context_window", 0) or self.DEFAULT_CONTEXT_WINDOW
+        )
+        self._vision = bool(getattr(config.brain, "vision", False))
+        self._temperature = getattr(config.brain, "temperature", 0.7)
+        self._max_tokens = _response_token_cap(
+            getattr(config.brain, "max_response_tokens", 0),
+            self._context_window,
+        )
+        self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
         self._stream = StreamPrinter(text_color="cyan")
         self._cancel_requested = False
-        self._active_stream: PredictionStream | None = None
-        self._chat_cfg = {
-            "temperature": self.config.brain.temperature,
-            "maxTokens": _response_token_cap(
-                getattr(self.config.brain, "max_response_tokens", 0),
-                self._context_window,
-            ),
-        }
-        self.logger.info("✅ LLM Model '%s' connected.", self.config.brain.model)
+        self._active_stream = None
+        self.logger.info("✅ Remote model '%s' connected.", self._model_name)
+
+    ## history plumbing (plain OpenAI-style dicts) ##
 
     def _add_user_prompt(self, prompt: str):
         self._repair_history()
-        self._chat.add_user_message(prompt)
+        self._messages.append({"role": "user", "content": prompt})
         self.logger.debug("Prompt:\n%s", prompt)
-
-    @staticmethod
-    def _message_text(message) -> str:
-        """Concatenated text parts of a chat message (tool parts ignored)."""
-        texts = []
-        for part in getattr(message, "content", None) or []:
-            text = part.get("text", "") if isinstance(part, dict) else getattr(part, "text", "")
-            if isinstance(text, str):
-                texts.append(text)
-        return "".join(texts)
 
     def _repair_history(self) -> None:
         """Keep the chat history template-valid across cancelled/failed turns.
 
-        LM Studio prompt templates require user/assistant roles to alternate
-        (tool-call/result sequences excepted). Two failure modes break that:
+        Prompt templates require user/assistant roles to alternate (tool-call
+        /result sequences excepted). Two failure modes break that:
 
         * a Ctrl+C-cancelled generation can end in an *empty* assistant
           message; templates drop empty turns, which leaves a tool result
@@ -317,64 +261,82 @@ class Brain:
         Called before each new prompt: pad the empty assistant turn with a
         minimal placeholder and drop a trailing unanswered user prompt.
         """
-        messages = self._chat._messages
+        messages = self._messages
         while messages:
-            role = getattr(messages[-1], "role", None)
+            role = messages[-1].get("role")
             if role == "assistant":
-                if not self._message_text(messages[-1]).strip():
+                if not str(messages[-1].get("content") or "").strip():
                     messages.pop()
-                    self._chat.append(
-                        {"role": "assistant", "content": {"text": CANCELLED_PLACEHOLDER}}
-                    )
+                    messages.append({"role": "assistant", "content": CANCELLED_PLACEHOLDER})
                 break
             if role == "user":
                 messages.pop()  # unanswered prompt from a failed/aborted turn
                 continue
-            break  # tool/system endings are left to the SDK layer
+            break
+
+    def _get_messages(self) -> list[dict]:
+        # Shape expected by store_personal/_get_messages_from: text at content[0]["text"].
+        return [
+            {"role": m["role"], "content": [{"text": m["content"]}]}
+            for m in self._messages
+            if isinstance(m.get("content"), str)
+        ]
+
+    @staticmethod
+    def _get_messages_from(role: Role, msg:list) -> list[str]:
+        try:
+            return [m["content"][0]["text"] for m in msg if m["role"] == role]
+        except:
+            return []
+
+    ## generation ##
 
     @property
     def cancel_requested(self) -> bool:
         """True while a user cancel (Ctrl+C) is pending for the current turn."""
         return self._cancel_requested
 
-    def cancel_generation(self) -> str:
-        """
-        Stop the in-flight model response as soon as possible (best effort).
-        Not exposed to the LLM; invoked by the session's Ctrl+C handling.
-        Cancels the active prediction stream server-side (stop reason
-        ``userStopped``) for both streamed responses and ``act()`` rounds
-        (via the SDK's ``on_prediction_stream`` callback); the pending flag
-        covers a cancel raised while a tool is running (between rounds).
-        Partial output is kept in the chat history.
-        """
-        self._cancel_requested = True
-        stream, self._active_stream = self._active_stream, None
-        if stream is not None:
-            try:
-                stream.cancel()
-            except Exception as exc:
-                self.logger.debug("Cancelling prediction stream failed: %s", exc)
-        return "Cancel requested"
+    def _stream_completion(self, tools: list[dict] | None = None):
+        kwargs: dict = {
+            "model": self._model_name,
+            "messages": self._messages,
+            "stream": True,
+            "temperature": self._temperature,
+            # Legacy name, still accepted by all OpenAI-compatible endpoints.
+            "max_tokens": self._max_tokens,
+        }
+        if tools:
+            kwargs["tools"] = tools
+        return self._client.chat.completions.create(**kwargs)
 
-    def model_fragments(self, prompt: str) -> PredictionStream:
+    def model_fragments(self, prompt: str):
         """
         Get response fragments as stream from the model for a given prompt.
         Tools are not supported in this method.
         """
-        self.logger.info("Sending to Model [🤖: %s] ...", self.config.brain.model)
+        self.logger.info("Sending to Model [🤖: %s] ...", self._model_name)
         self._add_user_prompt(prompt)
         self._cancel_requested = False  # fresh turn
         self._stream.start_spinner("thinking")
-        resp_stream = self._model.respond_stream(
-            self._chat,
-            on_message=self._chat.append,
-            config=self._chat_cfg,
-            on_prompt_processing_progress=lambda p: self._stream.note(
-                f"processing prompt {min(100, int(p * 100))}%"
-            ),
-        )
-        self._active_stream = resp_stream
-        return resp_stream
+        stream = self._stream_completion()
+        self._active_stream = stream
+        parts: list[str] = []
+        try:
+            for chunk in stream:
+                if self._cancel_requested:
+                    break
+                delta = _stream_delta(chunk)
+                if delta is not None and delta.content:
+                    parts.append(delta.content)
+                    yield SimpleNamespace(content=delta.content)
+        finally:
+            self._active_stream = None
+            # Keep partial (or cancelled) output in the history.
+            text = "".join(parts)
+            if text:
+                self._messages.append({"role": "assistant", "content": text})
+            elif self._cancel_requested:
+                self._messages.append({"role": "assistant", "content": CANCELLED_PLACEHOLDER})
 
     def print_fragment(self, fragment):
         """
@@ -389,18 +351,28 @@ class Brain:
         self._stream.flush()
         self._stream.stop_spinner()
 
-    def _get_messages(self) -> list[dict]:
-        try:
-            return self._chat._get_history().get("messages", [])
-        except:
-            return []
+    def cancel_generation(self) -> str:
+        """
+        Stop the in-flight model response as soon as possible (best effort).
+        Not exposed to the LLM; invoked by the session's Ctrl+C handling.
+        Closes the active HTTP stream for both streamed responses and ``act()``
+        rounds; the pending flag covers a cancel raised while a tool is
+        running (between rounds). Partial output is kept in the chat history.
+        """
+        self._cancel_requested = True
+        stream, self._active_stream = self._active_stream, None
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception as exc:
+                self.logger.debug("Closing prediction stream failed: %s", exc)
+        return "Cancel requested"
 
-    @staticmethod
-    def _get_messages_from(role: Role, msg:list) -> list[str]:
-        try:
-            return [m["content"][0]["text"] for m in msg if m["role"] == role]
-        except:
-            return []
+    def _context_usage(self) -> tuple[float, int]:
+        """Approximate context usage (no server-side tokenizer available)."""
+        chars = sum(len(str(m.get("content") or "")) for m in self._messages)
+        tokens = chars // 4  # rough ~4 chars per token estimate
+        return float(tokens / self._context_window) * 100, self._context_window
 
     ## TOOLS CALLS ##
 
@@ -410,15 +382,15 @@ class Brain:
         Useful when user ask for cleaning conversation history.
         """
         try:
-            msg_list = self._get_messages()
-            self._chat._messages.clear()
-            sys_msg = self._get_messages_from(role="system", msg=msg_list)
-            usr_msg = self._get_messages_from(role="user", msg=msg_list)
-            system_prompt = sys_msg[0] if sys_msg else self.config.brain.system_prompt
-            self._chat.add_system_prompt(system_prompt)
-            self._chat.add_user_message(self.recall_personal())
-            if usr_msg:
-                self._chat.add_user_message(usr_msg[-1])
+            system = next(
+                (m["content"] for m in self._messages if m["role"] == "system"),
+                self.config.brain.system_prompt,
+            )
+            user_msgs = [m["content"] for m in self._messages if m["role"] == "user"]
+            self._messages = [{"role": "system", "content": system}]
+            self._messages.append({"role": "user", "content": self.recall_personal()})
+            if user_msgs:
+                self._messages.append({"role": "user", "content": user_msgs[-1]})
             return "Chat cleared successfully"
         except Exception as e:
             return f"Error: {e}"
@@ -429,20 +401,41 @@ class Brain:
         Returns the loaded model info.
         Useful when user ask for information about the loaded model.
         """
-        return str(self._info)
+        return f"model={self._model_name} base_url={self._base_url} (OpenAI-compatible API)"
 
     @dump_func_call
-    def image_response(self, image:str, prompt:str = "describe the image") -> str:
+    def image_response(self, image: str, prompt: str = "describe the image") -> str:
         """
         Provide text response form an input image.
-        Useful when user asks for getting a description of the input image content. 
+        Useful when user asks for getting a description of the input image content.
         """
-        if not self._info.vision:
-            return "Cannot handle images"
-        image_handle = lms.prepare_image(image)
-        self._chat.add_user_message(prompt, images=[image_handle])
-        prediction  = self._model.respond(self._chat)
-        return prediction.content
+        if not self._vision:
+            return "Cannot handle images (set [brain] vision = true and use a vision-capable model)"
+        if str(image).startswith(("http://", "https://")):
+            image_url = {"url": str(image)}
+        else:
+            data = pathlib.Path(image).read_bytes()
+            mime = mimetypes.guess_type(str(image))[0] or "image/png"
+            image_url = {"url": f"data:{mime};base64,{base64.b64encode(data).decode()}"}
+        self._messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": image_url},
+            ],
+        })
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._model_name,
+                messages=self._messages,
+                temperature=self._temperature,
+            )
+        except Exception as e:
+            self._messages.pop()  # drop the image turn: provider rejected it
+            return f"Error: {e}"
+        answer = resp.choices[0].message.content or ""
+        self._messages.append({"role": "assistant", "content": answer})
+        return answer
 
     @dump_func_call
     def summarize_text(self, file: str, max_sentences: int = 0) -> str:
@@ -565,7 +558,7 @@ class Brain:
     def store_personal(self) ->  str:
         """
         Stores the user personal content to a text file.
-        Useful when the users explicitly mention the prompted text is "personal". 
+        Useful when the users explicitly mention the prompted text is "personal".
         """
         history = pathlib.Path(self.config.brain.history_path).resolve()
         now = datetime.now(tz=timezone.utc)
@@ -589,335 +582,42 @@ class Brain:
     def recall_personal(self) -> str:
         """
         Read users personal data from file.
-        Useful when the users ask to recall their personal data. 
+        Useful when the users ask to recall their personal data.
         """
         history = pathlib.Path(self.config.brain.history_path).resolve()
         if not history.exists():
             return "No personal data found!"
         else:
             return history.read_text(encoding="utf-8")
-        
+
 
 class Agent(Brain):
     """
-    Agent class that extends the Brain with tool usage capabilities.
+    Agent that extends the Brain with OpenAI function-calling tool usage.
+
+    Implements the round-based ``act()`` loop: stream a round, run the
+    requested tools, feed the results back, and repeat until the model
+    answers without tool calls.
     """
+
+    MAX_ACT_ROUNDS = 20
+
     def _build_tools(self) -> list[Callable]:
         return _default_tools(self)
 
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
-        self._fragments_buffer:list[str] = []
-        self.logger.info(
-            "✅ Agent with Model '%s' initialized. Setting up tools ...", 
-            self.config.brain.model
-        )
-        self.tools:list[Callable] = self._build_tools()
-        self.tool_definitions:list[dict] = [_camel_tool_definition(tool) for tool in self.tools]
-        self.logger.info(
-            "✅ Agent with Model '%s' is ready with [%d] tools.", 
-            self.config.brain.model, len(self.tools)
-        )
-
-    def bootstrap(self) -> None:
-        """Run the configured bootstrap prompt (called by the session, not on init)."""
-        if self.config.agent.bootstrap_prompt:
-            self.act(self.config.agent.bootstrap_prompt)
-
-    def _handle_prediction_stream(self, stream, round_index=0):
-        """Track each ``act()`` round's prediction stream for Ctrl+C support.
-
-        Called by the (patched) LM Studio SDK when each round's stream
-        starts. A cancel requested while a tool was running (between
-        rounds) is applied immediately here, so the new round stops
-        before generating.
-        """
-        if self._cancel_requested:
-            stream.cancel()
-        self._active_stream = stream
-
-    def _handle_fragment(self, fragment, round_index=0):
-        self._fragments_buffer.append(fragment.content)
-        self.print_fragment(fragment)
-
-    def _handle_round_end(self, round_index=0):
-        formatted = self._model.apply_prompt_template(self._chat)
-        token_count = len(self._model.tokenize(formatted))
-        context_usage_percentage = float(token_count/self._context_window) * 100
-        self._stream.flush()  # keep the spinner alive across rounds
-        cprint("")
-        cprint("-"*50 + f"\ncontext: {context_usage_percentage:.2f} % [{int(self._context_window / 1000)}k]\n", "grey")
-        self._stream.mark_line_clean()  # spinner may resume for the next round
-        self._stream.note("working")
-        response = " ".join(self._fragments_buffer).strip()
-        if not self._cancel_requested and hasattr(self, "speech"):
-            self.speech.speak(response)
-        self._fragments_buffer.clear()
-
-    def act(self, prompt: str):
-        """
-        Perform an action based on the input prompt. 
-        The response may involve using tools or just generating a text.
-        """
-        cprint(f"\n🤖 [{self.config.brain.model}]", "grey")
-        self.logger.info("Sending to Agent [🤖: %s] ...", self.config.brain.model)
-        self._add_user_prompt(prompt)
-        self._cancel_requested = False  # fresh turn
-        self._stream.start_spinner("thinking")
-        try:
-            self._model.act(
-                self._chat,
-                self.tool_definitions,
-                on_message=self._chat.append,
-                config=self._chat_cfg,
-                on_prediction_fragment=self._handle_fragment,
-                on_prediction_stream=self._handle_prediction_stream,
-                on_prompt_processing_progress=lambda p, _round=0: self._stream.note(
-                    f"processing prompt {min(100, int(p * 100))}%"
-                ),
-                on_round_end=self._handle_round_end
-            )
-        finally:
-            self._stream.stop_spinner()
-            self._active_stream = None
-
-
-class RemoteBrain(Brain):
-    """
-    Brain backed by any OpenAI-compatible chat API (API-key providers).
-
-    Instead of the LM Studio SDK, this talks to ``base_url`` with the
-    ``openai`` client, so cloud models (OpenAI, Mistral, Groq, OpenRouter,
-    DeepSeek, Gemini, xAI, Anthropic, ...) work with the same session and
-    tools as local models. The API key is read from the environment variable
-    named by ``[brain] api_key_env`` and must never be stored in config.toml.
-    """
-
-    DEFAULT_CONTEXT_WINDOW = 128_000
-
-    def __init__(self, config: SimpleNamespace):
-        self.logger = getLogger(self.__class__.__name__)
-        self.config = config
-        try:
-            from openai import OpenAI  # lazy import: only remote providers need it
-        except ImportError as exc:
-            raise ImportError(
-                "pip install openai  # required for [brain] provider != 'lmstudio'"
-            ) from exc
-
-        provider = getattr(config.brain, "provider", "")
-        if not provider:
-            raise ValueError(f"Unknown provider '{provider}'")
-        base_url = getattr(config.brain, "base_url", "") 
-        if not base_url:
-            raise ValueError(f"Missing [brain] base_url")
-        api_key_env = getattr(config.brain, "api_key_env", "") or f"{provider.upper()}_API_KEY"
-        _load_env_file()  # fill unset variables from .env (real env vars win)
-        api_key = os.environ.get(api_key_env)
-        if not api_key:
-            raise ValueError(
-                f"API key not found: set the '{api_key_env}' environment variable, "
-                f"e.g. put '{api_key_env}=sk-...' in the project .env file "
-                f"or run: setx {api_key_env} 'sk-...'")
-
-        self.logger.info("🚀 Connecting to remote model '%s' @ %s ...", config.brain.model, base_url)
-        self._client = OpenAI(base_url=base_url, api_key=api_key)
-        self._model_name = config.brain.model
-        self._base_url = base_url
-        self._context_window = int(
-            getattr(config.brain, "context_window", 0) or self.DEFAULT_CONTEXT_WINDOW
-        )
-        self._vision = bool(getattr(config.brain, "vision", False))
-        self._temperature = getattr(config.brain, "temperature", 0.7)
-        self._max_tokens = _response_token_cap(
-            getattr(config.brain, "max_response_tokens", 0),
-            self._context_window,
-        )
-        self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
-        self._stream = StreamPrinter(text_color="cyan")
-        self._cancel_requested = False
-        self._active_stream = None
-        self.logger.info("✅ Remote model '%s' connected.", self._model_name)
-
-    ## history plumbing (plain OpenAI-style dicts instead of lms.Chat) ##
-
-    def _add_user_prompt(self, prompt: str):
-        self._repair_history()
-        self._messages.append({"role": "user", "content": prompt})
-        self.logger.debug("Prompt:\n%s", prompt)
-
-    def _repair_history(self) -> None:
-        """Same contract as ``Brain._repair_history`` on plain-dict messages."""
-        messages = self._messages
-        while messages:
-            role = messages[-1].get("role")
-            if role == "assistant":
-                if not str(messages[-1].get("content") or "").strip():
-                    messages.pop()
-                    messages.append({"role": "assistant", "content": CANCELLED_PLACEHOLDER})
-                break
-            if role == "user":
-                messages.pop()  # unanswered prompt from a failed/aborted turn
-                continue
-            break
-
-    def _get_messages(self) -> list[dict]:
-        # Shape expected by store_personal/_get_messages_from: text at content[0]["text"].
-        return [
-            {"role": m["role"], "content": [{"text": m["content"]}]}
-            for m in self._messages
-            if isinstance(m.get("content"), str)
-        ]
-
-    ## generation ##
-
-    def _stream_completion(self, tools: list[dict] | None = None):
-        kwargs: dict = {
-            "model": self._model_name,
-            "messages": self._messages,
-            "stream": True,
-            "temperature": self._temperature,
-            # Legacy name, still accepted by all OpenAI-compatible endpoints.
-            "max_tokens": self._max_tokens,
-        }
-        if tools:
-            kwargs["tools"] = tools
-        return self._client.chat.completions.create(**kwargs)
-
-    def model_fragments(self, prompt: str):
-        """
-        Get response fragments as stream from the model for a given prompt.
-        Tools are not supported in this method.
-        """
-        self.logger.info("Sending to Model [🤖: %s] ...", self._model_name)
-        self._add_user_prompt(prompt)
-        self._cancel_requested = False  # fresh turn
-        self._stream.start_spinner("thinking")
-        stream = self._stream_completion()
-        self._active_stream = stream
-        parts: list[str] = []
-        try:
-            for chunk in stream:
-                if self._cancel_requested:
-                    break
-                delta = _stream_delta(chunk)
-                if delta is not None and delta.content:
-                    parts.append(delta.content)
-                    yield SimpleNamespace(content=delta.content)
-        finally:
-            self._active_stream = None
-            # Keep partial (or cancelled) output in the history, like LM Studio.
-            text = "".join(parts)
-            if text:
-                self._messages.append({"role": "assistant", "content": text})
-            elif self._cancel_requested:
-                self._messages.append({"role": "assistant", "content": CANCELLED_PLACEHOLDER})
-
-    def cancel_generation(self) -> str:
-        """
-        Stop the in-flight model response as soon as possible (best effort).
-        Closes the HTTP stream; partial output already shown is kept in the
-        chat history.
-        """
-        self._cancel_requested = True
-        stream, self._active_stream = self._active_stream, None
-        if stream is not None:
-            try:
-                stream.close()
-            except Exception as exc:
-                self.logger.debug("Closing prediction stream failed: %s", exc)
-        return "Cancel requested"
-
-    ## tools ##
-
-    @dump_func_call
-    def model_info(self) -> str:
-        """
-        Returns the loaded model info.
-        Useful when user ask for information about the loaded model.
-        """
-        return f"model={self._model_name} base_url={self._base_url} (OpenAI-compatible API)"
-
-    @dump_func_call
-    def clear_chat(self) -> bool:
-        """
-        Useful when user ask for cleaning conversation history.
-        """
-        try:
-            system = next(
-                (m["content"] for m in self._messages if m["role"] == "system"),
-                self.config.brain.system_prompt,
-            )
-            user_msgs = [m["content"] for m in self._messages if m["role"] == "user"]
-            self._messages = [{"role": "system", "content": system}]
-            self._messages.append({"role": "user", "content": self.recall_personal()})
-            if user_msgs:
-                self._messages.append({"role": "user", "content": user_msgs[-1]})
-            return "Chat cleared successfully"
-        except Exception as e:
-            return f"Error: {e}"
-
-    @dump_func_call
-    def image_response(self, image: str, prompt: str = "describe the image") -> str:
-        """
-        Provide text response form an input image.
-        Useful when user asks for getting a description of the input image content.
-        """
-        if not self._vision:
-            return "Cannot handle images (set [brain] vision = true and use a vision-capable model)"
-        if str(image).startswith(("http://", "https://")):
-            image_url = {"url": str(image)}
-        else:
-            data = pathlib.Path(image).read_bytes()
-            mime = mimetypes.guess_type(str(image))[0] or "image/png"
-            image_url = {"url": f"data:{mime};base64,{base64.b64encode(data).decode()}"}
-        self._messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": image_url},
-            ],
-        })
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._model_name,
-                messages=self._messages,
-                temperature=self._temperature,
-            )
-        except Exception as e:
-            self._messages.pop()  # drop the image turn: provider rejected it
-            return f"Error: {e}"
-        answer = resp.choices[0].message.content or ""
-        self._messages.append({"role": "assistant", "content": answer})
-        return answer
-
-    def _context_usage(self) -> tuple[float, int]:
-        """Approximate context usage (no server-side tokenizer available)."""
-        chars = sum(len(str(m.get("content") or "")) for m in self._messages)
-        tokens = chars // 4  # rough ~4 chars per token estimate
-        return float(tokens / self._context_window) * 100, self._context_window
-
-
-class RemoteAgent(RemoteBrain):
-    """
-    Agent that extends RemoteBrain with OpenAI function-calling tool usage.
-
-    Reimplements the round-based ``act()`` loop the LM Studio SDK provides
-    natively: stream a round, run the requested tools, feed the results back,
-    and repeat until the model answers without tool calls.
-    """
-
-    MAX_ACT_ROUNDS = 20
-
-    def __init__(self, config: SimpleNamespace):
-        super().__init__(config)
         self._fragments_buffer: list[str] = []
-        self.tools: list[Callable] = _default_tools(self)
+        self.logger.info(
+            "✅ Agent with Model '%s' initialized. Setting up tools ...",
+            self._model_name
+        )
+        self.tools: list[Callable] = self._build_tools()
         self.tool_definitions: list[dict] = [_openai_tool_definition(tool) for tool in self.tools]
         self._tool_impls = {tool.__name__: tool for tool in self.tools}
         self.logger.info(
-            "✅ Remote Agent with Model '%s' is ready with [%d] tools.",
-            self._model_name, len(self.tools),
+            "✅ Agent with Model '%s' is ready with [%d] tools.",
+            self._model_name, len(self.tools)
         )
 
     def bootstrap(self) -> None:
@@ -1030,16 +730,3 @@ class RemoteAgent(RemoteBrain):
         finally:
             self._stream.stop_spinner()
             self._active_stream = None
-
-
-def create_agent(config: SimpleNamespace) -> Brain:
-    """Build the Agent selected by ``[brain] provider``.
-
-    ``'lmstudio'`` (default) uses the local LM Studio SDK; any other known
-    provider name (``openai``, ``groq``, ``mistral``, ``openrouter``, ...) uses
-    the OpenAI-compatible remote backend with an API key from the environment.
-    """
-    provider = getattr(getattr(config, "brain", None), "provider", "lmstudio") or "lmstudio"
-    if provider == "lmstudio":
-        return Agent(config)
-    return RemoteAgent(config)

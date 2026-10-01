@@ -26,9 +26,9 @@ def main(argv=None) -> int:
         datefmt="%H:%M:%S",
     )
     from src.session import ConversationSession
-    from src.live_ai import create_agent  # lazy import: keeps `import main` side-effect free
+    from src.live_ai import Agent  # lazy import: keeps `import main` side-effect free
 
-    agent = create_agent(config=config)
+    agent = Agent(config=config)
     reader = None
 
     try:

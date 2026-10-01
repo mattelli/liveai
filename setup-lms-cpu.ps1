@@ -28,7 +28,6 @@ python -m pip install --upgrade pip
 
 Write-Host ""
 Write-Host "=== Installing required Python packages ==="
-pip install lmstudio
 pip install openai
 pip install python-dotenv
 pip install piper-tts
@@ -61,26 +60,6 @@ pip install openpyxl
 
 # DEV
 pip install pytest
-
-
-Write-Host ""
-Write-Host "=== Applying local lmstudio SDK patch (act: on_prediction_stream) ==="
-# Exposes each prediction round's stream in .act() so responses can be
-# cancelled cleanly with Ctrl+C. Re-run this block after any `pip install
-# lmstudio` (a reinstall reverts the patch); it fails harmlessly if already
-# applied.
-$sdkPatch = Join-Path $PSScriptRoot "patches\lmstudio-1.5.0-act-on_prediction_stream.patch"
-if (Test-Path $sdkPatch) {
-    git -C $PSScriptRoot apply --directory="$environment_name\Lib\site-packages" --check $sdkPatch 2>$null
-    if ($LASTEXITCODE -eq 0) {
-        git -C $PSScriptRoot apply --directory="$environment_name\Lib\site-packages" $sdkPatch
-        Write-Host "SDK patch applied."
-    } else {
-        Write-Host "SDK patch not applicable (already applied, or SDK version changed) - skipping."
-    }
-} else {
-    Write-Host "No SDK patch file found - skipping."
-}
 
 
 Write-Host ""

@@ -4,8 +4,6 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("lmstudio", reason="live_ai imports lmstudio at module level")
-
 import src.live_ai as live_ai_mod  # noqa: E402
 
 
@@ -312,36 +310,6 @@ def test_agent_build_tools_includes_embedding_tools():
     assert "store_corpus" in names and "query_corpus" in names
 
 
-def test_camel_tool_definition_advertises_and_translates():
-    def query_corpus(query: str, corpus_name: str, kind: str = "", top_k: int = 0) -> str:
-        """Search a named corpus."""
-        return f"{query}|{corpus_name}|{kind}|{top_k}"
-
-    definition = live_ai_mod._camel_tool_definition(query_corpus)
-    assert set(definition["parameters"]) == {"query", "corpusName", "kind", "topK"}
-    assert definition["parameters"]["corpusName"] is str
-    assert definition["parameters"]["topK"] == {"type": int, "default": 0}
-    # The model emits camelCase; the implementation maps it to the real names.
-    assert definition["implementation"](
-        query="q", corpusName="autosar", kind="image", topK=2
-    ) == "q|autosar|image|2"
-
-
-def test_camel_tool_definition_schema_uses_camel_case():
-    from lmstudio.json_api import ChatResponseEndpoint
-
-    def query_corpus(query: str, corpus_name: str, kind: str = "", top_k: int = 0) -> str:
-        """Search a named corpus."""
-        return "ok"
-
-    definition = live_ai_mod._camel_tool_definition(query_corpus)
-    tools, client_map = ChatResponseEndpoint.parse_tools([definition])
-    schema = tools.to_dict()["tools"][0]["function"]["parameters"]
-    assert schema["required"] == ["query", "corpusName"]
-    assert "corpusName" in schema["properties"] and "topK" in schema["properties"]
-    assert "corpus_name" not in schema["properties"]
-
-
 def test_agent_build_tools_includes_list_corpora():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
@@ -397,6 +365,7 @@ class _BareAgent(live_ai_mod.Agent):
     def __init__(self):  # noqa: D107 - deliberately bypasses Brain.__init__
         self.logger = getLogger("test")
         self.config = SimpleNamespace(brain=SimpleNamespace(model="m"))
+        self._model_name = "m"
         self._cancel_requested = False
         self._active_stream = None
         self._fragments_buffer = []
@@ -406,10 +375,10 @@ class _BareAgent(live_ai_mod.Agent):
 def test_cancel_generation_marks_flag_and_cancels_stream():
     class FakeStream:
         def __init__(self):
-            self.cancel_calls = 0
+            self.close_calls = 0
 
-        def cancel(self):
-            self.cancel_calls += 1
+        def close(self):
+            self.close_calls += 1
 
     agent = _BareAgent()
     stream = FakeStream()
@@ -418,7 +387,7 @@ def test_cancel_generation_marks_flag_and_cancels_stream():
     assert agent.cancel_requested is False
     assert agent.cancel_generation() == "Cancel requested"
     assert agent.cancel_requested is True
-    assert stream.cancel_calls == 1
+    assert stream.close_calls == 1
     assert agent._active_stream is None  # stale handle dropped
 
     # A cancel without an active stream (act() rounds) still flags the turn.
@@ -428,36 +397,12 @@ def test_cancel_generation_marks_flag_and_cancels_stream():
 
     # Cancelling a dead stream must never raise.
     class BrokenStream:
-        def cancel(self):
+        def close(self):
             raise RuntimeError("already closed")
 
     agent._active_stream = BrokenStream()
     assert agent.cancel_generation() == "Cancel requested"
     assert agent._active_stream is None
-
-
-def test_prediction_stream_tracked_and_pending_cancel_applied():
-    """Each act() round's stream is tracked; a pending cancel stops the new round."""
-    class FakeStream:
-        def __init__(self):
-            self.cancel_calls = 0
-
-        def cancel(self):
-            self.cancel_calls += 1
-
-    agent = _BareAgent()
-    stream = FakeStream()
-    agent._handle_prediction_stream(stream, 0)
-    assert agent._active_stream is stream
-    assert stream.cancel_calls == 0  # no pending cancel -> stream keeps running
-
-    # Cancel requested while a tool was running (between rounds):
-    # the next round's stream is cancelled immediately on registration.
-    agent._cancel_requested = True
-    stream2 = FakeStream()
-    agent._handle_prediction_stream(stream2, 1)
-    assert stream2.cancel_calls == 1
-    assert agent._active_stream is stream2
 
 
 def test_cancelled_round_does_not_speak():
@@ -467,13 +412,6 @@ def test_cancelled_round_does_not_speak():
 
         def speak(self, text):
             self.spoken.append(text)
-
-    class FakeModel:
-        def apply_prompt_template(self, chat):
-            return ""
-
-        def tokenize(self, text):
-            return []
 
     class FakeStream:
         def flush(self):
@@ -487,8 +425,7 @@ def test_cancelled_round_does_not_speak():
 
     agent = _BareAgent()
     agent.speech = FakeSpeech()
-    agent._model = FakeModel()
-    agent._chat = None
+    agent._messages = []
     agent._context_window = 4096
     agent._stream = FakeStream()
     agent._fragments_buffer = ["partial"]
@@ -501,107 +438,6 @@ def test_cancelled_round_does_not_speak():
     agent._fragments_buffer = ["full"]
     agent._handle_round_end(1)
     assert agent.speech.spoken == ["full"]
-
-
-# ------------------------------------------- patched SDK: act() stream exposure
-
-
-def _bare_llm(monkeypatch, fake_stream_factory):
-    """LLM handle wired to FakeStreamSpec, bypassing any real connection."""
-    from logging import getLogger
-
-    import lmstudio as lms
-    import lmstudio.sync_api as sync_api
-
-    class FakeSession:
-        def _create_channel(self, endpoint):
-            return None  # the fake stream never touches the channel
-
-    llm = sync_api.LLM.__new__(sync_api.LLM)
-    llm.identifier = "test-model"
-    llm._session = FakeSession()
-    llm._logger = getLogger("test")
-    monkeypatch.setattr(sync_api, "PredictionStream", fake_stream_factory)
-    return lms, llm
-
-
-class FakeStreamSpec:
-    """Stand-in for act()'s per-round PredictionStream (patched SDK contract)."""
-
-    def __init__(self, channel_cm, endpoint):
-        self.endpoint = endpoint
-        self.started = False
-        self.cancel_calls = 0
-        self._cancelled = False
-
-    def start(self):
-        self.started = True
-
-    def cancel(self):
-        self.cancel_calls += 1
-        self._cancelled = True
-
-    def _iter_events(self):
-        yield ("fragment",)  # never a tool call event
-
-    def result(self):
-        if self._cancelled:
-            return _FakePrediction("partial answer", "userStopped")
-        return _FakePrediction("full answer", "eosFound")
-
-
-class _FakePrediction(str):
-    """PredictionResult double: str content + stats.stop_reason + .content."""
-
-    def __new__(cls, content, stop_reason):
-        obj = super().__new__(cls, content)
-        obj.content = content
-        obj.stats = SimpleNamespace(stop_reason=stop_reason)
-        return obj
-
-
-def dummy_tool() -> str:
-    """Does nothing; must never run during a cancelled round."""
-    return "ok"
-
-
-def test_act_cancelled_round_delivers_partial_and_stops(monkeypatch):
-    """on_prediction_stream exposes a started stream; cancel ends the agent loop."""
-    lms, llm = _bare_llm(monkeypatch, FakeStreamSpec)
-    received, messages, round_ends = [], [], []
-    act_result = llm.act(
-        lms.Chat("system"),
-        [dummy_tool],
-        on_message=messages.append,
-        on_round_end=round_ends.append,
-        on_prediction_stream=lambda stream, index: (
-            received.append((stream, index)), stream.cancel()
-        ),
-    )
-    assert act_result.rounds == 1
-    (stream, index), = received
-    assert index == 0
-    assert stream.started  # callback gets an already-started, cancellable stream
-    assert stream.cancel_calls == 1
-    assert messages[0].content[0].text == "partial answer"
-    assert round_ends == [0]  # partial round is still reported via on_round_end
-
-
-def test_act_normal_round_reports_full_response(monkeypatch):
-    lms, llm = _bare_llm(monkeypatch, FakeStreamSpec)
-    received, messages, round_ends = [], [], []
-    act_result = llm.act(
-        lms.Chat("system"),
-        [dummy_tool],
-        on_message=messages.append,
-        on_round_end=round_ends.append,
-        on_prediction_stream=lambda stream, index: received.append(stream),
-    )
-    assert act_result.rounds == 1
-    stream, = received
-    assert stream.started and stream.cancel_calls == 0
-    assert messages[0].content[0].text == "full answer"
-    assert round_ends == [0]
 
 
 # ------------------------------------------------------------ response cap
@@ -634,31 +470,13 @@ def test_response_token_cap_rejects_values_outside_0_1(bad):
 # --------------------------------------------- history repair after cancels
 
 
-class FakeHistoryChat:
-    """Minimal self._chat double: struct-like messages in a plain list."""
-
-    def __init__(self, messages):
-        self._messages = list(messages)
-
-    def append(self, message):
-        self._messages.append(
-            SimpleNamespace(
-                role=message["role"],
-                content=[SimpleNamespace(text=message["content"]["text"])],
-            )
-        )
-
-    def add_user_message(self, text):
-        self._messages.append(SimpleNamespace(role="user", content=[SimpleNamespace(text=text)]))
-
-
-def _msg(role, *texts):
-    return SimpleNamespace(role=role, content=[SimpleNamespace(text=t) for t in texts])
+def _msg(role, content):
+    return {"role": role, "content": content}
 
 
 def _bare_repair_agent(messages):
     agent = _BareAgent()
-    agent._chat = FakeHistoryChat(messages)
+    agent._messages = list(messages)
     return agent
 
 
@@ -667,8 +485,8 @@ def test_history_repair_pads_empty_assistant_turn():
         [_msg("user", "hello"), _msg("assistant", "")]  # cancelled, no tokens
     )
     agent._add_user_prompt("next question")
-    assert agent._chat._messages[-2].content[0].text == live_ai_mod.CANCELLED_PLACEHOLDER
-    assert agent._chat._messages[-1].content[0].text == "next question"
+    assert agent._messages[-2]["content"] == live_ai_mod.CANCELLED_PLACEHOLDER
+    assert agent._messages[-1]["content"] == "next question"
 
 
 def test_history_repair_drops_unanswered_user_prompts():
@@ -678,7 +496,7 @@ def test_history_repair_drops_unanswered_user_prompts():
         [_msg("user", "first"), _msg("user", "never answered")]  # error turns
     )
     agent._add_user_prompt("next question")
-    assert [m.content[0].text for m in agent._chat._messages] == ["next question"]
+    assert [m["content"] for m in agent._messages] == ["next question"]
 
 
 def test_history_repair_cascades_cancelled_then_errored_turn():
@@ -690,7 +508,7 @@ def test_history_repair_cascades_cancelled_then_errored_turn():
         ]
     )
     agent._add_user_prompt("next question")
-    assert [m.content[0].text for m in agent._chat._messages] == [
+    assert [m["content"] for m in agent._messages] == [
         "ask",
         live_ai_mod.CANCELLED_PLACEHOLDER,
         "next question",
@@ -701,7 +519,7 @@ def test_history_repair_keeps_partial_and_normal_history():
     partial = [_msg("user", "ask"), _msg("assistant", "partial text")]
     agent = _bare_repair_agent(list(partial))
     agent._add_user_prompt("next")
-    assert [m.content[0].text for m in agent._chat._messages] == [
+    assert [m["content"] for m in agent._messages] == [
         "ask",
         "partial text",
         "next",
@@ -710,37 +528,97 @@ def test_history_repair_keeps_partial_and_normal_history():
     healthy = [_msg("user", "q"), _msg("assistant", "a")]
     agent = _bare_repair_agent(list(healthy))
     agent._add_user_prompt("next")
-    assert [m.content[0].text for m in agent._chat._messages] == ["q", "a", "next"]
+    assert [m["content"] for m in agent._messages] == ["q", "a", "next"]
 
 
-class EmptyCancelStreamSpec(FakeStreamSpec):
-    """Cancelled round that generated nothing (LM Studio stopped pre-token)."""
+class FakeRoundStream:
+    """StreamPrinter stand-in for act() round-loop tests (no console output)."""
 
-    def result(self):
-        if self._cancelled:
-            return _FakePrediction("", "userStopped")
-        return _FakePrediction("full answer", "eosFound")
+    def start_spinner(self, note):
+        pass
+
+    def stop_spinner(self):
+        pass
+
+    def flush(self):
+        pass
+
+    def mark_line_clean(self):
+        pass
+
+    def note(self, text):
+        pass
 
 
-def test_act_cancelled_empty_round_gets_placeholder(monkeypatch):
+def _bare_act_agent(rounds):
+    """Agent whose completion rounds are scripted in ``rounds``.
+
+    Each item is a ``(text, tool_calls)`` tuple returned by ``_stream_round``;
+    ``tool_calls`` are executed against ``tools`` (name -> callable).
+    """
+    agent = _BareAgent()
+    agent._stream = FakeRoundStream()
+    agent._context_window = 1024
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent.tool_definitions = []
+    agent._tool_impls = {}
+    scripted = iter(rounds)
+
+    def fake_round(tools):
+        return next(scripted)
+
+    agent._stream_round = fake_round
+    return agent
+
+
+def test_act_plain_answer_round_appends_history():
+    agent = _bare_act_agent([("hello there", [])])
+    agent.act("hi")
+    assert agent._messages[-1] == {"role": "assistant", "content": "hello there"}
+
+
+def test_act_tool_round_feeds_result_and_continues():
+    calls = []
+
+    def get_time():
+        calls.append("get_time")
+        return "12:00"
+
+    agent = _bare_act_agent([
+        ("", [{"id": "c1", "name": "get_time", "arguments": "{}"}]),
+        ("It is 12:00", []),
+    ])
+    agent._tool_impls = {"get_time": get_time}
+    agent.act("What time is it?")
+    assert calls == ["get_time"]
+    # history: system, user, assistant(tool_calls), tool result, final answer
+    assert [m["role"] for m in agent._messages[2:]] == ["assistant", "tool", "assistant"]
+    assert agent._messages[3] == {"role": "tool", "tool_call_id": "c1", "content": "12:00"}
+    assert agent._messages[-1]["content"] == "It is 12:00"
+
+
+def test_act_cancelled_empty_round_gets_placeholder():
     """An empty cancelled round must not append an empty assistant turn."""
-    lms, llm = _bare_llm(monkeypatch, EmptyCancelStreamSpec)
-    messages = []
-    llm.act(
-        lms.Chat("system"),
-        [dummy_tool],
-        on_message=messages.append,
-        on_prediction_stream=lambda stream, index: stream.cancel(),
-    )
+    agent = _bare_act_agent([("", [])])
+
+    def cancelled_round(tools):
+        agent._cancel_requested = True  # Ctrl+C landed during the round
+        return "", []
+
+    agent._stream_round = cancelled_round
+    agent.act("anything")
     # Empty text would be dropped by the model's prompt template, leaving a
-    # tool result directly followed by a user message (role alternation error).
-    assert messages[0].content[0].text == live_ai_mod.CANCELLED_PLACEHOLDER
+    # user message directly followed by another user message (role alternation
+    # error); the placeholder keeps the history renderable.
+    assert agent._messages[-1] == {
+        "role": "assistant", "content": live_ai_mod.CANCELLED_PLACEHOLDER,
+    }
 
 
 ## Remote provider (.env / api key resolution) ##
 
 def _fake_openai(monkeypatch):
-    """Stub the openai package so RemoteBrain can be built offline."""
+    """Stub the openai package so the Brain can be built offline."""
     import sys
     import types
 
@@ -805,7 +683,7 @@ def test_remote_agent_key_resolved_from_env_file(monkeypatch):
     monkeypatch.setattr("dotenv.load_dotenv", fake_load)
     monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
 
-    agent = live_ai_mod.RemoteBrain(_remote_config())
+    agent = live_ai_mod.Brain(_remote_config())
     assert agent._client.api_key == "key-from-env"
     assert agent._base_url == "https://api.test/v1"  # explicit [brain] base_url
 
@@ -816,7 +694,7 @@ def test_remote_agent_env_var_wins_over_env_file(monkeypatch):
     monkeypatch.setenv("TOGETHER_API_KEY", "key-from-shell")
     monkeypatch.setattr("dotenv.load_dotenv", lambda **kw: True)  # file says otherwise
 
-    agent = live_ai_mod.RemoteBrain(_remote_config())
+    agent = live_ai_mod.Brain(_remote_config())
     assert agent._client.api_key == "key-from-shell"
 
 
@@ -826,18 +704,18 @@ def test_remote_agent_missing_key_raises_with_env_name(monkeypatch):
     monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
     monkeypatch.setattr(live_ai_mod, "_load_env_file", lambda: None)
     with pytest.raises(ValueError, match="TOGETHER_API_KEY"):
-        live_ai_mod.RemoteBrain(_remote_config())
+        live_ai_mod.Brain(_remote_config())
 
 
 def test_remote_agent_missing_provider_raises(monkeypatch):
     _fake_openai(monkeypatch)
     monkeypatch.setenv("TOGETHER_API_KEY", "abc")
     with pytest.raises(ValueError, match="Unknown provider"):
-        live_ai_mod.RemoteBrain(_remote_config(provider=""))
+        live_ai_mod.Brain(_remote_config(provider=""))
 
 
 def test_remote_agent_missing_base_url_raises(monkeypatch):
     _fake_openai(monkeypatch)
     monkeypatch.setenv("TOGETHER_API_KEY", "abc")
     with pytest.raises(ValueError, match="base_url"):
-        live_ai_mod.RemoteBrain(_remote_config(base_url=""))
+        live_ai_mod.Brain(_remote_config(base_url=""))

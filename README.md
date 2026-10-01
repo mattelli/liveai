@@ -2,7 +2,7 @@
 
 Simple example to create locally a live AI assistant.
 
-Mic → Whisper (STT) → LM Studio (LLM) → Piper (TTS)
+Mic → Whisper (STT) → LLM (OpenAI-compatible API) → Piper (TTS)
 
 
 ## Whisper
@@ -14,13 +14,12 @@ git lfs install
 git clone https://huggingface.co/guillaumekln/faster-whisper-medium
 ```
 
-## LM Studio SDK
-Run AI models, locally and privately. See [LM Studio](https://lmstudio.ai/)
-`lmstudio-python` provides a set APIs to interact with LLMs, embeddings models, and agentic flows.
-
-### CLI 
-To interact with the LM Studio Server use `lms -h` in the CLI.
-
+## LLM backend (OpenAI-compatible API)
+Run AI models from API-key providers through any OpenAI-compatible chat API
+(OpenAI, Mistral, Groq, OpenRouter, DeepSeek, Together, Gemini, xAI, ...)
+with the `openai` client. See `config.toml` `[brain]` for provider/model,
+`base_url` and `api_key_env`; the API key itself lives in the environment or
+a `.env` file (see `.env.example`), never in config.toml.
 
 ## Piper
 Piper is a local neural text-to-speech engine, see [Piper](https://github.com/OHF-Voice/piper1-gpl/tree/main)
@@ -216,7 +215,7 @@ Notes:
 OS Windows 11 (powershell)
 
 ```
-# Ai agent based on LM Studio API
+# Ai agent based on an OpenAI-compatible LLM API
 .\setup-lms-cpu.ps1
 
 # Stable-Diffusers pipeline
@@ -267,16 +266,13 @@ tool execution and while fenced code blocks are buffered for syntax
 highlighting (`writing python code (812 chars)`). It is erased automatically
 before each piece of real output and at the end of the turn.
 
-Stopping a response uses the LM Studio SDK with a local patch (see
-`patches/lmstudio-1.5.0-act-on_prediction_stream.patch`, re-applied by
-`setup-lms-cpu.ps1`): `act()` hands each prediction round's stream to the new
-`on_prediction_stream` callback, so Ctrl+C cancels generation server-side
-(`stop_reason = userStopped`), the partial answer stays in the chat history
-(a minimal placeholder is recorded if the model was stopped before generating
-anything, keeping user/assistant role alternation intact for the next
-request), and any further tool-call rounds are skipped. Before each new
-prompt, the agent also repairs the history from older cancelled/failed turns
-(drops unanswered prompts, pads empty assistant turns).
+Stopping a response closes the in-flight HTTP stream (best effort): the
+partial answer stays in the chat history (a minimal placeholder is recorded
+if the model was stopped before generating anything, keeping user/assistant
+role alternation intact for the next request), and any further tool-call
+rounds are skipped. Before each new prompt, the agent also repairs the
+history from older cancelled/failed turns (drops unanswered prompts, pads
+empty assistant turns).
 
 
 ## System Notes

@@ -13,11 +13,9 @@ calibration_chunks = 20
 guard_factor = 1.0
 
 [brain] # llm configuration
-# provider = "lmstudio" -> local model served by LM Studio (SDK)
-# provider = "openai" | "groq" | "mistral" | "openrouter" | "deepseek" | "together" |
-#            "gemini" | "xai" | "anthropic" | "ollama" | "lmstudio"
-#          -> any OpenAI-compatible API; requires `pip install openai` and the API key
-#             in the environment variable named by api_key_env (NEVER in this file)
+# Any OpenAI-compatible API (api key providers). `provider` names the backend and
+# derives the default key env var <PROVIDER>_API_KEY; the key itself lives in the
+# environment or a .env file (NEVER in this file). Requires `pip install openai`.
 provider = "together"
 # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
 model = "Prism-ML/Ternary-Bonsai-27B"  # Together chat model (reasoning + tools-capable)
@@ -25,9 +23,9 @@ model = "Prism-ML/Ternary-Bonsai-27B"  # Together chat model (reasoning + tools-
 # model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
 # model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
 # model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
-# --- remote provider options (used when provider != "lmstudio") ---
+# --- OpenAI-compatible API options ---
 # model = "gpt-4o-mini"
-base_url = "https://api.together.ai/v1"                  # empty -> known endpoint for the provider name
+base_url = "https://api.together.ai/v1"       # OpenAI-compatible endpoint of the provider
 api_key_env = "TOGETHER_API_KEY" # env var holding the key (default: <PROVIDER>_API_KEY);
                                  # also auto-read from a .env file next to main.py
                                  # when python-dotenv is installed (real env vars win)
