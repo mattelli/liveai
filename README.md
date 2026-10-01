@@ -17,9 +17,31 @@ git clone https://huggingface.co/guillaumekln/faster-whisper-medium
 ## LLM backend (OpenAI-compatible API)
 Run AI models from API-key providers through any OpenAI-compatible chat API
 (OpenAI, Mistral, Groq, OpenRouter, DeepSeek, Together, Gemini, xAI, ...)
-with the `openai` client. See `config.toml` `[brain]` for provider/model,
-`base_url` and `api_key_env`; the API key itself lives in the environment or
-a `.env` file (see `.env.example`), never in config.toml.
+with the `openai` client. See `config.toml` `[brain]` for model, `base_url`
+and `api_key_env`; the API key itself lives in the environment or a `.env`
+file (see `.env.example`), never in config.toml.
+
+### Local models (LM Studio / Ollama servers)
+The same Brain also runs fully local models: both LM Studio and Ollama expose
+an OpenAI-compatible endpoint, so only `base_url` (and a dummy key) change.
+
+| Server | Start | base_url |
+|---|---|---|
+| LM Studio | `lms server start` (or the app's Developer tab) | `http://localhost:1234/v1` |
+| Ollama | `ollama serve` | `http://localhost:11434/v1` |
+
+```toml
+[brain]
+model = "qwen/qwen3.5-8b"              # LM Studio model key (see `lms ls`)
+# model = "qwen3:8b"                   # Ollama model tag (see `ollama ls`)
+base_url = "http://localhost:1234/v1"  # or "http://localhost:11434/v1"
+api_key_env = "LMSTUDIO_API_KEY"       # or OLLAMA_API_KEY
+```
+
+Local servers ignore the key, but the client must still send one: put a dummy
+value in `.env` (e.g. `LMSTUDIO_API_KEY=localhost`).
+Streaming, tool calling and vision work as with cloud providers, depending on
+the model's capabilities.
 
 ## Piper
 Piper is a local neural text-to-speech engine, see [Piper](https://github.com/OHF-Voice/piper1-gpl/tree/main)
