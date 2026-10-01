@@ -1,3 +1,4 @@
+import pathlib
 from logging import getLogger
 from types import SimpleNamespace
 
@@ -734,3 +735,109 @@ def test_act_cancelled_empty_round_gets_placeholder(monkeypatch):
     # Empty text would be dropped by the model's prompt template, leaving a
     # tool result directly followed by a user message (role alternation error).
     assert messages[0].content[0].text == live_ai_mod.CANCELLED_PLACEHOLDER
+
+
+## Remote provider (.env / api key resolution) ##
+
+def _fake_openai(monkeypatch):
+    """Stub the openai package so RemoteBrain can be built offline."""
+    import sys
+    import types
+
+    stub = types.ModuleType("openai")
+
+    class FakeOpenAI:
+        def __init__(self, base_url=None, api_key=None):
+            self.base_url = base_url
+            self.api_key = api_key
+
+    stub.OpenAI = FakeOpenAI
+    monkeypatch.setitem(sys.modules, "openai", stub)
+
+
+def _remote_config(**brain_overrides):
+    brain = dict(
+        provider="together", model="test-model", system_prompt="s",
+        history_path="h", temperature=0.6, max_response_tokens=0.2,
+        base_url="https://api.test/v1",
+    )
+    brain.update(brain_overrides)
+    return SimpleNamespace(brain=SimpleNamespace(**brain))
+
+
+def test_load_env_file_defaults_to_project_root(monkeypatch):
+    pytest.importorskip("dotenv")
+    seen = {}
+
+    def fake_load(dotenv_path=None, override=None, **kw):
+        seen["path"], seen["override"] = dotenv_path, override
+        return True
+
+    monkeypatch.setattr("dotenv.load_dotenv", fake_load)
+    live_ai_mod._load_env_file()
+    assert seen["path"].name == ".env"
+    assert seen["path"].parent == pathlib.Path(live_ai_mod.__file__).resolve().parents[1]
+    assert seen["override"] is False  # real environment variables win
+
+
+def test_load_env_file_tolerates_missing_package(monkeypatch):
+    import builtins
+    real_import = builtins.__import__
+
+    def no_dotenv(name, *args, **kwargs):
+        if name == "dotenv":
+            raise ImportError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_dotenv)
+    live_ai_mod._load_env_file()  # must not raise
+
+
+def test_remote_agent_key_resolved_from_env_file(monkeypatch):
+    """With no shell env var, the key must come from the .env file."""
+    pytest.importorskip("dotenv")
+    _fake_openai(monkeypatch)
+
+    def fake_load(dotenv_path=None, override=False, **kw):
+        monkeypatch.setenv("TOGETHER_API_KEY", "key-from-env")
+        return True
+
+    monkeypatch.setattr("dotenv.load_dotenv", fake_load)
+    monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
+
+    agent = live_ai_mod.RemoteBrain(_remote_config())
+    assert agent._client.api_key == "key-from-env"
+    assert agent._base_url == "https://api.test/v1"  # explicit [brain] base_url
+
+
+def test_remote_agent_env_var_wins_over_env_file(monkeypatch):
+    pytest.importorskip("dotenv")
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TOGETHER_API_KEY", "key-from-shell")
+    monkeypatch.setattr("dotenv.load_dotenv", lambda **kw: True)  # file says otherwise
+
+    agent = live_ai_mod.RemoteBrain(_remote_config())
+    assert agent._client.api_key == "key-from-shell"
+
+
+
+def test_remote_agent_missing_key_raises_with_env_name(monkeypatch):
+    _fake_openai(monkeypatch)
+    monkeypatch.delenv("TOGETHER_API_KEY", raising=False)
+    monkeypatch.setattr(live_ai_mod, "_load_env_file", lambda: None)
+    with pytest.raises(ValueError, match="TOGETHER_API_KEY"):
+        live_ai_mod.RemoteBrain(_remote_config())
+
+
+def test_remote_agent_missing_provider_raises(monkeypatch):
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TOGETHER_API_KEY", "abc")
+    with pytest.raises(ValueError, match="Unknown provider"):
+        live_ai_mod.RemoteBrain(_remote_config(provider=""))
+
+
+def test_remote_agent_missing_base_url_raises(monkeypatch):
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TOGETHER_API_KEY", "abc")
+    with pytest.raises(ValueError, match="base_url"):
+        live_ai_mod.RemoteBrain(_remote_config(base_url=""))

@@ -13,12 +13,27 @@ calibration_chunks = 20
 guard_factor = 1.0
 
 [brain] # llm configuration
+# provider = "lmstudio" -> local model served by LM Studio (SDK)
+# provider = "openai" | "groq" | "mistral" | "openrouter" | "deepseek" | "together" |
+#            "gemini" | "xai" | "anthropic" | "ollama" | "lmstudio"
+#          -> any OpenAI-compatible API; requires `pip install openai` and the API key
+#             in the environment variable named by api_key_env (NEVER in this file)
+provider = "together"
 # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
-model = "mistralai/ministral-3-3b"        # OK Vision, NO Thinking
+model = "Prism-ML/Ternary-Bonsai-27B"  # Together chat model (reasoning + tools-capable)
 # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
 # model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
 # model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
 # model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
+# --- remote provider options (used when provider != "lmstudio") ---
+# model = "gpt-4o-mini"
+base_url = "https://api.together.ai/v1"                  # empty -> known endpoint for the provider name
+api_key_env = "TOGETHER_API_KEY" # env var holding the key (default: <PROVIDER>_API_KEY);
+                                 # also auto-read from a .env file next to main.py
+                                 # when python-dotenv is installed (real env vars win)
+# context_window = 128000        # used by the max_response_tokens ratio + context meter
+context_window = 262144         # Prism-ML/Ternary-Bonsai-27B native context window
+# vision = false                 # true for vision-capable models (enables image_response)
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 history_path = "chat_history.log"
 temperature = 0.6

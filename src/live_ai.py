@@ -1,9 +1,14 @@
+import base64
 import inspect
+import json
+import mimetypes
+import os
 import pathlib
 import sys
+import types
 import lmstudio as lms
 from lmstudio.sync_api import PredictionStream
-from typing import Any, Callable, Literal, get_type_hints
+from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 from logging import getLogger
 from datetime import datetime, timezone
 from src.common import SimpleNamespace, dump_func_call, cprint, StreamPrinter
@@ -115,6 +120,117 @@ def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
             f"got {max_response_tokens!r}"
         )
     return max(1, int(context_window * ratio))
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-compatible remote providers (API-key models)
+# ---------------------------------------------------------------------------
+
+
+
+_JSON_TYPES: dict[type, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
+
+
+def _json_schema(annotation: Any) -> dict:
+    """Best-effort JSON Schema for a Python type annotation.
+
+    ``Annotated[T, "description"]`` maps the string metadata to the schema's
+    ``description``, so tools can document parameters for the model.
+    """
+    metadata = getattr(annotation, "__metadata__", None)  # typing.Annotated
+    if metadata:
+        schema = _json_schema(get_args(annotation)[0])
+        for meta in metadata:
+            if isinstance(meta, str):
+                schema["description"] = meta
+                break
+        return schema
+    origin = get_origin(annotation)
+    if origin is Literal:
+        return {"type": "string", "enum": list(get_args(annotation))}
+    if origin in (list, set, tuple):
+        args = get_args(annotation)
+        return {"type": "array", "items": _json_schema(args[0]) if args else {}}
+    if origin is dict:
+        return {"type": "object"}
+    if origin is Union or origin is types.UnionType:
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]
+        return _json_schema(args[0]) if len(args) == 1 else {"type": "string"}
+    json_type = _JSON_TYPES.get(annotation)
+    return {"type": json_type} if json_type else {"type": "string"}
+
+
+def _openai_tool_definition(tool: Callable) -> dict:
+    """Describe ``tool`` in OpenAI function-calling (JSON Schema) format.
+
+    Unlike the LM Studio schema, parameter names keep their snake_case
+    spelling: cloud models handle it natively, and the arguments come back as
+    a JSON blob that can be passed to the implementation directly.
+    """
+    signature = inspect.signature(tool)
+    try:
+        hints = get_type_hints(tool, include_extras=True)
+    except Exception:
+        hints = getattr(tool, "__annotations__", {}) or {}
+
+    properties: dict = {}
+    required: list[str] = []
+    for name, param in signature.parameters.items():
+        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+            continue
+        schema = _json_schema(hints.get(name, str))
+        if param.default is inspect.Parameter.empty:
+            required.append(name)
+        else:
+            schema.setdefault("default", param.default)
+        properties[name] = schema
+    return {
+        "type": "function",
+        "function": {
+            "name": getattr(tool, "__name__", "tool"),
+            "description": (getattr(tool, "__doc__", "") or "").strip(),
+            "parameters": {"type": "object", "properties": properties, "required": required},
+        },
+    }
+
+
+def _default_tools(agent: "Brain") -> list[Callable]:
+    """Tool set shared by the local (LM Studio) and remote agents."""
+    return [
+        agent.model_info, agent.recall_personal, agent.store_personal,
+        agent.image_response, agent.allow_speech, agent.clear_chat,
+        agent.summarize_text,
+        agent.list_corpora, agent.store_corpus, agent.query_corpus,
+        capture_image, system_info, current_date_time, get_working_directory,
+        run_command, search_in_file, search_pattern_in_files,
+        read_text_file, replace_string_in_file, write_text_file,
+        web_search, webpage_content, webpage_headlines,
+        fetch_financial_data, save_financial_chart,
+        exit_gracefully
+    ]
+
+
+def _stream_delta(chunk: Any):
+    """First choice's delta of an OpenAI-compatible stream chunk (or None)."""
+    choices = getattr(chunk, "choices", None)
+    return choices[0].delta if choices else None
+
+
+def _load_env_file(dotenv_path: pathlib.Path | None = None) -> None:
+    """Load ``.env`` from the project root (next to ``main.py``).
+
+    Optional convenience: only active when ``python-dotenv`` is installed, so
+    secrets can live in a ``.env`` file instead of the shell. Existing
+    environment variables always win over file entries (``override=False``),
+    and the file is never required.
+    """
+    if dotenv_path is None:
+        dotenv_path = pathlib.Path(__file__).resolve().parents[1] / ".env"
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+    load_dotenv(dotenv_path=dotenv_path, override=False)
 
 
 class Brain:
@@ -487,18 +603,7 @@ class Agent(Brain):
     Agent class that extends the Brain with tool usage capabilities.
     """
     def _build_tools(self) -> list[Callable]:
-        return [
-            self.model_info, self.recall_personal, self.store_personal,
-            self.image_response, self.allow_speech, self.clear_chat,
-            self.summarize_text,
-            self.list_corpora, self.store_corpus, self.query_corpus,
-            capture_image, system_info, current_date_time, get_working_directory, 
-            run_command, search_in_file, search_pattern_in_files, 
-            read_text_file, replace_string_in_file, write_text_file,
-            web_search, webpage_content, webpage_headlines,
-            fetch_financial_data, save_financial_chart, 
-            exit_gracefully
-        ]
+        return _default_tools(self)
 
     def __init__(self, config: SimpleNamespace):
         super().__init__(config)
@@ -575,3 +680,366 @@ class Agent(Brain):
         finally:
             self._stream.stop_spinner()
             self._active_stream = None
+
+
+class RemoteBrain(Brain):
+    """
+    Brain backed by any OpenAI-compatible chat API (API-key providers).
+
+    Instead of the LM Studio SDK, this talks to ``base_url`` with the
+    ``openai`` client, so cloud models (OpenAI, Mistral, Groq, OpenRouter,
+    DeepSeek, Gemini, xAI, Anthropic, ...) work with the same session and
+    tools as local models. The API key is read from the environment variable
+    named by ``[brain] api_key_env`` and must never be stored in config.toml.
+    """
+
+    DEFAULT_CONTEXT_WINDOW = 128_000
+
+    def __init__(self, config: SimpleNamespace):
+        self.logger = getLogger(self.__class__.__name__)
+        self.config = config
+        try:
+            from openai import OpenAI  # lazy import: only remote providers need it
+        except ImportError as exc:
+            raise ImportError(
+                "pip install openai  # required for [brain] provider != 'lmstudio'"
+            ) from exc
+
+        provider = getattr(config.brain, "provider", "")
+        if not provider:
+            raise ValueError(f"Unknown provider '{provider}'")
+        base_url = getattr(config.brain, "base_url", "") 
+        if not base_url:
+            raise ValueError(f"Missing [brain] base_url")
+        api_key_env = getattr(config.brain, "api_key_env", "") or f"{provider.upper()}_API_KEY"
+        _load_env_file()  # fill unset variables from .env (real env vars win)
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            raise ValueError(
+                f"API key not found: set the '{api_key_env}' environment variable, "
+                f"e.g. put '{api_key_env}=sk-...' in the project .env file "
+                f"or run: setx {api_key_env} 'sk-...'")
+
+        self.logger.info("🚀 Connecting to remote model '%s' @ %s ...", config.brain.model, base_url)
+        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._model_name = config.brain.model
+        self._base_url = base_url
+        self._context_window = int(
+            getattr(config.brain, "context_window", 0) or self.DEFAULT_CONTEXT_WINDOW
+        )
+        self._vision = bool(getattr(config.brain, "vision", False))
+        self._temperature = getattr(config.brain, "temperature", 0.7)
+        self._max_tokens = _response_token_cap(
+            getattr(config.brain, "max_response_tokens", 0),
+            self._context_window,
+        )
+        self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
+        self._stream = StreamPrinter(text_color="cyan")
+        self._cancel_requested = False
+        self._active_stream = None
+        self.logger.info("✅ Remote model '%s' connected.", self._model_name)
+
+    ## history plumbing (plain OpenAI-style dicts instead of lms.Chat) ##
+
+    def _add_user_prompt(self, prompt: str):
+        self._repair_history()
+        self._messages.append({"role": "user", "content": prompt})
+        self.logger.debug("Prompt:\n%s", prompt)
+
+    def _repair_history(self) -> None:
+        """Same contract as ``Brain._repair_history`` on plain-dict messages."""
+        messages = self._messages
+        while messages:
+            role = messages[-1].get("role")
+            if role == "assistant":
+                if not str(messages[-1].get("content") or "").strip():
+                    messages.pop()
+                    messages.append({"role": "assistant", "content": CANCELLED_PLACEHOLDER})
+                break
+            if role == "user":
+                messages.pop()  # unanswered prompt from a failed/aborted turn
+                continue
+            break
+
+    def _get_messages(self) -> list[dict]:
+        # Shape expected by store_personal/_get_messages_from: text at content[0]["text"].
+        return [
+            {"role": m["role"], "content": [{"text": m["content"]}]}
+            for m in self._messages
+            if isinstance(m.get("content"), str)
+        ]
+
+    ## generation ##
+
+    def _stream_completion(self, tools: list[dict] | None = None):
+        kwargs: dict = {
+            "model": self._model_name,
+            "messages": self._messages,
+            "stream": True,
+            "temperature": self._temperature,
+            # Legacy name, still accepted by all OpenAI-compatible endpoints.
+            "max_tokens": self._max_tokens,
+        }
+        if tools:
+            kwargs["tools"] = tools
+        return self._client.chat.completions.create(**kwargs)
+
+    def model_fragments(self, prompt: str):
+        """
+        Get response fragments as stream from the model for a given prompt.
+        Tools are not supported in this method.
+        """
+        self.logger.info("Sending to Model [🤖: %s] ...", self._model_name)
+        self._add_user_prompt(prompt)
+        self._cancel_requested = False  # fresh turn
+        self._stream.start_spinner("thinking")
+        stream = self._stream_completion()
+        self._active_stream = stream
+        parts: list[str] = []
+        try:
+            for chunk in stream:
+                if self._cancel_requested:
+                    break
+                delta = _stream_delta(chunk)
+                if delta is not None and delta.content:
+                    parts.append(delta.content)
+                    yield SimpleNamespace(content=delta.content)
+        finally:
+            self._active_stream = None
+            # Keep partial (or cancelled) output in the history, like LM Studio.
+            text = "".join(parts)
+            if text:
+                self._messages.append({"role": "assistant", "content": text})
+            elif self._cancel_requested:
+                self._messages.append({"role": "assistant", "content": CANCELLED_PLACEHOLDER})
+
+    def cancel_generation(self) -> str:
+        """
+        Stop the in-flight model response as soon as possible (best effort).
+        Closes the HTTP stream; partial output already shown is kept in the
+        chat history.
+        """
+        self._cancel_requested = True
+        stream, self._active_stream = self._active_stream, None
+        if stream is not None:
+            try:
+                stream.close()
+            except Exception as exc:
+                self.logger.debug("Closing prediction stream failed: %s", exc)
+        return "Cancel requested"
+
+    ## tools ##
+
+    @dump_func_call
+    def model_info(self) -> str:
+        """
+        Returns the loaded model info.
+        Useful when user ask for information about the loaded model.
+        """
+        return f"model={self._model_name} base_url={self._base_url} (OpenAI-compatible API)"
+
+    @dump_func_call
+    def clear_chat(self) -> bool:
+        """
+        Useful when user ask for cleaning conversation history.
+        """
+        try:
+            system = next(
+                (m["content"] for m in self._messages if m["role"] == "system"),
+                self.config.brain.system_prompt,
+            )
+            user_msgs = [m["content"] for m in self._messages if m["role"] == "user"]
+            self._messages = [{"role": "system", "content": system}]
+            self._messages.append({"role": "user", "content": self.recall_personal()})
+            if user_msgs:
+                self._messages.append({"role": "user", "content": user_msgs[-1]})
+            return "Chat cleared successfully"
+        except Exception as e:
+            return f"Error: {e}"
+
+    @dump_func_call
+    def image_response(self, image: str, prompt: str = "describe the image") -> str:
+        """
+        Provide text response form an input image.
+        Useful when user asks for getting a description of the input image content.
+        """
+        if not self._vision:
+            return "Cannot handle images (set [brain] vision = true and use a vision-capable model)"
+        if str(image).startswith(("http://", "https://")):
+            image_url = {"url": str(image)}
+        else:
+            data = pathlib.Path(image).read_bytes()
+            mime = mimetypes.guess_type(str(image))[0] or "image/png"
+            image_url = {"url": f"data:{mime};base64,{base64.b64encode(data).decode()}"}
+        self._messages.append({
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": image_url},
+            ],
+        })
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._model_name,
+                messages=self._messages,
+                temperature=self._temperature,
+            )
+        except Exception as e:
+            self._messages.pop()  # drop the image turn: provider rejected it
+            return f"Error: {e}"
+        answer = resp.choices[0].message.content or ""
+        self._messages.append({"role": "assistant", "content": answer})
+        return answer
+
+    def _context_usage(self) -> tuple[float, int]:
+        """Approximate context usage (no server-side tokenizer available)."""
+        chars = sum(len(str(m.get("content") or "")) for m in self._messages)
+        tokens = chars // 4  # rough ~4 chars per token estimate
+        return float(tokens / self._context_window) * 100, self._context_window
+
+
+class RemoteAgent(RemoteBrain):
+    """
+    Agent that extends RemoteBrain with OpenAI function-calling tool usage.
+
+    Reimplements the round-based ``act()`` loop the LM Studio SDK provides
+    natively: stream a round, run the requested tools, feed the results back,
+    and repeat until the model answers without tool calls.
+    """
+
+    MAX_ACT_ROUNDS = 20
+
+    def __init__(self, config: SimpleNamespace):
+        super().__init__(config)
+        self._fragments_buffer: list[str] = []
+        self.tools: list[Callable] = _default_tools(self)
+        self.tool_definitions: list[dict] = [_openai_tool_definition(tool) for tool in self.tools]
+        self._tool_impls = {tool.__name__: tool for tool in self.tools}
+        self.logger.info(
+            "✅ Remote Agent with Model '%s' is ready with [%d] tools.",
+            self._model_name, len(self.tools),
+        )
+
+    def bootstrap(self) -> None:
+        """Run the configured bootstrap prompt (called by the session, not on init)."""
+        if self.config.agent.bootstrap_prompt:
+            self.act(self.config.agent.bootstrap_prompt)
+
+    def _handle_fragment(self, content: str) -> None:
+        self._fragments_buffer.append(content)
+        self.print_fragment(SimpleNamespace(content=content))
+
+    def _handle_round_end(self, round_index: int = 0) -> None:
+        context_usage_percentage, context_window = self._context_usage()
+        self._stream.flush()  # keep the spinner alive across rounds
+        cprint("")
+        cprint("-"*50 + f"\ncontext: {context_usage_percentage:.2f} % [{int(context_window / 1000)}k]\n", "grey")
+        self._stream.mark_line_clean()  # spinner may resume for the next round
+        self._stream.note("working")
+        response = " ".join(self._fragments_buffer).strip()
+        if not self._cancel_requested and hasattr(self, "speech"):
+            self.speech.speak(response)
+        self._fragments_buffer.clear()
+
+    def _stream_round(self, tools: list[dict]) -> tuple[str, list[dict]]:
+        """Stream one completion round; return (text, accumulated tool calls)."""
+        stream = self._stream_completion(tools)
+        self._active_stream = stream
+        parts: list[str] = []
+        calls: dict[int, dict] = {}
+        try:
+            for chunk in stream:
+                if self._cancel_requested:
+                    break
+                delta = _stream_delta(chunk)
+                if delta is None:
+                    continue
+                if delta.content:
+                    parts.append(delta.content)
+                    self._handle_fragment(delta.content)
+                for tc in getattr(delta, "tool_calls", None) or []:
+                    slot = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                    if tc.id:
+                        slot["id"] = tc.id
+                    if tc.function:
+                        slot["name"] += tc.function.name or ""
+                        slot["arguments"] += tc.function.arguments or ""
+        finally:
+            self._active_stream = None
+        return "".join(parts), [calls[i] for i in sorted(calls)]
+
+    def _execute_tool(self, call: dict) -> str:
+        tool = self._tool_impls.get(call["name"])
+        if tool is None:
+            return f"Error: unknown tool '{call['name']}'"
+        try:
+            args = json.loads(call["arguments"] or "{}")
+        except json.JSONDecodeError as exc:
+            return f"Error: malformed arguments for '{call['name']}': {exc}"
+        try:
+            result = tool(**args)
+        except Exception as exc:
+            result = f"Error: {exc}"
+        return result if isinstance(result, str) else str(result)
+
+    def act(self, prompt: str):
+        """
+        Perform an action based on the input prompt.
+        The response may involve using tools or just generating a text.
+        """
+        cprint(f"\n🤖 [{self._model_name}]", "grey")
+        self.logger.info("Sending to Agent [🤖: %s] ...", self._model_name)
+        self._add_user_prompt(prompt)
+        self._cancel_requested = False  # fresh turn
+        self._stream.start_spinner("thinking")
+        try:
+            for round_index in range(self.MAX_ACT_ROUNDS):
+                text, tool_calls = self._stream_round(self.tool_definitions)
+                if tool_calls and not self._cancel_requested:
+                    assistant_call = {
+                        "role": "assistant",
+                        "content": text or None,
+                        "tool_calls": [
+                            {
+                                "id": call["id"] or f"call_{index}",
+                                "type": "function",
+                                "function": {
+                                    "name": call["name"],
+                                    "arguments": call["arguments"] or "{}",
+                                },
+                            }
+                            for index, call in enumerate(tool_calls)
+                        ],
+                    }
+                    self._messages.append(assistant_call)
+                    for index, call in enumerate(tool_calls):
+                        result = self._execute_tool(call)
+                        self.logger.debug("Tool %s -> %s", call["name"], str(result)[:200])
+                        self._messages.append({
+                            "role": "tool",
+                            "tool_call_id": call["id"] or f"call_{index}",
+                            "content": result,
+                        })
+                    self._handle_round_end(round_index)
+                    continue
+                if not text and self._cancel_requested:
+                    text = CANCELLED_PLACEHOLDER
+                self._messages.append({"role": "assistant", "content": text})
+                self._handle_round_end(round_index)
+                break
+        finally:
+            self._stream.stop_spinner()
+            self._active_stream = None
+
+
+def create_agent(config: SimpleNamespace) -> Brain:
+    """Build the Agent selected by ``[brain] provider``.
+
+    ``'lmstudio'`` (default) uses the local LM Studio SDK; any other known
+    provider name (``openai``, ``groq``, ``mistral``, ``openrouter``, ...) uses
+    the OpenAI-compatible remote backend with an API key from the environment.
+    """
+    provider = getattr(getattr(config, "brain", None), "provider", "lmstudio") or "lmstudio"
+    if provider == "lmstudio":
+        return Agent(config)
+    return RemoteAgent(config)
