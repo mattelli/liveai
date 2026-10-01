@@ -70,76 +70,6 @@ def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
     return max(1, int(context_window * ratio))
 
 
-# ---------------------------------------------------------------------------
-# OpenAI-compatible providers (API-key models)
-# ---------------------------------------------------------------------------
-
-_JSON_TYPES: dict[type, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
-
-
-def _json_schema(annotation: Any) -> dict:
-    """Best-effort JSON Schema for a Python type annotation.
-
-    ``Annotated[T, "description"]`` maps the string metadata to the schema's
-    ``description``, so tools can document parameters for the model.
-    """
-    metadata = getattr(annotation, "__metadata__", None)  # typing.Annotated
-    if metadata:
-        schema = _json_schema(get_args(annotation)[0])
-        for meta in metadata:
-            if isinstance(meta, str):
-                schema["description"] = meta
-                break
-        return schema
-    origin = get_origin(annotation)
-    if origin is Literal:
-        return {"type": "string", "enum": list(get_args(annotation))}
-    if origin in (list, set, tuple):
-        args = get_args(annotation)
-        return {"type": "array", "items": _json_schema(args[0]) if args else {}}
-    if origin is dict:
-        return {"type": "object"}
-    if origin is Union or origin is types.UnionType:
-        args = [arg for arg in get_args(annotation) if arg is not type(None)]
-        return _json_schema(args[0]) if len(args) == 1 else {"type": "string"}
-    json_type = _JSON_TYPES.get(annotation)
-    return {"type": json_type} if json_type else {"type": "string"}
-
-
-def _openai_tool_definition(tool: Callable) -> dict:
-    """Describe ``tool`` in OpenAI function-calling (JSON Schema) format.
-
-    Parameter names keep their snake_case spelling: OpenAI-compatible models
-    handle it natively, and the arguments come back as a JSON blob that can be
-    passed to the implementation directly.
-    """
-    signature = inspect.signature(tool)
-    try:
-        hints = get_type_hints(tool, include_extras=True)
-    except Exception:
-        hints = getattr(tool, "__annotations__", {}) or {}
-
-    properties: dict = {}
-    required: list[str] = []
-    for name, param in signature.parameters.items():
-        if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
-            continue
-        schema = _json_schema(hints.get(name, str))
-        if param.default is inspect.Parameter.empty:
-            required.append(name)
-        else:
-            schema.setdefault("default", param.default)
-        properties[name] = schema
-    return {
-        "type": "function",
-        "function": {
-            "name": getattr(tool, "__name__", "tool"),
-            "description": (getattr(tool, "__doc__", "") or "").strip(),
-            "parameters": {"type": "object", "properties": properties, "required": required},
-        },
-    }
-
-
 def _default_tools(agent: "Brain") -> list[Callable]:
     """Tool set of the agent."""
     return [
@@ -154,12 +84,6 @@ def _default_tools(agent: "Brain") -> list[Callable]:
         fetch_financial_data, save_financial_chart,
         exit_gracefully
     ]
-
-
-def _stream_delta(chunk: Any):
-    """First choice's delta of an OpenAI-compatible stream chunk (or None)."""
-    choices = getattr(chunk, "choices", None)
-    return choices[0].delta if choices else None
 
 
 def _load_env_file(dotenv_path: pathlib.Path | None = None) -> None:
@@ -179,18 +103,19 @@ def _load_env_file(dotenv_path: pathlib.Path | None = None) -> None:
     load_dotenv(dotenv_path=dotenv_path, override=False)
 
 
-class Brain:
+class OpenAICore:
     """
-    Brain that connects to an OpenAI-compatible chat API (API-key providers).
+    Core client for an OpenAI-compatible chat API (API-key providers).
 
     Talks to ``[brain] base_url`` with the ``openai`` client, so cloud models
     (OpenAI, Mistral, Groq, OpenRouter, DeepSeek, Together, Gemini, xAI,
-    Anthropic, ...) work with the same session and tools as a local server.
+    Anthropic, ...) and local servers (Ollama, LM Studio) share one
+    implementation: connection handling, model metadata resolution (context
+    window, vision) from the OpenAI models endpoint, and the function-calling
+    helpers (JSON Schema tool definitions, stream chunk parsing).
     The API key is read from the environment variable named by
     ``[brain] api_key_env`` (default ``<PROVIDER>_API_KEY``, also resolved
     from a project ``.env`` file) and must never be stored in config.toml.
-    Basic function calls like model response, streaming, and printing are
-    available.
     """
 
     DEFAULT_CONTEXT_WINDOW = 128_000
@@ -410,6 +335,91 @@ class Brain:
             None,
         )
 
+    ## OpenAI function-calling helpers (tool definitions, stream chunks) ##
+
+    _JSON_TYPES: dict[type, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
+
+    @staticmethod
+    def _json_schema(annotation: Any) -> dict:
+        """Best-effort JSON Schema for a Python type annotation.
+
+        ``Annotated[T, "description"]`` maps the string metadata to the schema's
+        ``description``, so tools can document parameters for the model.
+        """
+        metadata = getattr(annotation, "__metadata__", None)  # typing.Annotated
+        if metadata:
+            schema = OpenAICore._json_schema(get_args(annotation)[0])
+            for meta in metadata:
+                if isinstance(meta, str):
+                    schema["description"] = meta
+                    break
+            return schema
+        origin = get_origin(annotation)
+        if origin is Literal:
+            return {"type": "string", "enum": list(get_args(annotation))}
+        if origin in (list, set, tuple):
+            args = get_args(annotation)
+            return {"type": "array", "items": OpenAICore._json_schema(args[0]) if args else {}}
+        if origin is dict:
+            return {"type": "object"}
+        if origin is Union or origin is types.UnionType:
+            args = [arg for arg in get_args(annotation) if arg is not type(None)]
+            return OpenAICore._json_schema(args[0]) if len(args) == 1 else {"type": "string"}
+        json_type = OpenAICore._JSON_TYPES.get(annotation)
+        return {"type": json_type} if json_type else {"type": "string"}
+
+    @staticmethod
+    def _openai_tool_definition(tool: Callable) -> dict:
+        """Describe ``tool`` in OpenAI function-calling (JSON Schema) format.
+
+        Parameter names keep their snake_case spelling: OpenAI-compatible models
+        handle it natively, and the arguments come back as a JSON blob that can be
+        passed to the implementation directly.
+        """
+        signature = inspect.signature(tool)
+        try:
+            hints = get_type_hints(tool, include_extras=True)
+        except Exception:
+            hints = getattr(tool, "__annotations__", {}) or {}
+
+        properties: dict = {}
+        required: list[str] = []
+        for name, param in signature.parameters.items():
+            if param.kind in (param.VAR_POSITIONAL, param.VAR_KEYWORD):
+                continue
+            schema = OpenAICore._json_schema(hints.get(name, str))
+            if param.default is inspect.Parameter.empty:
+                required.append(name)
+            else:
+                schema.setdefault("default", param.default)
+            properties[name] = schema
+        return {
+            "type": "function",
+            "function": {
+                "name": getattr(tool, "__name__", "tool"),
+                "description": (getattr(tool, "__doc__", "") or "").strip(),
+                "parameters": {"type": "object", "properties": properties, "required": required},
+            },
+        }
+
+    @staticmethod
+    def _stream_delta(chunk: Any):
+        """First choice's delta of an OpenAI-compatible stream chunk (or None)."""
+        choices = getattr(chunk, "choices", None)
+        return choices[0].delta if choices else None
+
+
+class Brain(OpenAICore):
+    """
+    Tool-bearing assistant built on top of OpenAICore.
+
+    Owns the conversation history (plumbing and repair across cancelled or
+    failed turns), streaming generation with cancellation, and the built-in
+    tool set (model info, image responses, personal memory, summarization,
+    corpora search, speech, ...) that an Agent exposes to the model via
+    OpenAI function calling.
+    """
+
     ## history plumbing (plain OpenAI-style dicts) ##
 
     def _add_user_prompt(self, prompt: str):
@@ -498,7 +508,7 @@ class Brain:
             for chunk in stream:
                 if self._cancel_requested:
                     break
-                delta = _stream_delta(chunk)
+                delta = self._stream_delta(chunk)
                 if delta is not None and delta.content:
                     parts.append(delta.content)
                     yield SimpleNamespace(content=delta.content)
@@ -546,6 +556,7 @@ class Brain:
         chars = sum(len(str(m.get("content") or "")) for m in self._messages)
         tokens = chars // 4  # rough ~4 chars per token estimate
         return float(tokens / self._context_window) * 100, self._context_window
+
 
     ## TOOLS CALLS ##
 
@@ -851,7 +862,7 @@ class Agent(Brain):
             self._model_name
         )
         self.tools: list[Callable] = self._build_tools()
-        self.tool_definitions: list[dict] = [_openai_tool_definition(tool) for tool in self.tools]
+        self.tool_definitions: list[dict] = [self._openai_tool_definition(tool) for tool in self.tools]
         self._tool_impls = {tool.__name__: tool for tool in self.tools}
         self.logger.info(
             "✅ Agent with Model '%s' is ready with [%d] tools.",
@@ -889,7 +900,7 @@ class Agent(Brain):
             for chunk in stream:
                 if self._cancel_requested:
                     break
-                delta = _stream_delta(chunk)
+                delta = self._stream_delta(chunk)
                 if delta is None:
                     continue
                 if delta.content:
