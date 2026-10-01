@@ -12,17 +12,24 @@ compute_type = "int8"
 calibration_chunks = 20
 guard_factor = 1.0
 
-[brain] # llm configuration with OpenAI-compatible API (api-key providers or local servers: LM Studio, Ollama - see README)
+[brain] 
+# LLM configuration with OpenAI-compatible endpoint, envvar holding api-keys (also resolved from .env)
+
+# api_key_env = "TOGETHER_API_KEY"
+# base_url = "https://api.together.ai/v1"
+# model = "Prism-ML/Ternary-Bonsai-27B"
+# context_window = 262144
+
+api_key_env = "LMSTUDIO_API_KEY"
+base_url = "http://localhost:1234/v1"
 # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
-model = "Prism-ML/Ternary-Bonsai-27B"  # Together chat model (reasoning + tools-capable)
 # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
 # model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
-# model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
-# model = "qwen3.8_4b_distilled_gguf"         # NO Vision, OK thinking
-base_url = "https://api.together.ai/v1"    # OpenAI-compatible endpoint of the provider
-api_key_env = "TOGETHER_API_KEY"           # env var holding the key (also resolved from .env)
-context_window = 262144         # Prism-ML/Ternary-Bonsai-27B native context window
-# vision = false                 # true for vision-capable models (enables image_response)
+model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
+# model = "qwen3.8_4b_distilled_gguf"       # NO Vision, OK thinking
+context_window = 8192
+
+# vision = false                            # true for vision-capable models (enables image_response)
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 history_path = "chat_history.log"
 temperature = 0.6
