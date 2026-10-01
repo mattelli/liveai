@@ -219,10 +219,8 @@ class Brain:
         self._client = OpenAI(base_url=base_url, api_key=api_key)
         self._model_name = config.brain.model
         self._base_url = base_url
-        self._context_window = int(
-            getattr(config.brain, "context_window", 0) or self.DEFAULT_CONTEXT_WINDOW
-        )
-        self._vision = bool(getattr(config.brain, "vision", False))
+        self._context_window = self._resolve_context_window(config)
+        self._vision = self._resolve_vision_flag(config)
         self._temperature = getattr(config.brain, "temperature", 0.7)
         self._max_tokens = _response_token_cap(
             getattr(config.brain, "max_response_tokens", 0),
@@ -233,6 +231,184 @@ class Brain:
         self._cancel_requested = False
         self._active_stream = None
         self.logger.info("✅ Remote model '%s' connected.", self._model_name)
+
+    def _resolve_vision_flag(self, config) -> bool:
+        """Derive vision support from the server-reported model capabilities.
+
+        The OpenAI models endpoint may include a ``capabilities`` list (e.g.
+        LM Studio: ["completion", "tools", "vision"]); when the server
+        reports it, that value is authoritative. Servers without capability
+        info (Ollama, most cloud providers) fall back to the optional
+        ``[brain] vision`` config flag (default False), so the key stays
+        usable as an override but is no longer required.
+        """
+        configured = bool(getattr(config.brain, "vision", False))
+        capabilities = self._fetch_model_metadata().get("capabilities")
+        if not isinstance(capabilities, (list, tuple)) or not capabilities:
+            self._vision_source = "config"
+            self.logger.info(
+                "Model '%s' vision: %s (config; server did not report capabilities)",
+                self._model_name, configured,
+            )
+            return configured
+        self._vision_source = "server"
+        has_vision = "vision" in [str(c).lower() for c in capabilities]
+        self.logger.info(
+            "Model '%s' capabilities (server): %s -> vision=%s",
+            self._model_name, ", ".join(map(str, capabilities)), has_vision,
+        )
+        return has_vision
+
+    def _resolve_context_window(self, config) -> int:
+        """Resolve the context window: explicit config > server report > default.
+
+        ``[brain] context_window`` stays authoritative when set. When unset
+        (0 or missing), the window is derived from the server-reported model
+        metadata via the OpenAI /models endpoint - e.g. LM Studio's
+        ``max_context_length`` or Together's ``context_length`` - preferring
+        explicit maximums over the currently loaded allocation
+        (``loaded_context_length``). Servers reporting nothing (e.g. Ollama)
+        fall back to ``DEFAULT_CONTEXT_WINDOW``.
+        """
+        try:
+            configured = int(getattr(config.brain, "context_window", 0) or 0)
+        except (TypeError, ValueError):
+            configured = 0
+        if configured:
+            self._context_window_source = "config"
+            return configured
+        meta = self._fetch_model_metadata()
+        context_fields = {
+            k: v for k, v in meta.items()
+            if "context" in k.lower() and isinstance(v, int)
+        }
+        for key in self._CONTEXT_MAX_KEYS:
+            if key in context_fields:
+                return self._adopt_server_context_window(key, context_fields[key])
+        for key in sorted(context_fields):
+            if not key.lower().startswith("loaded"):
+                return self._adopt_server_context_window(key, context_fields[key])
+        self._context_window_source = "default"
+        self.logger.info(
+            "Model '%s' context window: default %d (server did not report one)",
+            self._model_name, self.DEFAULT_CONTEXT_WINDOW,
+        )
+        return self.DEFAULT_CONTEXT_WINDOW
+
+    def _adopt_server_context_window(self, key: str, value: int) -> int:
+        """Adopt a server-reported context length and log where it came from."""
+        self._context_window_source = "server"
+        self.logger.info(
+            "Model '%s' context window from server (%s): %d",
+            self._model_name, key, value,
+        )
+        return value
+
+    _MODEL_RECORD_SKIP = {"id", "object", "root", "parent", "permission"}
+
+    # Server metadata keys describing the model's maximum context, in the
+    # order they are preferred when several are reported.
+    _CONTEXT_MAX_KEYS = (
+        "max_context_length", "context_length", "context_window", "max_model_len",
+    )
+
+    @staticmethod
+    def _model_record_fields(record) -> dict:
+        """Flatten an OpenAI SDK model record into a plain dict.
+
+        Accepts pydantic records (``model_dump()``, used by the real SDK
+        client), plain dicts (raw fallback) and SimpleNamespace-based fakes
+        (``__dict__``, tests), so server-specific extra fields survive the
+        round-trip.
+        """
+        if isinstance(record, dict):
+            return dict(record)
+        dump = getattr(record, "model_dump", None)
+        data = dump() if callable(dump) else None
+        if not isinstance(data, dict) or not data:
+            data = dict(getattr(record, "__dict__", {}) or {})
+        return data
+
+    def _fetch_model_metadata(self, use_raw_fallback: bool = True) -> dict:
+        """Query the server for model metadata via the OpenAI models endpoint.
+
+        Only OpenAI-style requests are used: ``GET /models/{id}`` first, then
+        ``GET /models`` + lookup by id as fallback (some servers, e.g. Ollama,
+        only implement the list variant). The standard fields are id/object/
+        created/owned_by; any extra fields a server returns beyond those (e.g.
+        LM Studio: max_context_length, loaded_context_length, capabilities,
+        quantization, arch) are passed through untouched.
+
+        ``use_raw_fallback=False`` skips the tolerant re-request for servers
+        returning a bare JSON array. Failures degrade silently. Successful
+        results are cached on the instance (model metadata is static for the
+        session), while a total failure stores no cache so a later call can
+        retry. Returns a dict of non-empty scalar/list-of-scalar values,
+        possibly {}.
+        """
+        cached = getattr(self, "_model_meta", None)
+        if cached is not None:
+            return cached
+        record = None
+        try:
+            record = self._client.models.retrieve(self._model_name)
+        except Exception as exc:
+            self.logger.debug("GET /models/%s failed: %s", self._model_name, exc)
+        if record is None:
+            try:
+                models = self._client.models.list().data
+                record = next((m for m in models if m.id == self._model_name), None)
+            except Exception as exc:
+                self.logger.debug("GET /models failed: %s", exc)
+                if use_raw_fallback:
+                    record = self._find_in_raw_models_list()
+        meta: dict = {}
+        if record is not None:
+            for key, value in self._model_record_fields(record).items():
+                if key in self._MODEL_RECORD_SKIP or value in (None, ""):
+                    continue
+                if isinstance(value, (list, tuple)):
+                    # Keep lists of scalars (capabilities); drop object lists
+                    # (OpenAI's permission entries) - model info stays flat.
+                    if not value or not all(
+                        isinstance(v, (str, int, float, bool)) for v in value
+                    ):
+                        continue
+                elif not isinstance(value, (str, int, float, bool)):
+                    continue  # skip nested structures
+                meta[key] = value
+        if meta:
+            self._model_meta = meta
+        return meta
+
+    def _find_in_raw_models_list(self):
+        """Lookup fallback for servers the OpenAI SDK cannot parse.
+
+        Some OpenAI-compatible servers (e.g. Together.ai) answer ``GET
+        /models`` with a bare JSON array instead of the standard
+        ``{"object": "list", "data": [...]}`` envelope, which makes the SDK
+        fail while parsing. This retries the same endpoint with the SDK's own
+        httpx client and accepts both shapes. Returns the matching record
+        (plain dict) or None.
+        """
+        try:
+            import httpx
+            resp = httpx.get(
+                self._base_url.rstrip("/") + "/models",
+                headers={"Authorization": f"Bearer {self._client.api_key}"},
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as exc:
+            self.logger.debug("Raw GET /models failed: %s", exc)
+            return None
+        if isinstance(data, dict):
+            data = data.get("data") or []
+        return next(
+            (m for m in data if isinstance(m, dict) and m.get("id") == self._model_name),
+            None,
+        )
 
     ## history plumbing (plain OpenAI-style dicts) ##
 
@@ -395,10 +571,67 @@ class Brain:
     @dump_func_call
     def model_info(self) -> str:
         """
-        Returns the loaded model info.
+        Returns detailed info about the loaded model: endpoint, provider and
+        everything the server reports through the OpenAI models endpoint
+        (ownership, context lengths, capabilities, quantization, ...), plus
+        the current session settings.
         Useful when user ask for information about the loaded model.
         """
-        return f"model={self._model_name} base_url={self._base_url} (OpenAI-compatible API)"
+        meta = self._fetch_model_metadata()
+        usage_pct, context_window = self._context_usage()
+        lines = [
+            f"model={self._model_name}",
+            f"base_url={self._base_url} (OpenAI-compatible API)",
+        ]
+        if meta.get("owned_by"):
+            lines.append(f"provider={meta['owned_by']}")
+        created = meta.get("created")
+        if created:
+            if isinstance(created, (int, float)):
+                created = datetime.fromtimestamp(
+                    created, tz=timezone.utc
+                ).strftime("%Y-%m-%d")
+            lines.append(f"created={created}")
+        window_labels = {
+            "config": "configured",
+            "server": "server-reported",
+            "default": "default (server did not report)",
+        }
+        window_source = getattr(self, "_context_window_source", "config")
+        lines.append(
+            f"context_window={context_window} tokens"
+            f" ({window_labels.get(window_source, 'configured')})"
+        )
+        context_fields = {
+            k: v for k, v in meta.items()
+            if "context" in k.lower() and isinstance(v, int)
+        }
+        if context_fields:
+            lines.append("server_context=" + ", ".join(
+                f"{k}={v}" for k, v in sorted(context_fields.items())))
+            max_fields = [v for k, v in context_fields.items()
+                          if not k.lower().startswith("loaded")]
+            if any(v < context_window for v in max_fields):
+                lines.append(
+                    "warning: configured context_window exceeds the "
+                    "server-reported maximum"
+                )
+        if meta.get("capabilities"):
+            lines.append(f"capabilities={', '.join(map(str, meta['capabilities']))}")
+        rendered = {"owned_by", "created", "capabilities"} | set(context_fields)
+        for key in sorted(k for k in meta if k not in rendered):
+            value = meta[key]
+            if isinstance(value, (list, tuple)):
+                value = ", ".join(map(str, value))
+            lines.append(f"{key}={value}")
+        lines += [
+            f"temperature={self._temperature}",
+            f"max_response_tokens={self._max_tokens} (per-generation cap)",
+            f"vision={'yes' if self._vision else 'no'}",
+            f"vision_source={self._vision_source}",
+            f"session_messages={len(self._messages)} (context ~{usage_pct:.1f}% used)",
+        ]
+        return "\n".join(lines)
 
     @dump_func_call
     def image_response(self, image: str, prompt: str = "describe the image") -> str:
@@ -407,7 +640,15 @@ class Brain:
         Useful when user asks for getting a description of the input image content.
         """
         if not self._vision:
-            return "Cannot handle images (set [brain] vision = true and use a vision-capable model)"
+            if self._vision_source == "server":
+                return (
+                    "Cannot handle images: the server reports the model has no "
+                    "'vision' capability"
+                )
+            return (
+                "Cannot handle images: no 'vision' capability reported by the "
+                "server and no [brain] vision = true override set"
+            )
         if str(image).startswith(("http://", "https://")):
             image_url = {"url": str(image)}
         else:

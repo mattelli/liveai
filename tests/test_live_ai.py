@@ -628,6 +628,17 @@ def _fake_openai(monkeypatch):
         def __init__(self, base_url=None, api_key=None):
             self.base_url = base_url
             self.api_key = api_key
+            # A well-formed (but unrelated) models list: no exception, so the
+            # raw-fallback HTTP request is never attempted in tests.
+            self.models = types.SimpleNamespace(
+                retrieve=self._raise_unsupported,
+                list=lambda: types.SimpleNamespace(
+                    data=[types.SimpleNamespace(id="unrelated-model")]),
+            )
+
+        @staticmethod
+        def _raise_unsupported(model):
+            raise RuntimeError("retrieve not supported")
 
     stub.OpenAI = FakeOpenAI
     monkeypatch.setitem(sys.modules, "openai", stub)
@@ -720,3 +731,286 @@ def test_brain_missing_api_key_env_raises(monkeypatch):
     monkeypatch.setattr(live_ai_mod, "_load_env_file", lambda: None)
     with pytest.raises(ValueError, match="API key not found"):
         live_ai_mod.Brain(_remote_config(api_key_env=""))
+
+
+# ------------------------------------------------------------ model_info
+
+
+def _bare_info_brain(**overrides):
+    """A Brain assembled by hand, carrying only the model_info state."""
+    attrs = dict(
+        _model_name="test-model",
+        _base_url="http://localhost:11434/v1",
+        _context_window=4096,
+        _context_window_source="config",
+        _vision=False,
+        _vision_source="config",
+        _temperature=0.6,
+        _max_tokens=409,
+        _messages=[{"role": "system", "content": "sys"},
+                   {"role": "user", "content": "hi"}],
+    )
+    attrs.update(overrides)
+    brain = live_ai_mod.Brain.__new__(live_ai_mod.Brain)
+    brain.logger = getLogger("test")
+    brain._client = None
+    for key, value in attrs.items():
+        setattr(brain, key, value)
+    return brain
+
+
+def test_fetch_model_metadata_uses_openai_retrieve():
+    """GET /models/{id} with server-specific extras, minus the noise."""
+    def retrieve(model):
+        assert model == "test-model"
+        return SimpleNamespace(model_dump=lambda: {
+            "id": "test-model", "object": "model", "created": 1700000000,
+            "owned_by": "ollama", "root": "test-model",
+            "max_context_length": 131072, "loaded_context_length": 4096,
+            "capabilities": ["completion", "vision", "tools"],
+            "quantization": "Q4_K_M", "arch": "qwen3",
+            "permission": [{"id": "p"}],
+        })
+
+    brain = _bare_info_brain(
+        _client=SimpleNamespace(models=SimpleNamespace(retrieve=retrieve)))
+    meta = brain._fetch_model_metadata()
+
+    assert meta["owned_by"] == "ollama"
+    assert meta["created"] == 1700000000
+    assert meta["max_context_length"] == 131072
+    assert meta["loaded_context_length"] == 4096
+    assert meta["capabilities"] == ["completion", "vision", "tools"]
+    assert meta["quantization"] == "Q4_K_M"
+    assert meta["arch"] == "qwen3"
+    assert "permission" not in meta
+    assert "root" not in meta and "object" not in meta
+
+
+def test_fetch_model_metadata_falls_back_to_models_list():
+    """Servers without retrieve-by-id (e.g. Ollama) answer via GET /models."""
+    def broken_retrieve(model):
+        raise RuntimeError("not supported")
+
+    brain = _bare_info_brain(_client=SimpleNamespace(models=SimpleNamespace(
+        retrieve=broken_retrieve,
+        list=lambda: SimpleNamespace(data=[
+            SimpleNamespace(id="other", owned_by="lib"),
+            SimpleNamespace(id="test-model", owned_by="ollama"),
+        ]),
+    )))
+    assert brain._fetch_model_metadata() == {"owned_by": "ollama"}
+
+
+def test_fetch_model_metadata_falls_back_to_raw_models_list(monkeypatch):
+    """Servers answering with a bare JSON array (no list envelope) are
+    tolerated - the OpenAI SDK itself fails to parse them (e.g. Together.ai)."""
+    def broken(*args, **kwargs):
+        raise AttributeError("'list' object has no attribute '_set_private_attributes'")
+
+    import httpx
+
+    def fake_get(url, headers=None, timeout=None):
+        assert url == "http://localhost:11434/v1/models"
+        assert headers["Authorization"] == "Bearer test-key"
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: [  # bare array, no {"object": "list"} envelope
+                {"id": "other", "owned_by": "lib"},
+                {"id": "test-model", "owned_by": "together",
+                 "context_length": 262144},
+            ],
+        )
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    brain = _bare_info_brain(_client=SimpleNamespace(
+        models=SimpleNamespace(retrieve=broken, list=broken), api_key="test-key"))
+    assert brain._fetch_model_metadata() == {
+        "owned_by": "together", "context_length": 262144,
+    }
+
+
+def test_fetch_model_metadata_degrades_gracefully(monkeypatch):
+    """Every endpoint variant failing yields {} and stores no cache."""
+    def broken(*args, **kwargs):
+        raise RuntimeError("server down")
+
+    import httpx
+    monkeypatch.setattr(httpx, "get", broken)
+    brain = _bare_info_brain(
+        _client=SimpleNamespace(models=SimpleNamespace(retrieve=broken, list=broken)))
+    assert brain._fetch_model_metadata() == {}
+    assert brain._fetch_model_metadata() == {}  # second call retries
+    assert not hasattr(brain, "_model_meta")
+
+
+def test_fetch_model_metadata_caches_successful_result():
+    calls = {"count": 0}
+
+    def retrieve(model):
+        calls["count"] += 1
+        return SimpleNamespace(id="test-model", owned_by="ollama")
+
+    brain = _bare_info_brain(
+        _client=SimpleNamespace(models=SimpleNamespace(retrieve=retrieve)))
+    first = brain._fetch_model_metadata()
+    assert brain._fetch_model_metadata() is first
+    assert calls["count"] == 1
+
+
+def test_model_info_renders_server_metadata(monkeypatch):
+    brain = _bare_info_brain()
+    monkeypatch.setattr(brain, "_fetch_model_metadata", lambda: dict(
+        owned_by="ollama", created=1700000000,
+        max_context_length=131072, loaded_context_length=4096,
+        capabilities=["completion", "vision", "tools"],
+        quantization="Q4_K_M",
+    ))
+    info = brain.model_info()
+
+    assert "model=test-model" in info
+    assert "provider=ollama" in info
+    assert "created=2023-11-14" in info
+    assert "context_window=4096 tokens (configured)" in info
+    assert "server_context=loaded_context_length=4096, max_context_length=131072" in info
+    assert "capabilities=completion, vision, tools" in info
+    assert "quantization=Q4_K_M" in info  # extra server fields pass through
+    assert "vision=no" in info
+    assert "session_messages=2" in info
+    assert "warning" not in info  # configured window fits the server max
+
+
+def test_model_info_warns_when_configured_window_exceeds_server_max(monkeypatch):
+    brain = _bare_info_brain(_context_window=262144)
+    monkeypatch.setattr(brain, "_fetch_model_metadata", lambda: dict(
+        max_context_length=131072, loaded_context_length=4096))
+    assert "warning: configured context_window exceeds" in brain.model_info()
+
+
+def test_model_info_loaded_context_alone_never_warns(monkeypatch):
+    """loaded_context_length is the current allocation, not a maximum."""
+    brain = _bare_info_brain(_context_window=262144)
+    monkeypatch.setattr(brain, "_fetch_model_metadata", lambda: dict(
+        loaded_context_length=4096))
+    assert "warning" not in brain.model_info()
+
+
+def test_model_info_falls_back_to_local_config(monkeypatch):
+    """With an unreachable server the locally configured values still render."""
+    brain = _bare_info_brain()
+    monkeypatch.setattr(brain, "_fetch_model_metadata", lambda: {})
+    info = brain.model_info()
+
+    assert "model=test-model" in info
+    assert "base_url=http://localhost:11434/v1" in info
+    assert "context_window=4096 tokens (configured)" in info
+    assert "temperature=0.6" in info
+    assert "max_response_tokens=409" in info
+    assert "vision=no" in info
+    assert "session_messages=2" in info
+
+
+def test_resolve_vision_from_server_capabilities(monkeypatch):
+    """A server-reported capabilities list is authoritative."""
+    brain = _bare_info_brain()
+    monkeypatch.setattr(
+        brain, "_fetch_model_metadata",
+        lambda use_raw_fallback=True: {"capabilities": ["completion", "vision", "tools"]})
+    config = SimpleNamespace(brain=SimpleNamespace(vision=False))
+    assert brain._resolve_vision_flag(config) is True
+    assert brain._vision_source == "server"
+
+    no_vision = _bare_info_brain()
+    monkeypatch.setattr(
+        no_vision, "_fetch_model_metadata",
+        lambda use_raw_fallback=True: {"capabilities": ["completion", "tools"]})
+    assert no_vision._resolve_vision_flag(config) is False
+    assert no_vision._vision_source == "server"
+
+
+def test_resolve_vision_falls_back_to_config(monkeypatch):
+    """Servers without capability info fall back to the optional config flag."""
+    brain = _bare_info_brain()
+    monkeypatch.setattr(
+        brain, "_fetch_model_metadata", lambda use_raw_fallback=True: {})
+    # default: no vision
+    assert brain._resolve_vision_flag(SimpleNamespace(brain=SimpleNamespace())) is False
+    assert brain._vision_source == "config"
+    # ... and the config value is honored as an override
+    assert brain._resolve_vision_flag(
+        SimpleNamespace(brain=SimpleNamespace(vision=True))) is True
+    assert brain._vision_source == "config"
+
+
+def test_model_info_reports_vision_source(monkeypatch):
+    brain = _bare_info_brain(_vision=True, _vision_source="server")
+    monkeypatch.setattr(brain, "_fetch_model_metadata", lambda use_raw_fallback=True: {})
+    info = brain.model_info()
+    assert "vision=yes" in info
+    assert "vision_source=server" in info
+
+
+def test_resolve_context_window_prefers_explicit_config(monkeypatch):
+    brain = _bare_info_brain()
+
+    def fail(*args, **kwargs):
+        raise AssertionError("must not query the server when config sets the window")
+
+    monkeypatch.setattr(brain, "_fetch_model_metadata", fail)
+    assert brain._resolve_context_window(
+        SimpleNamespace(brain=SimpleNamespace(context_window=4096))) == 4096
+    assert brain._context_window_source == "config"
+
+
+def test_resolve_context_window_from_server_metadata(monkeypatch):
+    brain = _bare_info_brain()
+    monkeypatch.setattr(
+        brain, "_fetch_model_metadata",
+        lambda use_raw_fallback=True: {"max_context_length": 131072})
+    assert brain._resolve_context_window(SimpleNamespace(brain=SimpleNamespace())) == 131072
+    assert brain._context_window_source == "server"
+
+    together = _bare_info_brain()
+    monkeypatch.setattr(
+        together, "_fetch_model_metadata",
+        lambda use_raw_fallback=True: {"context_length": 262144})
+    assert together._resolve_context_window(SimpleNamespace(brain=SimpleNamespace())) == 262144
+
+
+def test_resolve_context_window_ignores_loaded_allocation(monkeypatch):
+    """loaded_context_length is the current allocation, not the capacity."""
+    brain = _bare_info_brain()
+    monkeypatch.setattr(
+        brain, "_fetch_model_metadata",
+        lambda use_raw_fallback=True: {"loaded_context_length": 4096})
+    assert brain._resolve_context_window(
+        SimpleNamespace(brain=SimpleNamespace())) == live_ai_mod.Brain.DEFAULT_CONTEXT_WINDOW
+    assert brain._context_window_source == "default"
+
+
+def test_brain_max_tokens_uses_server_context_window(monkeypatch):
+    """End-to-end: the max_response_tokens ratio applies to the resolved window."""
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    import sys
+
+    class FakeModels:
+        def retrieve(self, model):
+            raise RuntimeError("not supported")
+
+        def list(self):
+            return SimpleNamespace(data=[
+                SimpleNamespace(id="test-model", max_context_length=131072)])
+
+    stub = sys.modules["openai"]
+
+    class Client(stub.OpenAI):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.models = FakeModels()
+
+    monkeypatch.setattr(stub, "OpenAI", Client)
+    agent = live_ai_mod.Brain(_remote_config())  # no context_window in config
+    assert agent._context_window == 131072
+    assert agent._context_window_source == "server"
+    assert agent._max_tokens == int(131072 * 0.2)

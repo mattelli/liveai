@@ -14,26 +14,30 @@ guard_factor = 1.0
 
 [brain] 
 # LLM configuration with OpenAI-compatible endpoint, envvar holding api-keys (also resolved from .env)
-
-# api_key_env = "TOGETHER_API_KEY"
-# base_url = "https://api.together.ai/v1"
-# model = "Prism-ML/Ternary-Bonsai-27B"
-# context_window = 262144
-
-api_key_env = "LMSTUDIO_API_KEY"
-base_url = "http://localhost:1234/v1"
-# model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
-# model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
-# model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
-model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
-# model = "qwen3.8_4b_distilled_gguf"       # NO Vision, OK thinking
-context_window = 8192
-
-# vision = false                            # true for vision-capable models (enables image_response)
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 history_path = "chat_history.log"
-temperature = 0.6
+# Vision support and the context window are auto-detected from the model metadata reported by the server (OpenAI /models endpoint, e.g. LMStudio max_context_length). 
+# Only set the optional overrides below for servers that do not report them:
+# vision = true
+# context_window = 8192
 max_response_tokens = 0.2                   # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
+temperature = 0.6
+
+api_key_env = "TOGETHER_API_KEY"
+base_url = "https://api.together.ai/v1"
+model = "Prism-ML/Ternary-Bonsai-27B"        # NO Vision, NO Thinking
+
+# api_key_env = "LMSTUDIO_API_KEY"
+# base_url = "http://localhost:1234/v1"
+# # model = "qwen/qwen3.5-0.8b"               # OK Vision, NO Thinking (quick simple test)
+# # model = "microsoft/phi-4-mini"            # NO Vision, NO Thinking
+# # model = "qwen/qwen3-vl-4b"                # OK Vision, NO Thinking
+# model = "qwen/qwen3.5-4b"                 # OK Vision, OK thinking
+# # model = "qwen3.8_4b_distilled_gguf"       # NO Vision, OK thinking
+
+# api_key_env = "OLLAMA_API_KEY"
+# base_url = "http://localhost:11434/v1"
+# model = "joe-speedboat/Gemma-4-Uncensored-HauhauCS-Aggressive:e4b"               # OK Vision, NO Thinking (quick simple test)
 
 
 [agent]
