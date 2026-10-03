@@ -29,6 +29,8 @@ python -m pip install --upgrade pip
 Write-Host ""
 Write-Host "=== Installing required Python packages ==="
 pip install openai
+pip install lmstudio
+pip install ollama
 pip install python-dotenv
 pip install piper-tts
 pip install faster-whisper
