@@ -234,6 +234,47 @@ Notes:
 - `.res/` is git-ignored, so downloaded weights and corpora are never committed.
 
 
+## In-document search (CrossEncoder)
+
+`query_document` answers "where in this file is ...?" for a **single document**
+without building a corpus. Mirroring
+`samples/sentence_transformers/in_document_search_crossencoder.py`, the document
+is read with `src/document_loader.py` (any supported type: text-like, PDF,
+DOCX, XLSX, HTML), split into passages of up to `chunk_size` consecutive
+sentences (PDF passages keep their page number), and every `[query, passage]`
+pair is scored with a CrossEncoder. The `top_k` highest-scoring passages are
+returned in descending score order.
+
+```toml
+[document_query]
+model_path = ".res/crossencoder/ms-marco-TinyBERT-L2"  # resolved relative to config.toml
+device = "cpu"            # "cpu" or "cuda"
+chunk_size = 3            # consecutive sentences per passage
+top_k = 5                 # default number of results returned by query_document
+```
+
+Store the model locally before first use (`.res/` is git-ignored):
+
+```bash
+huggingface-cli download cross-encoder/ms-marco-TinyBERT-L2 \
+  --local-dir .res/crossencoder/ms-marco-TinyBERT-L2
+```
+
+Example:
+
+```
+query_document(file="C:/docs/paper.pdf", query="How large is Europe?", top_k=3)
+```
+
+Notes:
+
+- The CrossEncoder scores all passages of the document per query, so very large
+  documents make each query slower (passages are cached per file mtime).
+- Requires `sentence-transformers` (already used by summarization/semantic
+  search) and NLTK sentence splitting with the same regex fallback as the other
+  tools.
+
+
 ## Setup (Python 3.12.10)
 
 OS Windows 11 (powershell)

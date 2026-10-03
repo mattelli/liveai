@@ -18,6 +18,7 @@ from src.tools import (
     search_pattern_in_files, replace_string_in_file, search_in_file
 )
 from src.summarizer import TextSummarizer
+from src.document_query import DEFAULT_CHUNK_SIZE as QUERY_CHUNK_SIZE, DEFAULT_TOP_K as QUERY_TOP_K, DocumentQuery
 from src.embedding_search import (
     DEFAULT_CHUNK_SIZE, DEFAULT_CORPORA_DIR, DEFAULT_EXTENSIONS, DEFAULT_TOP_K,
     EmbeddingCorpus, list_corpora, resolve_corpus_dir
@@ -75,7 +76,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     return [
         agent.model_info, agent.recall_personal, agent.store_personal,
         agent.image_response, agent.allow_speech, agent.clear_chat,
-        agent.summarize_text,
+        agent.summarize_text, agent.query_document,
         agent.list_corpora, agent.store_corpus, agent.query_corpus,
         capture_image, system_info, current_date_time, get_working_directory,
         run_command, search_in_file, search_pattern_in_files,
@@ -709,6 +710,35 @@ class Brain(OpenAICore):
             return self._summarizer.summarize_file(file, max_sentences or None)
         except Exception as e:
             return f"Error: {e}"
+
+    @dump_func_call
+    def query_document(self, file: str, query: str, top_k: int = 0) -> str:
+        """
+        Search one document for the passages most relevant to a query.
+        Useful when the user asks to find, locate or look up something inside a
+        specific file without building a corpus. Any type supported by
+        ``src.document_loader`` works: text, PDF (results keep page numbers),
+        DOCX, XLSX, HTML, ... A CrossEncoder scores query/passage pairs.
+        ``top_k`` = 0 uses the value configured in the ``[document_query]``
+        section.
+        """
+        try:
+            if not query or not query.strip():
+                return "Error: a query is required."
+            return self._document_query().query(file, query, top_k or None)
+        except Exception as e:
+            return f"Error: {e}"
+
+    def _document_query(self):
+        if getattr(self, "_doc_query", None) is None:
+            cfg = self.config.document_query
+            self._doc_query = DocumentQuery(
+                model_path=cfg.model_path,
+                device=getattr(cfg, "device", "cpu"),
+                chunk_size=getattr(cfg, "chunk_size", QUERY_CHUNK_SIZE),
+                top_k=getattr(cfg, "top_k", QUERY_TOP_K),
+            )
+        return self._doc_query
 
     def _embedding_corpus(self):
         if getattr(self, "_emb_corpus", None) is None:

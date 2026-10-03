@@ -146,10 +146,79 @@ def test_summarize_text_reports_errors(tmp_path, monkeypatch):
     assert out.startswith("Error:") and "boom" in out
 
 
+def _bare_document_query_brain(**overrides):
+    cfg = dict(model_path="ce-model", device="cpu", chunk_size=3, top_k=5)
+    cfg.update(overrides)
+    brain = live_ai_mod.Brain.__new__(live_ai_mod.Brain)
+    brain.logger = getLogger("test")
+    brain.config = SimpleNamespace(document_query=SimpleNamespace(**cfg))
+    return brain
+
+
+def test_query_document_reads_config_and_caches(tmp_path, monkeypatch):
+    seen = {"init": {}, "count": 0, "calls": []}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+            seen["count"] += 1
+
+        def query(self, path, query, top_k=None):
+            seen["calls"].append((str(path), query, top_k))
+            return "HITS"
+
+    monkeypatch.setattr(live_ai_mod, "DocumentQuery", Recorder)
+    target = tmp_path / "doc.txt"
+    target.write_text("text", encoding="utf-8")
+
+    brain = _bare_document_query_brain(chunk_size=4, top_k=7)
+    assert brain.query_document(str(target), "find x") == "HITS"
+    assert brain.query_document(str(target), "find y", top_k=2) == "HITS"
+
+    assert seen["count"] == 1  # created once and cached
+    assert seen["init"]["model_path"] == "ce-model"
+    assert seen["init"]["chunk_size"] == 4
+    assert seen["init"]["top_k"] == 7
+    assert seen["calls"] == [(str(target), "find x", None), (str(target), "find y", 2)]
+
+
+def test_query_document_requires_query(tmp_path, monkeypatch):
+    class Recorder:
+        def __init__(self, **kwargs):
+            raise AssertionError("must not be constructed")
+
+    monkeypatch.setattr(live_ai_mod, "DocumentQuery", Recorder)
+    brain = _bare_document_query_brain()
+    out = brain.query_document(str(tmp_path / "a.txt"), "   ")
+    assert out == "Error: a query is required."
+
+
+def test_query_document_reports_errors(tmp_path, monkeypatch):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, path, query, top_k=None):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(live_ai_mod, "DocumentQuery", Recorder)
+    target = tmp_path / "a.txt"
+    target.write_text("t", encoding="utf-8")
+    brain = _bare_document_query_brain()
+    out = brain.query_document(str(target), "q")
+    assert out.startswith("Error:") and "boom" in out
+
+
 def test_agent_build_tools_includes_summarize_text():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
     assert "summarize_text" in names
+
+
+def test_agent_build_tools_includes_query_document():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    names = [tool.__name__ for tool in agent._build_tools()]
+    assert "query_document" in names
 
 
 def test_agent_build_tools_keeps_existing_tools():

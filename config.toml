@@ -66,6 +66,12 @@ ratio = 0.1               # fraction of sentences to keep (0 < ratio <= 1)
 threshold = 0.5           # LexRank similarity threshold in [0, 1)
 max_sentences = 0         # 0 -> derive from ratio; >0 -> hard cap
 
+[document_query] # in-document search with a CrossEncoder (cross-encoder/ms-marco-TinyBERT-L2)
+model_path = ".res/crossencoder/ms-marco-TinyBERT-L2"  # resolved relative to this config file
+device = "cpu"            # "cpu" or "cuda"
+chunk_size = 3            # consecutive sentences per passage
+top_k = 5                 # default number of results returned by query_document
+
 [embedding] # semantic search over one or more named local corpora
 model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
 image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)
