@@ -6,9 +6,11 @@ split the input into sentences, embed each sentence, compute the pairwise
 cosine similarity, run LexRank to score centrality, then return the most
 central sentences in their original document order.
 
-Heavy dependencies (``sentence_transformers``, ``nltk``) are imported lazily so
-this module can be imported -- and unit tested -- without downloading or loading
-a real model.
+Input can be raw text (``summarize``) or any file type supported by
+``src.document_loader`` -- text-like, PDF, DOCX, XLSX, HTML and images
+(``summarize_file``). Heavy dependencies (``sentence_transformers``, ``nltk``)
+are imported lazily so this module can be imported -- and unit tested -- without
+downloading or loading a real model.
 """
 
 from __future__ import annotations
@@ -135,6 +137,22 @@ class TextSummarizer:
         return max(1, min(int(k), n_sentences))
 
     # ----------------------------------------------------------------- public
+
+    def summarize_file(self, path, max_sentences: Optional[int] = None) -> str:
+        """Summarize the text extracted from a document of any supported type.
+
+        ``src.document_loader.load_document`` extracts plain text from text-like
+        files, PDF, DOCX, XLSX, HTML and images; load errors are reported as a
+        message instead of being raised.
+        """
+        from src.document_loader import load_document  # import-safe, lazy deps
+
+        document = load_document(path)
+        if document.error:
+            return f"Unable to read '{document.source}': {document.error}"
+        if document.kind == "image":
+            return f"No extractable text in '{document.source}' (image file)."
+        return self.summarize(document.text, max_sentences=max_sentences)
 
     def summarize(self, text: str, max_sentences: Optional[int] = None) -> str:
         """Return an extractive summary of ``text`` as a single string."""

@@ -39,6 +39,46 @@ def make_summarizer(sentences, scores=None, monkeypatch=None, **kwargs):
     return instance, fake
 
 
+# ------------------------------------------------------------- summarize_file
+
+
+def test_summarize_file_text_document(tmp_path, monkeypatch):
+    sentences = ["s0.", "s1.", "s2.", "s3."]
+    scores = [0.9, 0.1, 0.95, 0.0]
+    instance, _ = make_summarizer(sentences, scores=scores, monkeypatch=monkeypatch, ratio=0.5)
+    target = tmp_path / "notes.txt"
+    target.write_text(" ".join(sentences), encoding="utf-8")
+    assert instance.summarize_file(target) == "s0. s2."
+
+
+def test_summarize_file_tex_document(tmp_path, monkeypatch):
+    instance, _ = make_summarizer(
+        ["plain words here."], scores=[1.0], monkeypatch=monkeypatch
+    )
+    target = tmp_path / "paper.tex"
+    target.write_text("\\section{Intro}\nplain words here.\n% hidden comment", encoding="utf-8")
+    # Single-sentence input: summarize returns the TeX-stripped text verbatim.
+    result = instance.summarize_file(target)
+    assert "plain words here." in result
+    assert "hidden comment" not in result and "section" not in result
+
+
+def test_summarize_file_reports_load_errors(tmp_path, monkeypatch):
+    instance, _ = make_summarizer(["a."], monkeypatch=monkeypatch)
+    result = instance.summarize_file(tmp_path / "missing.md")
+    assert result.startswith("Unable to read 'missing.md':")
+
+
+def test_summarize_file_image_document(tmp_path, monkeypatch):
+    instance, _ = make_summarizer(["a."], monkeypatch=monkeypatch)
+    target = tmp_path / "pic.png"
+    target.write_bytes(b"not-a-real-png")
+    # Images carry no summarizable text; report that instead of summarizing
+    # the file name that the loader uses as placeholder text.
+    assert instance.summarize_file(target) == (
+        "No extractable text in 'pic.png' (image file)."
+    )
+
 # ------------------------------------------------------------- lazy imports
 
 

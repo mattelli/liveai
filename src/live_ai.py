@@ -689,16 +689,14 @@ class Brain(OpenAICore):
     @dump_func_call
     def summarize_text(self, file: str, max_sentences: int = 0) -> str:
         """
-        Summarize the text content of a file into its most important sentences.
-        Useful when the user asks to summarize, condense, shorten or outline a text file.
-        ``file`` is the path of the text file to read; ``max_sentences`` = 0 uses the
-        ratio configured in the ``[summarization]`` section.
+        Summarize the content of a document into its most important sentences.
+        Useful when the user asks to summarize, condense, shorten or outline a
+        document. ``file`` is the path of the document to read; text, PDF, DOCX,
+        XLSX, HTML and image files are supported via ``src.document_loader``.
+        ``max_sentences`` = 0 uses the ratio configured in the
+        ``[summarization]`` section.
         """
-        file_path = pathlib.Path(file).resolve()
-        if not file_path.exists() or not file_path.is_file():
-            return f"Unable to read '{file_path}'"
         try:
-            text = file_path.read_text(encoding="utf-8")
             if getattr(self, "_summarizer", None) is None:
                 cfg = self.config.summarization
                 self._summarizer = TextSummarizer(
@@ -708,7 +706,7 @@ class Brain(OpenAICore):
                     threshold=getattr(cfg, "threshold", 0.5),
                     max_sentences=getattr(cfg, "max_sentences", 0),
                 )
-            return self._summarizer.summarize(text, max_sentences or None)
+            return self._summarizer.summarize_file(file, max_sentences or None)
         except Exception as e:
             return f"Error: {e}"
 

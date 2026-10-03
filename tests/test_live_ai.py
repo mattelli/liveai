@@ -82,8 +82,8 @@ def test_summarize_text_reads_file_and_caches(tmp_path, monkeypatch):
             seen["init"] = kwargs
             seen["count"] += 1
 
-        def summarize(self, text, max_sentences=None):
-            seen["calls"].append((text, max_sentences))
+        def summarize_file(self, path, max_sentences=None):
+            seen["calls"].append((str(path), max_sentences))
             return "SUMMARY"
 
     monkeypatch.setattr(live_ai_mod, "TextSummarizer", Recorder)
@@ -102,7 +102,7 @@ def test_summarize_text_reads_file_and_caches(tmp_path, monkeypatch):
     assert seen["init"]["ratio"] == 0.2
     assert seen["init"]["threshold"] == 0.4
     assert seen["init"]["max_sentences"] == 3
-    assert seen["calls"] == [("long text", None), ("more text", None)]
+    assert seen["calls"] == [(str(first), None), (str(second), None)]
 
 
 def test_summarize_text_missing_file_returns_message(tmp_path):
@@ -118,7 +118,7 @@ def test_summarize_text_forwards_max_sentences(tmp_path, monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def summarize(self, text, max_sentences=None):
+        def summarize_file(self, path, max_sentences=None):
             seen["max"] = max_sentences
             return "S"
 
@@ -135,7 +135,7 @@ def test_summarize_text_reports_errors(tmp_path, monkeypatch):
         def __init__(self, **kwargs):
             pass
 
-        def summarize(self, text, max_sentences=None):
+        def summarize_file(self, path, max_sentences=None):
             raise RuntimeError("boom")
 
     monkeypatch.setattr(live_ai_mod, "TextSummarizer", Recorder)

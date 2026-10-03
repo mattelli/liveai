@@ -62,10 +62,12 @@ Considered models
 
 ## Text summarization
 
-The `summarize_text` tool reads a **text file** and condenses it into its most
-central sentences using sentence embeddings (`all-MiniLM-L6-v2`) and LexRank.
-Call it with a file path (e.g. `summarize_text(file="notes.txt")`); the file
-content is read as UTF-8. The model is loaded lazily on first tool use from a
+The `summarize_text` tool reads a **document** and condenses its most central
+sentences using sentence embeddings (`all-MiniLM-L6-v2`) and LexRank. Call it
+with a file path (e.g. `summarize_text(file="notes.txt")`); any type supported
+by `src/document_loader.py` works -- text-like (`.txt`, `.md`, `.tex`, `.csv`,
+...), PDF, DOCX, XLSX, HTML and images (image files only report that they
+contain no extractable text). The model is loaded lazily on first tool use from a
 local folder configured in `config.toml`:
 
 ```toml
