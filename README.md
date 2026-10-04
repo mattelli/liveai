@@ -62,9 +62,9 @@ Considered models
 
 ## Text summarization
 
-The `summarize_text` tool reads a **document** and condenses its most central
+The `summarize_doc` tool reads a **document** and condenses its most central
 sentences using sentence embeddings (`all-MiniLM-L6-v2`) and LexRank. Call it
-with a file path (e.g. `summarize_text(file="notes.txt")`); any type supported
+with a file path (e.g. `summarize_doc(file="notes.txt")`); any type supported
 by `src/document_loader.py` works -- text-like (`.txt`, `.md`, `.tex`, `.csv`,
 ...), PDF, DOCX, XLSX, HTML and images (image files only report that they
 contain no extractable text). The model is loaded lazily on first tool use from a

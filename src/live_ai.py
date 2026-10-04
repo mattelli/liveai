@@ -17,7 +17,7 @@ from src.tools import (
     fetch_financial_data, save_financial_chart, download_file, extract_archive, zip_files,
     search_pattern_in_files, replace_string_in_file, search_in_file
 )
-from src.summarizer import TextSummarizer
+from src.summarizer import Summarizer
 from src.document_query import DEFAULT_CHUNK_SIZE as QUERY_CHUNK_SIZE, DEFAULT_TOP_K as QUERY_TOP_K, DocumentQuery
 from src.image_search import DEFAULT_TOP_K as IMAGE_SEARCH_TOP_K, ImageSearch
 from src.embedding_search import (
@@ -77,7 +77,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     return [
         agent.model_info, agent.recall_personal, agent.store_personal,
         agent.image_response, agent.allow_speech, agent.clear_chat,
-        agent.summarize_text, agent.query_document, agent.image_search,
+        agent.summarize_doc, agent.query_document, agent.image_search,
         agent.list_corpora, agent.store_corpus, agent.query_corpus,
         capture_image, system_info, current_date_time, get_working_directory,
         run_command, search_in_file, search_pattern_in_files,
@@ -689,7 +689,7 @@ class Brain(OpenAICore):
         return answer
 
     @dump_func_call
-    def summarize_text(self, file: str, max_sentences: int = 0) -> str:
+    def summarize_doc(self, file: str, max_sentences: int = 0) -> str:
         """
         Summarize the content of a document into its most important sentences.
         Useful when the user asks to summarize, condense, shorten or outline a
@@ -701,7 +701,7 @@ class Brain(OpenAICore):
         try:
             if getattr(self, "_summarizer", None) is None:
                 cfg = self.config.summarization
-                self._summarizer = TextSummarizer(
+                self._summarizer = Summarizer(
                     model_path=cfg.model_path,
                     device=getattr(cfg, "device", "cpu"),
                     ratio=getattr(cfg, "ratio", 0.1),

@@ -30,7 +30,7 @@ __all__ = [
     "MAX_INPUT_CHARS",
     "split_sentences",
     "is_model_available",
-    "TextSummarizer",
+    "Summarizer",
 ]
 
 DEFAULT_RATIO = 0.1
@@ -77,7 +77,7 @@ def is_model_available(model_path) -> bool:
     return any((path / marker).exists() for marker in _MODEL_MARKERS)
 
 
-class TextSummarizer:
+class Summarizer:
     """Loads a sentence-embedding model lazily and summarizes text.
 
     ``model_factory`` and ``sentence_tokenizer`` are dependency-injection seams

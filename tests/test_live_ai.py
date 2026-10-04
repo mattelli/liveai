@@ -74,7 +74,7 @@ def _bare_summarization_brain(**overrides):
     return brain
 
 
-def test_summarize_text_reads_file_and_caches(tmp_path, monkeypatch):
+def test_summarize_doc_reads_file_and_caches(tmp_path, monkeypatch):
     seen = {"calls": [], "count": 0}
 
     class Recorder:
@@ -86,7 +86,7 @@ def test_summarize_text_reads_file_and_caches(tmp_path, monkeypatch):
             seen["calls"].append((str(path), max_sentences))
             return "SUMMARY"
 
-    monkeypatch.setattr(live_ai_mod, "TextSummarizer", Recorder)
+    monkeypatch.setattr(live_ai_mod, "Summarizer", Recorder)
 
     first = tmp_path / "first.txt"
     first.write_text("long text", encoding="utf-8")
@@ -94,8 +94,8 @@ def test_summarize_text_reads_file_and_caches(tmp_path, monkeypatch):
     second.write_text("more text", encoding="utf-8")
 
     brain = _bare_summarization_brain(ratio=0.2, threshold=0.4, max_sentences=3)
-    assert brain.summarize_text(str(first)) == "SUMMARY"
-    assert brain.summarize_text(str(second)) == "SUMMARY"
+    assert brain.summarize_doc(str(first)) == "SUMMARY"
+    assert brain.summarize_doc(str(second)) == "SUMMARY"
 
     assert seen["count"] == 1  # summarizer created once and cached
     assert seen["init"]["model_path"] == "m"
@@ -105,13 +105,13 @@ def test_summarize_text_reads_file_and_caches(tmp_path, monkeypatch):
     assert seen["calls"] == [(str(first), None), (str(second), None)]
 
 
-def test_summarize_text_missing_file_returns_message(tmp_path):
+def test_summarize_doc_missing_file_returns_message(tmp_path):
     brain = _bare_summarization_brain()
-    out = brain.summarize_text(str(tmp_path / "nope.txt"))
+    out = brain.summarize_doc(str(tmp_path / "nope.txt"))
     assert "Unable to read" in out
 
 
-def test_summarize_text_forwards_max_sentences(tmp_path, monkeypatch):
+def test_summarize_doc_forwards_max_sentences(tmp_path, monkeypatch):
     seen = {}
 
     class Recorder:
@@ -122,15 +122,15 @@ def test_summarize_text_forwards_max_sentences(tmp_path, monkeypatch):
             seen["max"] = max_sentences
             return "S"
 
-    monkeypatch.setattr(live_ai_mod, "TextSummarizer", Recorder)
+    monkeypatch.setattr(live_ai_mod, "Summarizer", Recorder)
     target = tmp_path / "a.txt"
     target.write_text("t", encoding="utf-8")
     brain = _bare_summarization_brain()
-    assert brain.summarize_text(str(target), max_sentences=2) == "S"
+    assert brain.summarize_doc(str(target), max_sentences=2) == "S"
     assert seen["max"] == 2
 
 
-def test_summarize_text_reports_errors(tmp_path, monkeypatch):
+def test_summarize_doc_reports_errors(tmp_path, monkeypatch):
     class Recorder:
         def __init__(self, **kwargs):
             pass
@@ -138,11 +138,11 @@ def test_summarize_text_reports_errors(tmp_path, monkeypatch):
         def summarize_file(self, path, max_sentences=None):
             raise RuntimeError("boom")
 
-    monkeypatch.setattr(live_ai_mod, "TextSummarizer", Recorder)
+    monkeypatch.setattr(live_ai_mod, "Summarizer", Recorder)
     target = tmp_path / "a.txt"
     target.write_text("t", encoding="utf-8")
     brain = _bare_summarization_brain()
-    out = brain.summarize_text(str(target))
+    out = brain.summarize_doc(str(target))
     assert out.startswith("Error:") and "boom" in out
 
 
@@ -285,10 +285,10 @@ def test_image_search_no_images_message(tmp_path, monkeypatch):
     assert brain.image_search(str(tmp_path), "q") == f"No readable images found in '{tmp_path}'."
 
 
-def test_agent_build_tools_includes_summarize_text():
+def test_agent_build_tools_includes_summarize_doc():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
-    assert "summarize_text" in names
+    assert "summarize_doc" in names
 
 
 def test_agent_build_tools_includes_query_document():

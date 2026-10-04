@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 import src.summarizer as summarizer
-from src.summarizer import MAX_INPUT_CHARS, TextSummarizer
+from src.summarizer import MAX_INPUT_CHARS, Summarizer
 
 
 class FakeEmbedder:
@@ -24,7 +24,7 @@ class FakeEmbedder:
 
 def make_summarizer(sentences, scores=None, monkeypatch=None, **kwargs):
     fake = FakeEmbedder()
-    instance = TextSummarizer(
+    instance = Summarizer(
         "model",
         model_factory=lambda path, device: fake,
         sentence_tokenizer=lambda text: list(sentences),
@@ -95,7 +95,7 @@ def test_import_summarizer_is_lazy():
 
 
 def test_split_sentences_with_injected_tokenizer():
-    instance = TextSummarizer("p", sentence_tokenizer=lambda text: ["a", "b"])
+    instance = Summarizer("p", sentence_tokenizer=lambda text: ["a", "b"])
     assert instance._tokenize("whatever") == ["a", "b"]
 
 
@@ -113,13 +113,13 @@ def test_split_sentences_regex_fallback(monkeypatch):
 
 
 def test_summarize_empty_returns_message():
-    instance = TextSummarizer("p", sentence_tokenizer=lambda text: [])
+    instance = Summarizer("p", sentence_tokenizer=lambda text: [])
     assert instance.summarize("") == "No text to summarize."
     assert instance.summarize("   ") == "No text to summarize."
 
 
 def test_summarize_single_sentence_returns_input():
-    instance = TextSummarizer(
+    instance = Summarizer(
         "p", sentence_tokenizer=lambda text: ["only one sentence."]
     )
     assert instance.summarize("only one sentence.") == "only one sentence."
@@ -157,7 +157,7 @@ def test_summarize_truncates_long_input(monkeypatch):
         seen["length"] = len(text)
         return ["a.", "b."]
 
-    instance = TextSummarizer(
+    instance = Summarizer(
         "m",
         model_factory=lambda path, device: FakeEmbedder(),
         sentence_tokenizer=tokenizer,
@@ -170,7 +170,7 @@ def test_summarize_truncates_long_input(monkeypatch):
 
 
 def test_missing_model_raises_friendly_error(tmp_path, monkeypatch):
-    instance = TextSummarizer(
+    instance = Summarizer(
         tmp_path / "missing-model",
         sentence_tokenizer=lambda text: ["a.", "b.", "c."],
     )
@@ -192,7 +192,7 @@ def test_model_is_loaded_once(monkeypatch):
         return FakeEmbedder()
 
     sentences = ["a.", "b.", "c."]
-    instance = TextSummarizer(
+    instance = Summarizer(
         "m",
         model_factory=factory,
         sentence_tokenizer=lambda text: list(sentences),
@@ -237,7 +237,7 @@ def test_summarize_integrates_with_real_lex_rank():
         def encode(self, sents):
             return vectors
 
-    instance = TextSummarizer(
+    instance = Summarizer(
         "m",
         ratio=0.5,
         threshold=0.5,
