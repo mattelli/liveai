@@ -72,6 +72,11 @@ device = "cpu"            # "cpu" or "cuda"
 chunk_size = 3            # consecutive sentences per passage
 top_k = 5                 # default number of results returned by query_document
 
+[image_search] # search images in a folder with a CLIP model (sentence-transformers/clip-ViT-B-32)
+model_path = ".res/embedding/clip-ViT-B-32"  # same CLIP model as the multimodal embedding mode
+device = "cpu"            # "cpu" or "cuda"
+top_k = 3                 # default number of results returned by image_search
+
 [embedding] # semantic search over one or more named local corpora
 model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
 image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)

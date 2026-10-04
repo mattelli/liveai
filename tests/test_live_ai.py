@@ -209,6 +209,82 @@ def test_query_document_reports_errors(tmp_path, monkeypatch):
     assert out.startswith("Error:") and "boom" in out
 
 
+def _bare_image_search_brain(**overrides):
+    cfg = dict(model_path="clip-model", device="cpu", top_k=3)
+    cfg.update(overrides)
+    brain = live_ai_mod.Brain.__new__(live_ai_mod.Brain)
+    brain.logger = getLogger("test")
+    brain.config = SimpleNamespace(image_search=SimpleNamespace(**cfg))
+    return brain
+
+
+def test_image_search_reads_config_and_caches(tmp_path, monkeypatch):
+    seen = {"init": {}, "count": 0, "calls": []}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+            seen["count"] += 1
+
+        def search(self, directory, query, top_k=None):
+            seen["calls"].append((directory, query, top_k))
+            return [(0.912, str(tmp_path / "hit1.png")), (0.034, str(tmp_path / "hit2.png"))]
+
+    monkeypatch.setattr(live_ai_mod, "ImageSearch", Recorder)
+    (tmp_path / "imgs").mkdir()
+
+    brain = _bare_image_search_brain(top_k=4)
+    out = brain.image_search(str(tmp_path / "imgs"), "a dog in snow")
+    assert out == (
+        f"1) [0.912] {tmp_path / 'hit1.png'}\n"
+        f"2) [0.034] {tmp_path / 'hit2.png'}"
+    )
+
+    brain.image_search(str(tmp_path / "imgs"), "a cat", top_k=2)
+    assert seen["count"] == 1  # created once and cached
+    assert seen["init"]["model_path"] == "clip-model"
+    assert seen["init"]["top_k"] == 4
+    assert seen["calls"][0] == (str(tmp_path / "imgs"), "a dog in snow", None)
+    assert seen["calls"][1] == (str(tmp_path / "imgs"), "a cat", 2)
+
+
+def test_image_search_requires_query(tmp_path, monkeypatch):
+    class Recorder:
+        def __init__(self, **kwargs):
+            raise AssertionError("must not be constructed")
+
+    monkeypatch.setattr(live_ai_mod, "ImageSearch", Recorder)
+    brain = _bare_image_search_brain()
+    assert brain.image_search(str(tmp_path), "  ") == "Error: a query is required."
+
+
+def test_image_search_reports_errors(tmp_path, monkeypatch):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def search(self, directory, query, top_k=None):
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(live_ai_mod, "ImageSearch", Recorder)
+    brain = _bare_image_search_brain()
+    out = brain.image_search(str(tmp_path), "q")
+    assert out.startswith("Error:") and "boom" in out
+
+
+def test_image_search_no_images_message(tmp_path, monkeypatch):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def search(self, directory, query, top_k=None):
+            return []
+
+    monkeypatch.setattr(live_ai_mod, "ImageSearch", Recorder)
+    brain = _bare_image_search_brain()
+    assert brain.image_search(str(tmp_path), "q") == f"No readable images found in '{tmp_path}'."
+
+
 def test_agent_build_tools_includes_summarize_text():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
@@ -219,6 +295,12 @@ def test_agent_build_tools_includes_query_document():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
     assert "query_document" in names
+
+
+def test_agent_build_tools_includes_image_search():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    names = [tool.__name__ for tool in agent._build_tools()]
+    assert "image_search" in names
 
 
 def test_agent_build_tools_keeps_existing_tools():

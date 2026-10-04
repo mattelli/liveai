@@ -19,6 +19,7 @@ from src.tools import (
 )
 from src.summarizer import TextSummarizer
 from src.document_query import DEFAULT_CHUNK_SIZE as QUERY_CHUNK_SIZE, DEFAULT_TOP_K as QUERY_TOP_K, DocumentQuery
+from src.image_search import DEFAULT_TOP_K as IMAGE_SEARCH_TOP_K, ImageSearch
 from src.embedding_search import (
     DEFAULT_CHUNK_SIZE, DEFAULT_CORPORA_DIR, DEFAULT_EXTENSIONS, DEFAULT_TOP_K,
     EmbeddingCorpus, list_corpora, resolve_corpus_dir
@@ -76,7 +77,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     return [
         agent.model_info, agent.recall_personal, agent.store_personal,
         agent.image_response, agent.allow_speech, agent.clear_chat,
-        agent.summarize_text, agent.query_document,
+        agent.summarize_text, agent.query_document, agent.image_search,
         agent.list_corpora, agent.store_corpus, agent.query_corpus,
         capture_image, system_info, current_date_time, get_working_directory,
         run_command, search_in_file, search_pattern_in_files,
@@ -728,6 +729,39 @@ class Brain(OpenAICore):
             return self._document_query().query(file, query, top_k or None)
         except Exception as e:
             return f"Error: {e}"
+
+    @dump_func_call
+    def image_search(self, folder: str, query: str, top_k: int = 0) -> str:
+        """
+        Search the images inside a folder for the ones best matching a text query,
+        using the CLIP model. Useful when the user asks to find, locate or show a
+        picture/photo/screenshot in a folder by describing its content. Returns
+        the top_k matches as '<rank>) [<cosine score>] <absolute image path>'
+        lines, best match first; ``top_k`` = 0 uses the value configured in the
+        ``[image_search]`` section (default 3).
+        """
+        try:
+            if not query or not query.strip():
+                return "Error: a query is required."
+            hits = self._image_search().search(folder, query, top_k or None)
+            if not hits:
+                return f"No readable images found in '{folder}'."
+            return "\n".join(
+                f"{rank}) [{score:.3f}] {path}"
+                for rank, (score, path) in enumerate(hits, start=1)
+            )
+        except Exception as e:
+            return f"Error: {e}"
+
+    def _image_search(self):
+        if getattr(self, "_img_search", None) is None:
+            cfg = self.config.image_search
+            self._img_search = ImageSearch(
+                model_path=cfg.model_path,
+                device=getattr(cfg, "device", "cpu"),
+                top_k=getattr(cfg, "top_k", IMAGE_SEARCH_TOP_K),
+            )
+        return self._img_search
 
     def _document_query(self):
         if getattr(self, "_doc_query", None) is None:

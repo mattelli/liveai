@@ -275,6 +275,51 @@ Notes:
   tools.
 
 
+## Image search (CLIP)
+
+`image_search` finds the pictures inside a **folder** that best match a text
+query. Mirroring `samples/sentence_transformers/image_search.py`, every image
+under the folder (recursively; `.png .jpg .jpeg .webp .bmp .tif .tiff`) is
+embedded with the CLIP model, the query text is embedded into the same shared
+space, and cosine similarity ranks the images. The tool returns the **top_k
+matches as score/path pairs**, one per line, best match first:
+
+```
+1) [0.912] C:/Users/Max/Pictures/two_dogs_in_snow.jpg
+2) [0.034] C:/Users/Max/Pictures/vacation.png
+```
+
+Unreadable or corrupt files are skipped.
+
+```toml
+[image_search]
+model_path = ".res/embedding/clip-ViT-B-32"  # resolved relative to config.toml
+device = "cpu"            # "cpu" or "cuda"
+top_k = 3                 # default number of results returned by image_search
+```
+
+The model is the same CLIP encoder as the multimodal semantic search mode, so
+if it is already stored there is nothing new to download. Otherwise:
+
+```bash
+huggingface-cli download sentence-transformers/clip-ViT-B-32 \
+  --local-dir .res/embedding/clip-ViT-B-32
+```
+
+Example:
+
+```
+image_search(folder="C:/Users/Max/Pictures", query="two dogs in the snow", top_k=3)
+```
+
+Notes:
+
+- Image embeddings are cached per (path, mtime), so repeated queries over an
+  unchanged folder do not re-encode the images.
+- Querying a large folder encodes every image at least once; start with a
+  narrower folder when possible.
+
+
 ## Setup (Python 3.12.10)
 
 OS Windows 11 (powershell)
