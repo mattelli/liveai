@@ -144,7 +144,7 @@ def test_run_command_timeout(monkeypatch):
             FakeProcess.killed = True
 
     FakeProcess.killed = False
-    monkeypatch.setattr(tools.subprocess, "Popen", lambda *a, **k: FakeProcess())
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProcess())
     out = tools.run_command("sleep 100", timeout_s=0.5)
     assert "timed out" in out and FakeProcess.killed is True
 
@@ -278,7 +278,7 @@ def test_download_file_rfc5987_filename(tmp_path, monkeypatch):
     )
     # RFC 5987 percent-escapes decode to "na\u00efve.png", then safe_filename
     # replaces the non-ASCII letter before the file is written.
-    assert tools._suggested_name("https://h/x", {"content-disposition": disposition}) == "na\u00efve.png"
+    assert tools.web._suggested_name("https://h/x", {"content-disposition": disposition}) == "na\u00efve.png"
     tools.download_file("https://host/x", out_dir=str(tmp_path))
     assert (tmp_path / "na_ve.png").exists()
 
@@ -313,10 +313,10 @@ def test_download_file_network_error(monkeypatch):
 
 
 def test_suggested_name_variants():
-    assert tools._suggested_name("https://h/dir/a%20b.png", {}) == "a b.png"
-    assert tools._suggested_name("https://h/dir/file.bin", {"content-disposition": ""}) == "file.bin"
-    assert tools._suggested_name("https://h/", {}) == ""  # caller falls back to timestamp
-    assert tools._with_extension("photo", "image/jpeg;charset=utf8") == "photo.jpg"
+    assert tools.web._suggested_name("https://h/dir/a%20b.png", {}) == "a b.png"
+    assert tools.web._suggested_name("https://h/dir/file.bin", {"content-disposition": ""}) == "file.bin"
+    assert tools.web._suggested_name("https://h/", {}) == ""  # caller falls back to timestamp
+    assert tools.web._with_extension("photo", "image/jpeg;charset=utf8") == "photo.jpg"
 
 
 # ------------------------------------------------------------------ archives
@@ -466,12 +466,12 @@ def test_extract_archive_refuses_nonempty_destination(tmp_path):
 
 
 def test_archive_stem_variants():
-    assert tools._archive_stem(Path("data.tar.gz")) == "data"
-    assert tools._archive_stem(Path("data.tgz")) == "data"
-    assert tools._archive_stem(Path("data.zip")) == "data"
-    assert tools._archive_stem(Path("logs.gz")) == "logs"
-    assert tools._archive_kind(Path("photos.tar.xz")) == "tar"
-    assert tools._archive_kind(Path("photos.rar")) == ""
+    assert tools.archives._archive_stem(Path("data.tar.gz")) == "data"
+    assert tools.archives._archive_stem(Path("data.tgz")) == "data"
+    assert tools.archives._archive_stem(Path("data.zip")) == "data"
+    assert tools.archives._archive_stem(Path("logs.gz")) == "logs"
+    assert tools.archives._archive_kind(Path("photos.tar.xz")) == "tar"
+    assert tools.archives._archive_kind(Path("photos.rar")) == ""
 
 
 # ------------------------------------------------------------------ zip_files
@@ -598,27 +598,27 @@ def test_format_search_results_limits_and_formats():
 
 
 def test_web_search_formats_results(monkeypatch):
-    monkeypatch.setattr(tools, "_create_chrome_driver", lambda: FakeDriver())
-    monkeypatch.setattr(tools, "_collect_results", lambda driver, query, timeout: ["a › b"])
+    monkeypatch.setattr(tools.web, "_create_chrome_driver", lambda: FakeDriver())
+    monkeypatch.setattr(tools.web, "_collect_results", lambda driver, query, timeout: ["a › b"])
     out = tools.web_search("q", n_results=1)
     assert "a/b" in out
 
 
 def test_web_search_quits_owned_driver(monkeypatch):
     fake = FakeDriver()
-    monkeypatch.setattr(tools, "_create_chrome_driver", lambda: fake)
-    monkeypatch.setattr(tools, "_collect_results", lambda driver, query, timeout: ["a"])
+    monkeypatch.setattr(tools.web, "_create_chrome_driver", lambda: fake)
+    monkeypatch.setattr(tools.web, "_collect_results", lambda driver, query, timeout: ["a"])
     assert "1) a" in tools.web_search("q")
     assert fake.quit_calls == 1
 
 
 def test_web_search_reports_errors(monkeypatch):
-    monkeypatch.setattr(tools, "_create_chrome_driver", lambda: FakeDriver())
+    monkeypatch.setattr(tools.web, "_create_chrome_driver", lambda: FakeDriver())
 
     def boom(driver, query, timeout):
         raise RuntimeError("no chrome")
 
-    monkeypatch.setattr(tools, "_collect_results", boom)
+    monkeypatch.setattr(tools.web, "_collect_results", boom)
     assert "no chrome" in tools.web_search("q")
 
 
@@ -711,21 +711,21 @@ class FakeCamera:
 def test_capture_image_success(tmp_path, monkeypatch):
     out = tmp_path / "shot.jpg"
     camera = FakeCamera()
-    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: camera)
-    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda path, frame: True)
+    monkeypatch.setattr(tools.camera, "_VIDEO_CAPTURE_FACTORY", lambda i: camera)
+    monkeypatch.setattr(tools.camera, "_IMAGE_WRITER", lambda path, frame: True)
     result = tools.capture_image(out_file=str(out))
     assert result == str(out.resolve()) and camera.released == 1
 
 
 def test_capture_image_no_webcam(monkeypatch):
-    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera(opened=False))
-    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda p, f: True)
+    monkeypatch.setattr(tools.camera, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera(opened=False))
+    monkeypatch.setattr(tools.camera, "_IMAGE_WRITER", lambda p, f: True)
     assert "not available" in tools.capture_image()
 
 
 def test_capture_image_save_failure(monkeypatch):
-    monkeypatch.setattr(tools, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera())
-    monkeypatch.setattr(tools, "_IMAGE_WRITER", lambda p, f: False)
+    monkeypatch.setattr(tools.camera, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera())
+    monkeypatch.setattr(tools.camera, "_IMAGE_WRITER", lambda p, f: False)
     assert "Unable to save" in tools.capture_image()
 
 
