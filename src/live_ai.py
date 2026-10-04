@@ -14,6 +14,7 @@ from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command,
     web_search, webpage_headlines, webpage_content, capture_image,
+    generate_image, unload_image_generator,
     fetch_financial_data, save_financial_chart, download_file, extract_archive, zip_files,
     search_pattern_in_files, replace_string_in_file, search_in_file
 )
@@ -79,6 +80,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
         agent.image_response, agent.allow_speech, agent.clear_chat,
         agent.summarize_doc, agent.query_document, agent.image_search,
         agent.list_corpora, agent.store_corpus, agent.query_corpus,
+        generate_image, unload_image_generator,
         capture_image, system_info, current_date_time, get_working_directory,
         run_command, search_in_file, search_pattern_in_files,
         read_text_file, replace_string_in_file, write_text_file,

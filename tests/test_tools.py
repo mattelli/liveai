@@ -14,7 +14,7 @@ import src.tools as tools
 def test_import_tools_is_lazy():
     import importlib
 
-    heavy = ("cv2", "selenium", "yfinance", "matplotlib", "bs4")
+    heavy = ("cv2", "selenium", "yfinance", "matplotlib", "bs4", "torch", "diffusers")
     for name in heavy:
         sys.modules.pop(name, None)
     sys.modules.pop("src.tools", None)
@@ -25,7 +25,8 @@ def test_import_tools_is_lazy():
 
 def test_public_tools_are_callable():
     for name in ("system_info", "read_text_file", "write_text_file", "run_command",
-                 "web_search", "capture_image", "fetch_financial_data",
+                 "web_search", "capture_image", "generate_image",
+                 "unload_image_generator", "fetch_financial_data",
                  "save_financial_chart", "search_in_file", "search_pattern_in_files",
                  "replace_string_in_file"):
         assert callable(getattr(tools, name))
@@ -727,6 +728,179 @@ def test_capture_image_save_failure(monkeypatch):
     monkeypatch.setattr(tools.camera, "_VIDEO_CAPTURE_FACTORY", lambda i: FakeCamera())
     monkeypatch.setattr(tools.camera, "_IMAGE_WRITER", lambda p, f: False)
     assert "Unable to save" in tools.capture_image()
+
+
+# ------------------------------------------------------------------ T10 image generation
+
+
+class FakeImageGen:
+    """Minimal stand-in for src.image_generator.ImageGenerator."""
+
+    def __init__(self, fail_load=False, fail_save=False):
+        self.fail_load, self.fail_save = fail_load, fail_save
+        self.loaded = False
+        self.calls = []
+        self.unloaded = 0
+        self.last_seed = None
+
+    def is_t2i_pipe_loaded(self):
+        return self.loaded
+
+    def load_t2i_pipe(self):
+        if self.fail_load:
+            raise RuntimeError("no model")
+        self.loaded = True
+        return True
+
+    def text2image(self, prompt, negative_prompt=None, width=None, height=None, seed=None, steps=None):
+        self.calls.append({"prompt": prompt, "seed": seed, "width": width, "height": height})
+        self.last_seed = seed if seed is not None and seed >= 0 else 424242
+        return f"image-{len(self.calls)}"
+
+    def save(self, image, img_path):
+        if self.fail_save:
+            return False
+        path = Path(img_path)
+        path.parent.mkdir(parents=True, exist_ok=True)  # like ImageGenerator.save
+        path.write_bytes(b"png")
+        return True
+
+    def unload_t2i_pipe(self):
+        self.unloaded += 1
+        was = self.loaded
+        self.loaded = False
+        return was
+
+
+@pytest.fixture
+def image_gen_seam(monkeypatch):
+    """Reset the module-level seams around each image_gen test."""
+    monkeypatch.setattr(tools.image_gen, "_generator", None)
+    monkeypatch.setattr(tools.image_gen, "_GENERATOR_FACTORY", None)
+    monkeypatch.setattr(tools.image_gen, "_CONFIG_PATH", None)
+    monkeypatch.setattr(tools.image_gen, "_config_cache", None)
+    return tools.image_gen
+
+
+def test_generate_image_success(tmp_path, image_gen_seam):
+    fake = FakeImageGen()
+    image_gen_seam._GENERATOR_FACTORY = lambda: fake
+    out = tmp_path / "art.png"
+    result = image_gen_seam.generate_image("a cat", seed=7, out_file=str(out))
+    assert result == f"{out.resolve()} (seed=7)"
+    assert out.read_bytes() == b"png"
+    call = fake.calls[0]
+    assert call["prompt"] == "a cat" and call["seed"] == 7
+    assert call["width"] is None and call["height"] is None  # defaults resolved by the generator
+
+
+def test_generate_image_reuses_cached_generator(tmp_path, image_gen_seam):
+    fake = FakeImageGen()
+    builds = []
+
+    def factory():
+        builds.append(1)
+        return fake
+
+    image_gen_seam._GENERATOR_FACTORY = factory
+    image_gen_seam.generate_image("a cat", out_file=str(tmp_path / "a.png"))
+    image_gen_seam.generate_image("a dog", out_file=str(tmp_path / "b.png"))
+    assert len(builds) == 1 and len(fake.calls) == 2  # one model load, two generations
+
+
+def test_generate_image_random_seed(tmp_path, image_gen_seam):
+    fake = FakeImageGen()
+    image_gen_seam._GENERATOR_FACTORY = lambda: fake
+    result = image_gen_seam.generate_image("a cat", seed=-1, out_file=str(tmp_path / "a.png"))
+    seed_used = int(result.rsplit("(seed=", 1)[1].rstrip(")"))
+    assert seed_used >= 0
+
+
+def test_generate_image_appends_png_extension(tmp_path, image_gen_seam):
+    fake = FakeImageGen()
+    image_gen_seam._GENERATOR_FACTORY = lambda: fake
+    result = image_gen_seam.generate_image("a cat", out_file=str(tmp_path / "art"))
+    assert result.startswith(str((tmp_path / "art.png").resolve()))
+
+
+def test_generate_image_empty_prompt(image_gen_seam):
+    called = []
+    image_gen_seam._GENERATOR_FACTORY = lambda: called.append(1)
+    assert "prompt is required" in image_gen_seam.generate_image("   ")
+    assert not called  # factory never invoked
+
+
+def test_generate_image_rejects_bad_size(image_gen_seam):
+    assert "multiple of 8" in image_gen_seam.generate_image("a cat", width=500)
+    assert "multiple of 8" in image_gen_seam.generate_image("a cat", height=-512)
+
+
+def test_generate_image_rejects_directory(tmp_path, image_gen_seam):
+    out_dir = tmp_path / "dir.png"
+    out_dir.mkdir()
+    assert "directory" in image_gen_seam.generate_image("a cat", out_file=str(out_dir))
+
+
+def test_generate_image_load_failure(tmp_path, image_gen_seam):
+    fake = FakeImageGen(fail_load=True)
+    image_gen_seam._GENERATOR_FACTORY = lambda: fake
+    assert "Error:" in image_gen_seam.generate_image("a cat", out_file=str(tmp_path / "a.png"))
+
+
+def test_generate_image_missing_diffusers_hint(tmp_path, image_gen_seam, monkeypatch):
+    class NoDiffusers(FakeImageGen):
+        def load_t2i_pipe(self):
+            raise ImportError("No module named 'diffusers'")
+
+    image_gen_seam._GENERATOR_FACTORY = lambda: NoDiffusers()
+    result = image_gen_seam.generate_image("a cat", out_file=str(tmp_path / "a.png"))
+    assert "diffusers" in result and "pip install" in result
+
+
+def test_generate_image_save_failure(tmp_path, image_gen_seam):
+    fake = FakeImageGen(fail_save=True)
+    image_gen_seam._GENERATOR_FACTORY = lambda: fake
+    assert "Unable to save" in image_gen_seam.generate_image("a cat", out_file=str(tmp_path / "a.png"))
+
+
+def test_unload_image_generator(image_gen_seam):
+    fake = FakeImageGen()
+    fake.loaded = True  # a loaded model is required for unload to do anything
+    image_gen_seam._generator = fake
+    assert "unloaded" in image_gen_seam.unload_image_generator()
+    assert fake.unloaded == 1 and image_gen_seam._generator is None
+    assert "No image generation model" in image_gen_seam.unload_image_generator()
+
+
+def test_generate_image_default_out_file_from_config(tmp_path, image_gen_seam, monkeypatch):
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text('[image_gen]\nout_dir = "images"\n')
+    monkeypatch.setattr(image_gen_seam, "_CONFIG_PATH", str(cfg_path))
+    fake = FakeImageGen()
+    image_gen_seam._GENERATOR_FACTORY = lambda: fake
+    result = image_gen_seam.generate_image("a cat")
+    out = Path(result.split(" (seed=", 1)[0])
+    assert out.parent == (tmp_path / "images").resolve()
+    assert out.name.startswith("generated_") and out.suffix == ".png"
+
+
+def test_default_generator_factory_reads_config(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text('[image_gen]\nt2i_model = "fake/model"\nwidth = 640\nsteps = 20\n')
+    monkeypatch.setattr(tools.image_gen, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(tools.image_gen, "_config_cache", None)
+    gen = tools.image_gen._default_generator_factory()
+    assert gen.t2i_model == "fake/model"
+    assert gen.defaults["width"] == 640 and gen.defaults["steps"] == 20
+
+
+def test_default_generator_factory_without_section(tmp_path, monkeypatch):
+    cfg_path = tmp_path / "config.toml"
+    cfg_path.write_text('[brain]\nmodel = "x"\n')
+    monkeypatch.setattr(tools.image_gen, "_CONFIG_PATH", str(cfg_path))
+    monkeypatch.setattr(tools.image_gen, "_config_cache", None)
+    gen = tools.image_gen._default_generator_factory()
+    assert gen.defaults["width"] == 512  # built-in defaults kick in
 
 
 def test_module_exports_public_tools():

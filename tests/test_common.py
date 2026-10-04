@@ -160,6 +160,16 @@ def test_real_config_has_summarization_block():
         assert hasattr(sm, key)
 
 
+def test_real_config_has_image_gen_block():
+    cfg_path = Path(__file__).parent.parent / "config.toml"
+    ns = load_config(cfg_path)
+    igm = ns.image_gen
+    assert igm.out_dir.is_absolute()  # resolved relative to the config file
+    for key in ("t2i_model", "i2i_model", "device", "negative_prompt",
+                "width", "height", "steps", "seed", "guidance", "denoise"):
+        assert hasattr(igm, key)
+
+
 def test_load_config_resolves_corpora_dir(tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text('[embedding]\nmodel_path = ".res/models/st"\ncorpora_dir = ".res/corpora"\n')

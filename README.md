@@ -51,13 +51,82 @@ python3 -m piper.download_voices en_US-hfc_female-medium
 ```
 
 
-## Diffusers
-Text to Image and Image to Image generation through Diffusion pipelines.
+## Image generation (Stable Diffusion)
 
-Considered models
+`generate_image` creates an image from a text prompt with a local
+Stable-Diffusion pipeline (`diffusers`, see `src/image_generator.py`), mirroring
+`playground/simple_img_gen.py`. The first call loads the model, which can take a
+while and needs several GB of free RAM; later calls in the same session reuse
+the loaded pipeline. The image is saved to disk and the tool answers with the
+file's absolute path plus the seed used - repeat the seed to reproduce the same
+image, change it to get a variation:
 
-- runwayml/stable-diffusion-v1-5
-- UnfilteredAI/NSFW-gen-v2
+```
+generate_image(prompt="a white dog sitting on a pillow")
+-> C:/Users/Max/Documents/workspace/live_assistant/.out_images/generated_20261004-124630.png (seed=42)
+```
+
+- Parameters left empty fall back to the `[image_gen]` defaults in `config.toml`
+  (size 512x512, 50 steps, configured negative prompt).
+- `width`/`height` must be multiples of 8, `steps` trades quality for speed and
+  a `seed` < 0 picks a random seed for every image.
+- `unload_image_generator()` frees the RAM/VRAM again when no more images are
+  needed (the model stays resident until then).
+
+```toml
+[image_gen] # local image generation with Stable Diffusion (src/image_generator.py, diffusers)
+t2i_model = "UnfilteredAI/NSFW-GEN-ANIME"     # text-to-image model (HuggingFace id or local folder)
+i2i_model = "runwayml/stable-diffusion-v1-5"  # image-to-image / inpaint model
+device = "auto"         # "auto" (cuda when available), "cpu" or "cuda"
+negative_prompt = "blurry, low quality, deformed, extra limbs, watermark, text"
+width = 512             # default image width in pixels (multiple of 8)
+height = 512            # default image height in pixels (multiple of 8)
+steps = 50              # default diffusion steps (higher = slower, more refined)
+seed = 42               # default seed; negative -> random seed for every image
+guidance = 5.0          # default img2img/inpaint prompt guidance (3-12)
+denoise = 0.5           # default img2img/inpaint denoise strength (0-1)
+out_dir = ".out_images" # folder for generated images (resolved relative to this file)
+```
+
+The tool needs the diffusers stack in the Python environment that runs the
+assistant. `setup-liveai-cpu.ps1` installs it; for existing environments:
+
+```
+pip install diffusers transformers accelerate safetensors
+```
+
+The models are downloaded from the Hugging Face Hub automatically on first use
+(~2 GB for the default text-to-image model) into the local HF cache, so nothing
+has to be stored manually. To run offline instead, pre-download the model once
+and point the config at the folder:
+
+```
+hf download UnfilteredAI/NSFW-GEN-ANIME --local-dir .res/sd/nsfw-gen-anime
+```
+
+```toml
+[image_gen]
+t2i_model = "C:/Users/Max/Documents/workspace/live_assistant/.res/sd/nsfw-gen-anime"
+```
+
+Notes:
+
+- Missing packages fail gracefully: the tool answers with the `pip install`
+  command to run instead of a stack trace.
+- `t2i_model`/`i2i_model` accept a Hugging Face id **or** a local model folder.
+  Unlike the `*_path` keys they are not resolved relative to `config.toml` -
+  local folders need an absolute path (or one relative to the launch directory).
+- Image-to-image and inpainting (editing a masked region of an input image with
+  `runwayml/stable-diffusion-v1-5`) are available through the
+  `ImageGenerator.image2image` API (`src/image_generator.py`,
+  `playground/simple_img_gen.py`); the agent currently exposes text-to-image as
+  a tool only.
+- Generated images land in `.out_images/` (git-ignored via the `.*/` pattern)
+  with a timestamped name, so nothing is overwritten; pass `out_file` to choose
+  name and folder explicitly.
+- On the CPU-only reference machine (see System Notes) a 512x512 image with 50
+  steps takes minutes: lower `steps` (20-30) and/or the size for quicker
+  iteration, or set `seed = -1` in the config for a fresh image every time.
 
 
 ## Text summarization

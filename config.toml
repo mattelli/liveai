@@ -77,6 +77,19 @@ model_path = ".res/embedding/clip-ViT-B-32"  # same CLIP model as the multimodal
 device = "cpu"            # "cpu" or "cuda"
 top_k = 3                 # default number of results returned by image_search
 
+[image_gen] # local image generation with Stable Diffusion (src/image_generator.py, diffusers)
+t2i_model = "UnfilteredAI/NSFW-GEN-ANIME"     # text-to-image model (HuggingFace id or local path)
+i2i_model = "runwayml/stable-diffusion-v1-5"  # image-to-image / inpaint model
+device = "auto"         # "auto" (cuda when available), "cpu" or "cuda"
+negative_prompt = "blurry, low quality, deformed, extra limbs, watermark, text"
+width = 512             # default image width in pixels (multiple of 8)
+height = 512            # default image height in pixels (multiple of 8)
+steps = 50              # default diffusion steps (higher = slower, more refined)
+seed = 42               # default seed; negative -> random seed for every image
+guidance = 5.0          # default img2img/inpaint prompt guidance (3-12)
+denoise = 0.5           # default img2img/inpaint denoise strength (0-1)
+out_dir = ".out_images" # folder for generated images (resolved relative to this file)
+
 [embedding] # semantic search over one or more named local corpora
 model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
 image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)

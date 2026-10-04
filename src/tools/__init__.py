@@ -5,6 +5,7 @@
 - ``web``       : DuckDuckGo search, page extraction, file downloads
 - ``archives``  : extract zip/7z/tar/gz archives and zip folder contents
 - ``camera``    : webcam frame capture
+- ``image_gen`` : text-to-image generation (local Stable-Diffusion pipeline)
 - ``finance``   : yfinance data download and chart plotting
 
 Every public tool is re-exported here, so ``from src.tools import <tool>``
@@ -27,17 +28,19 @@ from .web import (
 )
 from .archives import extract_archive, zip_files
 from .camera import CAPTURED_IMAGE, capture_image
+from .image_gen import GENERATED_IMAGE, generate_image, unload_image_generator
 from .finance import (
     ValidYF, fetch_financial_data, save_financial_chart, select_financial_columns,
 )
 
 __all__ = [
-    "CAPTURED_IMAGE", "ValidYF", "capture_image", "current_date_time",
-    "download_file", "exit_gracefully", "extract_archive", "extract_text",
-    "fetch_financial_data", "format_search_results", "get_working_directory",
-    "normalize_extensions", "read_text_file", "replace_string_in_file",
-    "run_command", "safe_filename", "save_financial_chart", "search_in_file",
-    "search_pattern_in_files", "select_financial_columns", "system_info",
+    "CAPTURED_IMAGE", "GENERATED_IMAGE", "ValidYF", "capture_image",
+    "current_date_time", "download_file", "exit_gracefully", "extract_archive",
+    "extract_text", "fetch_financial_data", "format_search_results",
+    "generate_image", "get_working_directory", "normalize_extensions",
+    "read_text_file", "replace_string_in_file", "run_command", "safe_filename",
+    "save_financial_chart", "search_in_file", "search_pattern_in_files",
+    "select_financial_columns", "system_info", "unload_image_generator",
     "web_search", "webpage_content", "webpage_headlines", "write_text_file",
     "zip_files",
 ]
