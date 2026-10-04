@@ -15,7 +15,7 @@ __all__ = [
     "read_text_file", "write_text_file", "get_working_directory", "run_command",
     "webpage_headlines", "webpage_content", "web_search", "capture_image",
     "fetch_financial_data", "save_financial_chart", "search_in_file",
-    "search_pattern_in_files", "replace_string_in_file",
+    "search_pattern_in_files", "replace_string_in_file", "download_file",
 ]
 
 CAPTURED_IMAGE: str = "captured_image.jpg"
@@ -148,6 +148,43 @@ def _collect_results(driver, query: str, timeout_s: float) -> list[str]:
     wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "article")))
     elements = driver.find_elements(By.CSS_SELECTOR, "article")
     return [element.text.strip() for element in elements if element.text.strip()]
+
+
+# Content types that complete a download name missing its extension (e.g. a
+# bare ``https://host/photo`` URL answered with ``Content-Type: image/png``).
+_CONTENT_TYPE_EXT = {
+    "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif",
+    "image/webp": ".webp", "image/bmp": ".bmp", "image/tiff": ".tiff",
+    "video/mp4": ".mp4", "video/webm": ".webm", "video/quicktime": ".mov",
+    "video/x-msvideo": ".avi", "audio/mpeg": ".mp3", "audio/wav": ".wav",
+    "audio/ogg": ".ogg", "application/pdf": ".pdf", "application/zip": ".zip",
+}
+
+
+def _suggested_name(url: str, headers) -> str:
+    """Download name from Content-Disposition, else the URL path basename.
+
+    Supports both ``filename="name.ext"`` and RFC 5987 ``filename*=UTF-8''...``
+    headers; percent-escapes in the URL path are decoded.
+    """
+    from urllib.parse import unquote, urlparse
+
+    header = (headers.get("content-disposition") or "") if headers else ""
+    match = re.search(r"filename\*=utf-8''(?P<value>[^;]+)", header, re.IGNORECASE)
+    if match:
+        return unquote(match.group("value")).strip()
+    match = re.search(r'filename\s*=\s*"?([^";]+)"?', header, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return unquote(Path(urlparse(url).path).name)
+
+
+def _with_extension(name: str, content_type: str) -> str:
+    """Complete ``name`` with the content-type extension when it has none."""
+    if Path(name).suffix:
+        return name
+    media_type = (content_type or "").split(";")[0].strip().lower()
+    return name + _CONTENT_TYPE_EXT.get(media_type, "")
 
 
 # ------------------------------------------------------------------- tools
@@ -303,6 +340,54 @@ def web_search(query: str, n_results: int = 5, timeout_s: float = 10.0) -> str:
         return f"Error: {exc!r}"
     finally:
         driver.quit()
+
+
+@dump_func_call
+def download_file(
+        url: str,
+        out_dir: str | None = None,
+        filename: str | None = None,
+        overwrite: bool = False,
+        timeout_s: float = 30.0,
+    ) -> str:
+    """
+    Download a file such as a picture, movie, audio or any other file from a URL
+    and save it on disk. The file is streamed in chunks to ``out_dir`` (default:
+    current working directory) under ``filename`` when given, else the name
+    suggested by the Content-Disposition header or the URL itself (missing
+    extensions are completed from the Content-Type). Existing files are only
+    replaced when ``overwrite`` is True. Returns the saved path and its size.
+    """
+    import requests
+
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; live-assistant)"}
+    try:
+        response = requests.get(url, stream=True, timeout=timeout_s, headers=headers)
+        response.raise_for_status()
+    except Exception as exc:
+        return f"Error fetching URL: {exc}"
+
+    headers = getattr(response, "headers", {}) or {}
+    name = filename or _suggested_name(url, headers)
+    name = _with_extension(name or f"downloaded_{datetime.now():%Y%m%d_%H%M%S}",
+                           headers.get("content-type", ""))
+    out_directory = Path(out_dir) if out_dir is not None else Path.cwd()
+    dest_path = out_directory / safe_filename(name)
+    if dest_path.exists():
+        if dest_path.is_dir():
+            return f"Error: '{dest_path}' is a directory."
+        if not overwrite:
+            return "File already exists."
+
+    try:
+        out_directory.mkdir(parents=True, exist_ok=True)
+        with open(dest_path, "wb") as handle:
+            for chunk in response.iter_content(chunk_size=65536):
+                if chunk:
+                    handle.write(chunk)
+    except Exception as exc:
+        return f"Error downloading: {exc}"
+    return f"Saved '{dest_path.resolve()}' ({dest_path.stat().st_size:,} bytes)."
 
 
 @dump_func_call

@@ -201,6 +201,124 @@ def test_webpage_fetch_error(monkeypatch):
     assert "Error fetching URL" in tools.webpage_content("http://x")
 
 
+# ------------------------------------------------------------------ downloads
+
+
+class FakeStreamResponse:
+    """Streaming response double for ``requests.get(..., stream=True)``."""
+
+    def __init__(self, chunks=(b"abc", b"def"), status=200, headers=None):
+        self._chunks = list(chunks)
+        self._status = status
+        self.headers = headers or {}
+
+    def raise_for_status(self):
+        if self._status >= 400:
+            raise RuntimeError(f"HTTP {self._status}")
+
+    def iter_content(self, chunk_size=8192):
+        yield from self._chunks
+
+
+def test_download_file_streams_content_from_url(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(chunks=(b"hello ", b"world")),
+    )
+    out = tools.download_file("https://host/pictures/pic.jpg", out_dir=str(tmp_path))
+    target = tmp_path / "pic.jpg"
+    assert target.read_bytes() == b"hello world"
+    assert "pic.jpg" in out and "11 bytes" in out
+
+
+def test_download_file_explicit_name_and_overwrite(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(headers={"content-type": "video/mp4"}),
+    )
+    out = tools.download_file("https://host/film", out_dir=str(tmp_path), filename="movie.mp4")
+    assert (tmp_path / "movie.mp4").exists() and "movie.mp4" in out
+
+    again = tools.download_file("https://host/film", out_dir=str(tmp_path), filename="movie.mp4")
+    assert again == "File already exists."
+
+    replaced = tools.download_file(
+        "https://host/film", out_dir=str(tmp_path), filename="movie.mp4", overwrite=True
+    )
+    assert "movie.mp4" in replaced
+
+
+def test_download_file_content_disposition_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(
+            headers={"content-disposition": 'attachment; filename="report.pdf"'}
+        ),
+    )
+    tools.download_file("https://host/get?id=1", out_dir=str(tmp_path))
+    assert (tmp_path / "report.pdf").exists()
+
+
+def test_download_file_content_type_completes_extension(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(headers={"content-type": "image/png"}),
+    )
+    tools.download_file("https://host/photo", out_dir=str(tmp_path))
+    assert (tmp_path / "photo.png").exists()
+
+
+def test_download_file_rfc5987_filename(tmp_path, monkeypatch):
+    disposition = "attachment; filename*=UTF-8''na%C3%AFve.png"
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(
+            headers={"content-disposition": disposition}
+        ),
+    )
+    # RFC 5987 percent-escapes decode to "na\u00efve.png", then safe_filename
+    # replaces the non-ASCII letter before the file is written.
+    assert tools._suggested_name("https://h/x", {"content-disposition": disposition}) == "na\u00efve.png"
+    tools.download_file("https://host/x", out_dir=str(tmp_path))
+    assert (tmp_path / "na_ve.png").exists()
+
+
+def test_download_file_sanitizes_traversal_names(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(
+            headers={"content-disposition": 'attachment; filename="../../evil.exe"'}
+        ),
+    )
+    out = tools.download_file("https://host/x", out_dir=str(tmp_path))
+    saved = Path(out.split("'")[1])
+    assert saved.parent == tmp_path.resolve()  # stayed inside out_dir
+    assert saved.exists()
+
+
+def test_download_file_http_error(monkeypatch):
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(status=404),
+    )
+    assert "Error fetching URL" in tools.download_file("https://host/missing.png")
+
+
+def test_download_file_network_error(monkeypatch):
+    def boom(url, timeout, stream, headers=None):
+        raise ConnectionError("no route to host")
+
+    monkeypatch.setattr(tools.requests, "get", boom)
+    assert "Error fetching URL" in tools.download_file("https://host/x")
+
+
+def test_suggested_name_variants():
+    assert tools._suggested_name("https://h/dir/a%20b.png", {}) == "a b.png"
+    assert tools._suggested_name("https://h/dir/file.bin", {"content-disposition": ""}) == "file.bin"
+    assert tools._suggested_name("https://h/", {}) == ""  # caller falls back to timestamp
+    assert tools._with_extension("photo", "image/jpeg;charset=utf8") == "photo.jpg"
+
+
 # ------------------------------------------------------------------ T6 web_search
 
 

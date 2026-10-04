@@ -303,6 +303,12 @@ def test_agent_build_tools_includes_image_search():
     assert "image_search" in names
 
 
+def test_agent_build_tools_includes_download_file():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    names = [tool.__name__ for tool in agent._build_tools()]
+    assert "download_file" in names
+
+
 def test_agent_build_tools_keeps_existing_tools():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
