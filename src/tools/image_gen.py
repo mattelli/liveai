@@ -8,8 +8,10 @@ diffusion pipeline takes a long time and lots of memory, so it must survive
 across tool calls instead of being rebuilt for every image.
 
 Generation defaults (models, size, steps, seed, output folder) come from the
-``[image_gen]`` section of ``config.toml``; parameters the caller leaves unset
-fall back to those configured defaults.
+``[image_gen]`` section of the application config, which ``main.py`` injects
+via :func:`configure` after ``load_config`` - this module never guesses a
+config location. Without injection (or without the section) the built-in
+``DEFAULT_*`` values from ``src.image_generator`` apply.
 """
 
 from __future__ import annotations
@@ -20,30 +22,26 @@ from datetime import datetime
 from src.common import dump_func_call
 from src.image_generator import check_size
 
-__all__ = ["GENERATED_IMAGE", "generate_image", "unload_image_generator"]
+__all__ = ["GENERATED_IMAGE", "configure", "generate_image", "unload_image_generator"]
 
 GENERATED_IMAGE: str = "generated_image.png"
 
-_DEFAULT_CONFIG = pathlib.Path(__file__).resolve().parents[2] / "config.toml"
-
 # Test seams (module-level so the public tool signatures stay LLM-friendly).
-_GENERATOR_FACTORY = None        # builds the shared ImageGenerator; tests inject fakes
-_CONFIG_PATH: str | None = None  # override for the config.toml location
-_config_cache = None             # cached [image_gen] section (None when absent)
-_generator = None                # cached shared ImageGenerator instance
+_GENERATOR_FACTORY = None  # builds the shared ImageGenerator; tests inject fakes
+_config_cache = None       # [image_gen] section injected via configure() (None -> defaults)
+_generator = None          # cached shared ImageGenerator instance
 
 
-def _config_section():
-    """Load the ``[image_gen]`` section of config.toml once (None if missing)."""
-    global _config_cache
-    if _config_cache is None:
-        from src.common import load_config
-        config_path = pathlib.Path(_CONFIG_PATH) if _CONFIG_PATH else _DEFAULT_CONFIG
-        try:
-            _config_cache = getattr(load_config(config_path), "image_gen", None)
-        except OSError:
-            _config_cache = None
-    return _config_cache
+def configure(config) -> None:
+    """
+    Inject the application config into the tool (called by ``main.py`` after
+    ``load_config``). Only the ``[image_gen]`` section is kept; a missing
+    section means the built-in defaults apply. Also drops the cached
+    generator, so a config change is honored on the next generation.
+    """
+    global _config_cache, _generator
+    _config_cache = getattr(config, "image_gen", None)
+    _generator = None
 
 
 def _default_generator_factory():
@@ -57,7 +55,7 @@ def _default_generator_factory():
         DEFAULT_NEGATIVE_PROMPT, DEFAULT_SEED, DEFAULT_STEPS, DEFAULT_T2I_MODEL,
         DEFAULT_WIDTH, DEFAULT_HEIGHT, ImageGenerator,
     )
-    cfg = _config_section()
+    cfg = _config_cache
     if cfg is None:
         return ImageGenerator()
 
@@ -91,7 +89,7 @@ def _shared_generator():
 
 def _default_out_path() -> pathlib.Path:
     """Timestamped default output path under the configured ``out_dir``."""
-    cfg = _config_section()
+    cfg = _config_cache
     out_dir = (
         pathlib.Path(cfg.out_dir)
         if cfg is not None and getattr(cfg, "out_dir", None)

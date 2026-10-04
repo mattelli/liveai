@@ -1,3 +1,4 @@
+import src.session as session_mod
 from src.session import ConversationSession
 from tests.conftest import FakeAgent
 
@@ -13,7 +14,10 @@ TRANSCRIPT = [
 ]
 
 
-def test_full_session_transcript(capsys):
+def test_full_session_transcript(capsys, monkeypatch):
+    speech_calls, clear_calls = [], []
+    monkeypatch.setattr(session_mod, "allow_speech", lambda enable: speech_calls.append(enable))
+    monkeypatch.setattr(session_mod, "clear_chat", lambda: clear_calls.append(1))
     it = iter(TRANSCRIPT)
     agent = FakeAgent()
     session = ConversationSession(agent, lambda: next(it))
@@ -21,8 +25,8 @@ def test_full_session_transcript(capsys):
 
     assert agent.acted == ["summarise the plan", "just answer", "final answer"]
     assert agent.printed == []
-    assert agent.speech == [True, False]  # enabled then disabled on shutdown
-    assert agent.cleared == 1
+    assert speech_calls == [True, False]  # enabled then disabled on shutdown
+    assert clear_calls == [1]
     # Per the §2.2 algorithm, command turns `continue` before the finally-flush,
     # so only the 3 model turns + shutdown() flush.
     assert agent.flush_count == 4

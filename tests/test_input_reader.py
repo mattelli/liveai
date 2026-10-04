@@ -95,14 +95,16 @@ def test_multiline_prompt_is_not_a_command():
     agent = FakeAgent()
     ConversationSession(agent, lambda: next(it)).run()
     assert agent.acted == ["/quit\nstill here"]
-    assert agent.cleared == 0
 
 
-def test_single_line_command_still_dispatches():
+def test_single_line_command_still_dispatches(monkeypatch):
+    import src.session as session_mod
+    calls = []
+    monkeypatch.setattr(session_mod, "clear_chat", lambda: calls.append(1))
     it = iter(["/clear", "/quit"])
     agent = FakeAgent()
     ConversationSession(agent, lambda: next(it)).run()
-    assert agent.cleared == 1 and agent.acted == []
+    assert calls == [1] and agent.acted == []
 
 
 # --------------------------------------------------------- P5 explicit paste

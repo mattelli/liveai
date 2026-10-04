@@ -6,6 +6,7 @@ import signal
 from typing import Callable
 
 from src.common import cprint
+from src.tools import allow_speech, clear_chat
 
 
 @contextlib.contextmanager
@@ -55,7 +56,9 @@ class ConversationSession:
                  quit_on_prompt_interrupt: bool = False):
         """
         agent: object exposing act/model_fragments/print_fragment/flush_stream/
-               clear_chat/allow_speech/model_info (FakeAgent in tests)
+               model_info (FakeAgent in tests). Conversation-level tools
+               (clear_chat, allow_speech) live in src.tools and are called
+               directly, independent of the agent object.
         read_prompt: Callable[[], str | None]; None means EOF
         use_tools: bool
         quit_on_prompt_interrupt: Ctrl+C while waiting for input exits instead of
@@ -181,21 +184,18 @@ class ConversationSession:
         cprint("  Ctrl+D             - exit the session", "cyan")
 
     def _cmd_clear(self) -> None:
-        if hasattr(self.agent, "clear_chat"):
-            self.agent.clear_chat()
-            cprint("Chat cleared", "green")
-        else:
-            cprint("Clearing chat is not supported by this agent", "grey")
+        clear_chat()
+        cprint("Chat cleared", "green")
 
     def _cmd_voice(self, arg: str) -> None:
         arg = arg.strip().lower()
         if arg == "on":
             self._speech_enabled = True
-            self.agent.allow_speech(True)
+            allow_speech(True)
             cprint("Voice enabled", "green")
         elif arg == "off":
             self._speech_enabled = False
-            self.agent.allow_speech(False)
+            allow_speech(False)
             cprint("Voice disabled", "green")
         else:
             cprint("Usage: /voice on|off", "yellow")
@@ -321,8 +321,8 @@ class ConversationSession:
 
     def shutdown(self) -> int:
         self._flush()
-        if self._speech_enabled and hasattr(self.agent, "allow_speech"):
-            self.agent.allow_speech(False)
+        if self._speech_enabled:
+            allow_speech(False)
             self._speech_enabled = False
         if not self._shutdown_done:
             cprint("👋 Bye!", "green")

@@ -1,6 +1,7 @@
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -777,7 +778,6 @@ def image_gen_seam(monkeypatch):
     """Reset the module-level seams around each image_gen test."""
     monkeypatch.setattr(tools.image_gen, "_generator", None)
     monkeypatch.setattr(tools.image_gen, "_GENERATOR_FACTORY", None)
-    monkeypatch.setattr(tools.image_gen, "_CONFIG_PATH", None)
     monkeypatch.setattr(tools.image_gen, "_config_cache", None)
     return tools.image_gen
 
@@ -872,10 +872,8 @@ def test_unload_image_generator(image_gen_seam):
     assert "No image generation model" in image_gen_seam.unload_image_generator()
 
 
-def test_generate_image_default_out_file_from_config(tmp_path, image_gen_seam, monkeypatch):
-    cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text('[image_gen]\nout_dir = "images"\n')
-    monkeypatch.setattr(image_gen_seam, "_CONFIG_PATH", str(cfg_path))
+def test_generate_image_default_out_file_from_config(tmp_path, image_gen_seam):
+    image_gen_seam.configure(SimpleNamespace(image_gen=SimpleNamespace(out_dir=tmp_path / "images")))
     fake = FakeImageGen()
     image_gen_seam._GENERATOR_FACTORY = lambda: fake
     result = image_gen_seam.generate_image("a cat")
@@ -884,22 +882,23 @@ def test_generate_image_default_out_file_from_config(tmp_path, image_gen_seam, m
     assert out.name.startswith("generated_") and out.suffix == ".png"
 
 
-def test_default_generator_factory_reads_config(tmp_path, monkeypatch):
-    cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text('[image_gen]\nt2i_model = "fake/model"\nwidth = 640\nsteps = 20\n')
-    monkeypatch.setattr(tools.image_gen, "_CONFIG_PATH", str(cfg_path))
-    monkeypatch.setattr(tools.image_gen, "_config_cache", None)
-    gen = tools.image_gen._default_generator_factory()
+def test_configure_uses_image_gen_section_and_resets_generator(image_gen_seam):
+    fake = FakeImageGen()
+    image_gen_seam._generator = fake
+    image_gen_seam.configure(SimpleNamespace(
+        image_gen=SimpleNamespace(t2i_model="fake/model", width=640, steps=20),
+        brain=SimpleNamespace(model="qwen"),  # other sections are ignored
+    ))
+    assert image_gen_seam._generator is None  # config change drops the cached generator
+    gen = image_gen_seam._default_generator_factory()
     assert gen.t2i_model == "fake/model"
     assert gen.defaults["width"] == 640 and gen.defaults["steps"] == 20
+    assert gen.defaults["seed"] == 42  # keys missing from the section use built-ins
 
 
-def test_default_generator_factory_without_section(tmp_path, monkeypatch):
-    cfg_path = tmp_path / "config.toml"
-    cfg_path.write_text('[brain]\nmodel = "x"\n')
-    monkeypatch.setattr(tools.image_gen, "_CONFIG_PATH", str(cfg_path))
-    monkeypatch.setattr(tools.image_gen, "_config_cache", None)
-    gen = tools.image_gen._default_generator_factory()
+def test_default_generator_factory_without_section(image_gen_seam):
+    image_gen_seam.configure(SimpleNamespace())  # config without [image_gen]
+    gen = image_gen_seam._default_generator_factory()
     assert gen.defaults["width"] == 512  # built-in defaults kick in
 
 
@@ -911,3 +910,677 @@ def test_module_exports_public_tools():
 def test_source_has_no_bare_exit():
     text = Path(tools.__file__).read_text(encoding="utf-8")
     assert "exit(0)" not in text
+
+
+# ------------------------------------------------------------------ T11 summarize (Brain tool moved to module)
+
+
+@pytest.fixture
+def summarize_seam(monkeypatch):
+    monkeypatch.setattr(tools.summarize, "_summarizer", None)
+    monkeypatch.setattr(tools.summarize, "_SUMMARIZER_FACTORY", None)
+    monkeypatch.setattr(tools.summarize, "_config_cache", None)
+    return tools.summarize
+
+
+def test_summarize_doc_reads_file_and_caches(tmp_path, summarize_seam):
+    seen = {"calls": [], "count": 0}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+            seen["count"] += 1
+
+        def summarize_file(self, path, max_sentences=None):
+            seen["calls"].append((str(path), max_sentences))
+            return "SUMMARY"
+
+    summarize_seam._SUMMARIZER_FACTORY = Recorder
+    summarize_seam.configure(SimpleNamespace(summarization=SimpleNamespace(
+        model_path="m", device="cpu", ratio=0.2, threshold=0.4, max_sentences=3)))
+
+    first = tmp_path / "first.txt"
+    first.write_text("long text", encoding="utf-8")
+    second = tmp_path / "second.txt"
+    second.write_text("more text", encoding="utf-8")
+
+    assert summarize_seam.summarize_doc(str(first)) == "SUMMARY"
+    assert summarize_seam.summarize_doc(str(second)) == "SUMMARY"
+
+    assert seen["count"] == 1  # summarizer created once and cached
+    assert seen["init"]["model_path"] == "m"
+    assert seen["init"]["ratio"] == 0.2
+    assert seen["init"]["threshold"] == 0.4
+    assert seen["init"]["max_sentences"] == 3
+    assert seen["calls"] == [(str(first), None), (str(second), None)]
+
+
+def test_summarize_doc_missing_file_returns_message(tmp_path, summarize_seam):
+    summarize_seam.configure(SimpleNamespace(summarization=SimpleNamespace(model_path="m")))
+    out = summarize_seam.summarize_doc(str(tmp_path / "nope.txt"))
+    assert "Unable to read" in out
+
+
+def test_summarize_doc_forwards_max_sentences(tmp_path, summarize_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def summarize_file(self, path, max_sentences=None):
+            seen["max"] = max_sentences
+            return "S"
+
+    summarize_seam._SUMMARIZER_FACTORY = Recorder
+    summarize_seam.configure(SimpleNamespace(summarization=SimpleNamespace(model_path="m")))
+    target = tmp_path / "a.txt"
+    target.write_text("t", encoding="utf-8")
+    assert summarize_seam.summarize_doc(str(target), max_sentences=2) == "S"
+    assert seen["max"] == 2
+
+
+def test_summarize_doc_reports_errors(tmp_path, summarize_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def summarize_file(self, path, max_sentences=None):
+            raise RuntimeError("boom")
+
+    summarize_seam._SUMMARIZER_FACTORY = Recorder
+    summarize_seam.configure(SimpleNamespace(summarization=SimpleNamespace(model_path="m")))
+    target = tmp_path / "a.txt"
+    target.write_text("t", encoding="utf-8")
+    out = summarize_seam.summarize_doc(str(target))
+    assert out.startswith("Error:") and "boom" in out
+
+
+# ------------------------------------------------------------------ T12 docquery
+
+
+@pytest.fixture
+def docquery_seam(monkeypatch):
+    monkeypatch.setattr(tools.docquery, "_doc_query", None)
+    monkeypatch.setattr(tools.docquery, "_DOCUMENT_QUERY_FACTORY", None)
+    monkeypatch.setattr(tools.docquery, "_config_cache", None)
+    return tools.docquery
+
+
+def test_query_document_reads_config_and_caches(tmp_path, docquery_seam):
+    seen = {"init": {}, "count": 0, "calls": []}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+            seen["count"] += 1
+
+        def query(self, path, query, top_k=None):
+            seen["calls"].append((str(path), query, top_k))
+            return "HITS"
+
+    docquery_seam._DOCUMENT_QUERY_FACTORY = Recorder
+    docquery_seam.configure(SimpleNamespace(document_query=SimpleNamespace(
+        model_path="ce-model", device="cpu", chunk_size=4, top_k=7)))
+    target = tmp_path / "doc.txt"
+    target.write_text("text", encoding="utf-8")
+
+    assert docquery_seam.query_document(str(target), "find x") == "HITS"
+    assert docquery_seam.query_document(str(target), "find y", top_k=2) == "HITS"
+
+    assert seen["count"] == 1  # created once and cached
+    assert seen["init"]["model_path"] == "ce-model"
+    assert seen["init"]["chunk_size"] == 4
+    assert seen["init"]["top_k"] == 7
+    assert seen["calls"] == [(str(target), "find x", None), (str(target), "find y", 2)]
+
+
+def test_query_document_requires_query(docquery_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            raise AssertionError("must not be constructed")
+
+    docquery_seam._DOCUMENT_QUERY_FACTORY = Recorder
+    docquery_seam.configure(SimpleNamespace(document_query=SimpleNamespace(model_path="m")))
+    assert docquery_seam.query_document("a.txt", "   ") == "Error: a query is required."
+
+
+def test_query_document_reports_errors(tmp_path, docquery_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, path, query, top_k=None):
+            raise RuntimeError("boom")
+
+    docquery_seam._DOCUMENT_QUERY_FACTORY = Recorder
+    docquery_seam.configure(SimpleNamespace(document_query=SimpleNamespace(model_path="m")))
+    out = docquery_seam.query_document(str(tmp_path / "a.txt"), "q")
+    assert out.startswith("Error:") and "boom" in out
+
+
+# ------------------------------------------------------------------ T13 imgsearch
+
+
+@pytest.fixture
+def imgsearch_seam(monkeypatch):
+    monkeypatch.setattr(tools.imgsearch, "_img_search", None)
+    monkeypatch.setattr(tools.imgsearch, "_IMAGE_SEARCH_FACTORY", None)
+    monkeypatch.setattr(tools.imgsearch, "_config_cache", None)
+    return tools.imgsearch
+
+
+def test_image_search_reads_config_and_caches(tmp_path, imgsearch_seam):
+    seen = {"init": {}, "count": 0, "calls": []}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+            seen["count"] += 1
+
+        def search(self, directory, query, top_k=None):
+            seen["calls"].append((directory, query, top_k))
+            return [(0.912, str(tmp_path / "hit1.png")), (0.034, str(tmp_path / "hit2.png"))]
+
+    imgsearch_seam._IMAGE_SEARCH_FACTORY = Recorder
+    imgsearch_seam.configure(SimpleNamespace(image_search=SimpleNamespace(
+        model_path="clip-model", device="cpu", top_k=4)))
+    (tmp_path / "imgs").mkdir()
+
+    out = imgsearch_seam.image_search(str(tmp_path / "imgs"), "a dog in snow")
+    assert out == (
+        f"1) [0.912] {tmp_path / 'hit1.png'}\n"
+        f"2) [0.034] {tmp_path / 'hit2.png'}"
+    )
+
+    imgsearch_seam.image_search(str(tmp_path / "imgs"), "a cat", top_k=2)
+    assert seen["count"] == 1  # created once and cached
+    assert seen["init"]["model_path"] == "clip-model"
+    assert seen["init"]["top_k"] == 4
+    assert seen["calls"][0] == (str(tmp_path / "imgs"), "a dog in snow", None)
+    assert seen["calls"][1] == (str(tmp_path / "imgs"), "a cat", 2)
+
+
+def test_image_search_requires_query(imgsearch_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            raise AssertionError("must not be constructed")
+
+    imgsearch_seam._IMAGE_SEARCH_FACTORY = Recorder
+    imgsearch_seam.configure(SimpleNamespace(image_search=SimpleNamespace(model_path="m")))
+    assert imgsearch_seam.image_search("some/folder", "  ") == "Error: a query is required."
+
+
+def test_image_search_reports_errors(tmp_path, imgsearch_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def search(self, directory, query, top_k=None):
+            raise RuntimeError("boom")
+
+    imgsearch_seam._IMAGE_SEARCH_FACTORY = Recorder
+    imgsearch_seam.configure(SimpleNamespace(image_search=SimpleNamespace(model_path="m")))
+    out = imgsearch_seam.image_search(str(tmp_path), "q")
+    assert out.startswith("Error:") and "boom" in out
+
+
+def test_image_search_no_images_message(tmp_path, imgsearch_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def search(self, directory, query, top_k=None):
+            return []
+
+    imgsearch_seam._IMAGE_SEARCH_FACTORY = Recorder
+    imgsearch_seam.configure(SimpleNamespace(image_search=SimpleNamespace(model_path="m")))
+    assert imgsearch_seam.image_search(str(tmp_path), "q") == f"No readable images found in '{tmp_path}'."
+
+
+# ------------------------------------------------------------------ T14 corpora
+
+
+@pytest.fixture
+def corpora_seam(monkeypatch):
+    monkeypatch.setattr(tools.corpora, "_emb_corpus", None)
+    monkeypatch.setattr(tools.corpora, "_EMBEDDING_CORPUS_FACTORY", None)
+    monkeypatch.setattr(tools.corpora, "_config_cache", None)
+    return tools.corpora
+
+
+def _configure_corpora(seam, tmp_path, **overrides):
+    cfg = dict(model_path="m", device="cpu", extensions="txt, md",
+               chunk_size=3, top_k=5, corpora_dir=str(tmp_path))
+    cfg.update(overrides)
+    seam.configure(SimpleNamespace(embedding=SimpleNamespace(**cfg)))
+
+
+def test_store_corpus_requires_name(corpora_seam):
+    import inspect
+
+    params = inspect.signature(tools.corpora.store_corpus).parameters
+    assert params["corpus_name"].default is inspect.Parameter.empty
+
+    seen = {"store": 0}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def store(self, *args, **kwargs):
+            seen["store"] += 1
+            return "STORED"
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, Path("/res/corpora"))
+    out = corpora_seam.store_corpus("/docs", "")
+    assert out.startswith("Error: a corpus name is required")
+    assert seen["store"] == 0
+
+
+def test_query_corpus_requires_name(corpora_seam):
+    import inspect
+
+    params = inspect.signature(tools.corpora.query_corpus).parameters
+    assert params["corpus_name"].default is inspect.Parameter.empty
+
+    seen = {"query": 0}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, *args, **kwargs):
+            seen["query"] += 1
+            return "RESULTS"
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, Path("/res/corpora"))
+    out = corpora_seam.query_corpus("hello", "")
+    assert out.startswith("Error: a corpus name is required")
+    assert seen["query"] == 0
+
+
+def test_store_corpus_uses_named_corpus(tmp_path, corpora_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def store(self, directory, corpus_dir, overwrite=False):
+            seen["store"] = (directory, str(corpus_dir), overwrite)
+            return "STORED"
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, tmp_path)
+    assert corpora_seam.store_corpus("/docs", "autosar", overwrite=True) == "STORED"
+    assert seen["store"] == ("/docs", str(tmp_path / "autosar"), True)
+
+
+def test_store_corpus_invalid_name_returns_error(tmp_path, corpora_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def store(self, *args, **kwargs):
+            raise AssertionError("store must not be called")
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, tmp_path)
+    out = corpora_seam.store_corpus("/docs", "a/b")
+    assert out.startswith("Error:") and "corpus name" in out.lower()
+
+
+def test_query_corpus_resolves_name_and_forwards(tmp_path, corpora_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, corpus_dir, query, top_k=None, kind=None):
+            seen["query"] = (str(corpus_dir), query, top_k, kind)
+            return "RESULTS"
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, tmp_path)
+    assert corpora_seam.query_corpus("hello", "autosar", kind="image", top_k=2) == "RESULTS"
+    assert seen["query"] == (str(tmp_path / "autosar"), "hello", 2, "image")
+
+
+def test_list_corpora_formats_entries(tmp_path, corpora_seam, monkeypatch):
+    entries = [
+        {"name": "autosar", "mode": "multimodal", "records": 10, "text_records": 8,
+         "image_records": 2, "sources": 3, "built_at": "2026-01-01 00:00:00 UTC"},
+        {"name": "quora", "mode": "text", "records": 5, "text_records": 5,
+         "image_records": 0, "sources": 1, "built_at": "2026-01-02 00:00:00 UTC"},
+    ]
+    monkeypatch.setattr(tools.corpora, "list_corpus_entries", lambda corpora_dir: entries)
+    _configure_corpora(corpora_seam, tmp_path)
+    out = corpora_seam.list_corpora()
+    assert "Available corpora (2)" in out
+    assert "autosar: mode=multimodal" in out and "quora: mode=text" in out
+
+
+def test_list_corpora_empty_returns_message(tmp_path, corpora_seam, monkeypatch):
+    monkeypatch.setattr(tools.corpora, "list_corpus_entries", lambda corpora_dir: [])
+    _configure_corpora(corpora_seam, tmp_path)
+    assert corpora_seam.list_corpora() == "No corpora available."
+
+
+def test_store_corpus_reports_errors(tmp_path, corpora_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def store(self, directory, corpus_dir, overwrite=False):
+            raise RuntimeError("boom")
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, tmp_path)
+    out = corpora_seam.store_corpus("/docs", "autosar")
+    assert out.startswith("Error:") and "boom" in out
+
+
+def test_query_corpus_reports_errors(tmp_path, corpora_seam):
+    class Recorder:
+        def __init__(self, **kwargs):
+            pass
+
+        def query(self, corpus_dir, query, top_k=None, kind=None):
+            raise RuntimeError("boom")
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, tmp_path)
+    out = corpora_seam.query_corpus("hi", "autosar")
+    assert out.startswith("Error:") and "boom" in out
+
+
+def test_store_corpus_passes_multimodal_config(tmp_path, corpora_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+
+        def store(self, directory, corpus_dir, overwrite=False):
+            return "STORED"
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, tmp_path,
+                       image_model_path="clip", multimodal=True, image_extensions="png, jpg")
+    assert corpora_seam.store_corpus("/docs", "autosar") == "STORED"
+    assert seen["init"]["image_model_path"] == "clip"
+    assert seen["init"]["multimodal"] is True
+    assert seen["init"]["image_extensions"] == "png, jpg"
+    assert "processed_name" not in seen["init"]
+
+
+def test_embedding_corpus_defaults_when_config_is_minimal(tmp_path, corpora_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kwargs):
+            seen["init"] = kwargs
+
+        def query(self, corpus_dir, query, top_k=None, kind=None):
+            return "RESULTS"
+
+    corpora_seam._EMBEDDING_CORPUS_FACTORY = Recorder
+    _configure_corpora(corpora_seam, tmp_path)
+    corpora_seam.query_corpus("hi", "autosar")
+    assert seen["init"]["multimodal"] is False
+    assert seen["init"]["image_model_path"] is None
+    assert "processed_name" not in seen["init"]
+
+
+# ------------------------------------------------------------------ T15 memory
+
+
+@pytest.fixture
+def memory_seam(monkeypatch, tmp_path):
+    monkeypatch.setattr(tools.memory, "_history_provider", None)
+    monkeypatch.setattr(tools.memory, "_config_cache", None)
+    tools.memory.configure(SimpleNamespace(
+        brain=SimpleNamespace(history_path=str(tmp_path / "history.txt"),
+                              system_prompt="be helpful"),
+        agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
+    ))
+    return tools.memory
+
+
+def test_recall_personal_missing_file(memory_seam):
+    assert memory_seam.recall_personal() == "No personal data found!"
+
+
+def test_store_personal_appends_personal_messages(memory_seam, tmp_path):
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "bootstrap"},
+        {"role": "assistant", "content": "hello"},
+        {"role": "user", "content": "my name is Max, remember this personal note"},
+        {"role": "user", "content": "what time is it?"},
+    ]
+    memory_seam.bind_history(lambda: messages)
+
+    result = memory_seam.store_personal()
+
+    history = tmp_path / "history.txt"
+    assert result == f"Conversation written to {history.resolve()}"
+    text = history.read_text(encoding="utf-8")
+    assert "personal note" in text and "what time is it?" not in text
+
+
+def test_recall_personal_returns_file_content(memory_seam, tmp_path):
+    (tmp_path / "history.txt").write_text("At 01/01/2026 user wrote: personal", encoding="utf-8")
+    assert "personal" in memory_seam.recall_personal()
+
+
+def test_clear_chat_resets_history_in_place(memory_seam):
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "bootstrap"},
+        {"role": "assistant", "content": "hi"},
+        {"role": "user", "content": "last question"},
+    ]
+    memory_seam.bind_history(lambda: messages)
+
+    assert memory_seam.clear_chat() == "Chat cleared successfully"
+    assert messages == [  # same list object, reset in place
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "No personal data found!"},
+        {"role": "user", "content": "last question"},
+    ]
+
+
+def test_clear_chat_reseeds_with_recalled_personal_data(memory_seam, tmp_path):
+    (tmp_path / "history.txt").write_text("stored personal data", encoding="utf-8")
+    messages = [{"role": "user", "content": "hi"}]
+    memory_seam.bind_history(lambda: messages)
+
+    memory_seam.clear_chat()
+
+    assert messages[0] == {"role": "system", "content": "be helpful"}
+    assert messages[1] == {"role": "user", "content": "stored personal data"}
+    assert messages[2] == {"role": "user", "content": "hi"}
+
+
+def test_clear_chat_without_bound_session(memory_seam, monkeypatch):
+    monkeypatch.setattr(tools.memory, "_history_provider", None)
+    assert memory_seam.clear_chat().startswith("Error:")
+
+
+# ------------------------------------------------------------------ T16 speech
+
+
+@pytest.fixture
+def speech_seam(monkeypatch):
+    monkeypatch.setattr(tools.speech, "_speech_generator", None)
+    monkeypatch.setattr(tools.speech, "_SPEECH_FACTORY", None)
+    monkeypatch.setattr(tools.speech, "_config_cache", None)
+    return tools.speech
+
+
+def test_allow_speech_forwards_config_and_closes(speech_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kw):
+            seen.update(kw)
+            self.closed = 0
+
+        def close(self):
+            self.closed += 1
+
+    speech_seam._SPEECH_FACTORY = Recorder
+    speech_seam.configure(SimpleNamespace(speech_gen=SimpleNamespace(
+        model_path="m", samplerate=22050, volume=0.3, speech_speed=1.5,
+        speaker_id=2, noise_scale=0.4, noise_w_scale=0.7, normalize_audio=True,
+    )))
+
+    assert speech_seam.allow_speech(True) == "Speech Generator initialized"
+    speech = speech_seam._speech_generator
+    assert seen["speaker_id"] == 2 and seen["noise_scale"] == 0.4
+    assert seen["noise_w_scale"] == 0.7 and seen["normalize_audio"] is True
+    assert seen["speech_speed"] == 1.5
+
+    assert speech_seam.allow_speech(False) == "Speech Generator released"
+    assert speech.closed == 1
+    assert speech_seam._speech_generator is None
+
+
+def test_allow_speech_without_optional_keys(speech_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def close(self):
+            pass
+
+    speech_seam._SPEECH_FACTORY = Recorder
+    speech_seam.configure(SimpleNamespace(speech_gen=SimpleNamespace(
+        model_path="m", samplerate=22050, volume=0.5, speech_speed=1.0)))
+    speech_seam.allow_speech(True)
+    assert seen["speaker_id"] is None
+    assert seen["noise_scale"] == 1.0
+    assert seen["noise_w_scale"] == 1.0
+    assert seen["normalize_audio"] is False
+
+
+def test_speak_if_enabled_only_speaks_when_enabled(speech_seam):
+    spoken = []
+
+    class Recorder:
+        def speak(self, text):
+            spoken.append(text)
+
+        def close(self):
+            pass
+
+    speech_seam.allow_speech(False)  # nothing enabled yet
+    speech_seam.speak_if_enabled("ignored")
+    assert spoken == []
+
+    speech_seam._speech_generator = Recorder()
+    speech_seam.speak_if_enabled("hello")
+    assert spoken == ["hello"]
+
+
+# ------------------------------------------------------------------ T17 vision
+
+
+@pytest.fixture
+def vision_seam(monkeypatch):
+    monkeypatch.setattr(tools.vision, "_session", None)
+    return tools.vision
+
+
+class FakeVisionSession:
+    """Session double exposing the read-only attributes bind_session expects."""
+
+    def __init__(self, vision=True, vision_source="server", fail=False):
+        self.vision = vision
+        self.vision_source = vision_source
+        self.model_name = "fake-model"
+        self.temperature = 0.3
+        self.messages = [{"role": "system", "content": "sys"}]
+        self.fail = fail
+
+        class Completions:
+            def __init__(self, outer):
+                self._outer = outer
+
+            def create(self, **kwargs):
+                if self._outer.fail:
+                    raise RuntimeError("boom")
+                self._outer.kwargs = kwargs
+                return SimpleNamespace(choices=[SimpleNamespace(
+                    message=SimpleNamespace(content="it shows a cat"))])
+
+        self.client = SimpleNamespace(chat=SimpleNamespace(completions=Completions(self)))
+        self.kwargs = None
+
+
+def test_image_response_describes_image(vision_seam, tmp_path):
+    session = FakeVisionSession()
+    vision_seam.bind_session(session)
+    image = tmp_path / "x.png"
+    image.write_bytes(b"fake-image-bytes")
+    assert vision_seam.image_response(str(image)) == "it shows a cat"
+    assert session.kwargs["model"] == "fake-model"
+    assert session.kwargs["temperature"] == 0.3
+    assert session.messages[-1] == {"role": "assistant", "content": "it shows a cat"}
+
+
+def test_image_response_without_vision(vision_seam, tmp_path):
+    image = tmp_path / "x.png"
+    image.write_bytes(b"fake-image-bytes")
+    vision_seam.bind_session(FakeVisionSession(vision=False, vision_source="server"))
+    assert "no 'vision' capability" in vision_seam.image_response(str(image))
+
+    vision_seam.bind_session(FakeVisionSession(vision=False, vision_source="config"))
+    assert "[brain] vision = true override" in vision_seam.image_response(str(image))
+
+
+def test_image_response_without_session(vision_seam, tmp_path):
+    assert vision_seam.image_response("x.png").startswith("Error:")
+
+
+def test_image_response_provider_error_pops_image_turn(vision_seam, tmp_path):
+    session = FakeVisionSession(fail=True)
+    vision_seam.bind_session(session)
+    image = tmp_path / "x.png"
+    image.write_bytes(b"fake-image-bytes")
+    before = len(session.messages)
+    assert vision_seam.image_response(str(image)).startswith("Error:")
+    assert len(session.messages) == before  # the image turn was dropped
+
+
+# ------------------------------------------------------------------ T18 tools.configure fan-out
+
+
+def test_tools_configure_fans_out_to_all_modules(monkeypatch):
+    config = SimpleNamespace(
+        image_gen=SimpleNamespace(), summarization=SimpleNamespace(),
+        document_query=SimpleNamespace(), image_search=SimpleNamespace(),
+        embedding=SimpleNamespace(), brain=SimpleNamespace(),
+        agent=SimpleNamespace(), speech_gen=SimpleNamespace(),
+    )
+    seen = []
+    for name in ("corpora", "docquery", "image_gen", "imgsearch",
+                 "memory", "speech", "summarize"):
+        module = getattr(tools, name)
+        original = module.configure
+        monkeypatch.setattr(
+            module, "configure",
+            lambda cfg, _n=name, _orig=original: (seen.append(_n), _orig(cfg)),
+        )
+
+    tools.configure(config)
+
+    assert sorted(seen) == ["corpora", "docquery", "image_gen", "imgsearch",
+                            "memory", "speech", "summarize"]

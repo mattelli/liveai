@@ -1,5 +1,6 @@
 import pytest
 
+import src.session as session_mod
 from src.session import ConversationSession
 from tests.conftest import FakeAgent
 
@@ -58,40 +59,31 @@ def test_help_lists_commands(capsys):
 # ------------------------------------------------------------------- T5 clear
 
 
-def test_clear_calls_agent():
+def test_clear_calls_tool(monkeypatch):
+    calls = []
+    monkeypatch.setattr(session_mod, "clear_chat", lambda: calls.append(1))
     it = iter(["/clear", "/quit"])
-    agent = FakeAgent()
-    ConversationSession(agent, lambda: next(it)).run()
-    assert agent.cleared == 1
-    assert agent.acted == []
-
-
-class NoClear:
-    def flush_stream(self):
-        pass
-
-
-def test_clear_without_support(capsys):
-    it = iter(["/clear", "/quit"])
-    ConversationSession(NoClear(), lambda: next(it)).run()
-    assert "not supported" in capsys.readouterr().out.lower()
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert calls == [1]
 
 
 # ------------------------------------------------------------------- T6 voice
 
 
-def test_voice_on_off():
+def test_voice_on_off(monkeypatch):
+    calls = []
+    monkeypatch.setattr(session_mod, "allow_speech", lambda enable: calls.append(enable))
     it = iter(["/voice on", "/voice OFF", "/quit"])
-    agent = FakeAgent()
-    ConversationSession(agent, lambda: next(it)).run()
-    assert agent.speech == [True, False]
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert calls == [True, False]
 
 
-def test_voice_usage(capsys):
+def test_voice_usage(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(session_mod, "allow_speech", lambda enable: calls.append(enable))
     it = iter(["/voice maybe", "/quit"])
-    agent = FakeAgent()
-    ConversationSession(agent, lambda: next(it)).run()
-    assert agent.speech == []
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert calls == []
     assert "usage" in capsys.readouterr().out.lower()
 
 
@@ -365,18 +357,20 @@ def test_backslash_x_is_not_a_command():
 # ----------------------------------------------------------------- T13 shutdown
 
 
-def test_shutdown_disables_voice_if_enabled():
+def test_shutdown_disables_voice_if_enabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr(session_mod, "allow_speech", lambda enable: calls.append(enable))
     it = iter(["/voice on", "/quit"])
-    agent = FakeAgent()
-    ConversationSession(agent, lambda: next(it)).run()
-    assert agent.speech == [True, False]
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert calls == [True, False]
 
 
-def test_shutdown_no_voice_call_when_never_enabled():
+def test_shutdown_no_voice_call_when_never_enabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr(session_mod, "allow_speech", lambda enable: calls.append(enable))
     it = iter(["/quit"])
-    agent = FakeAgent()
-    ConversationSession(agent, lambda: next(it)).run()
-    assert agent.speech == []
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert calls == []
 
 
 def test_shutdown_idempotent():

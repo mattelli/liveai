@@ -1,10 +1,7 @@
-import base64
 import inspect
 import json
-import mimetypes
 import os
 import pathlib
-import sys
 import types
 from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 from logging import getLogger
@@ -15,19 +12,15 @@ from src.tools import (
     read_text_file, write_text_file, run_command,
     web_search, webpage_headlines, webpage_content, capture_image,
     generate_image, unload_image_generator,
-    fetch_financial_data, save_financial_chart, download_file, extract_archive, zip_files,
-    search_pattern_in_files, replace_string_in_file, search_in_file
+    summarize_doc, query_document, image_search,
+    list_corpora, store_corpus, query_corpus,
+    recall_personal, store_personal, clear_chat, allow_speech, image_response,
+    download_file, extract_archive, zip_files,
+    search_pattern_in_files, replace_string_in_file, search_in_file,
+    fetch_financial_data, save_financial_chart,
 )
-from src.summarizer import Summarizer
-from src.document_query import DEFAULT_CHUNK_SIZE as QUERY_CHUNK_SIZE, DEFAULT_TOP_K as QUERY_TOP_K, DocumentQuery
-from src.image_search import DEFAULT_TOP_K as IMAGE_SEARCH_TOP_K, ImageSearch
-from src.embedding_search import (
-    DEFAULT_CHUNK_SIZE, DEFAULT_CORPORA_DIR, DEFAULT_EXTENSIONS, DEFAULT_TOP_K,
-    EmbeddingCorpus, list_corpora, resolve_corpus_dir
-)
-from src.document_loader import IMAGE_EXTENSIONS
+from src.tools import speech as speech_tools
 
-Role = Literal['system', 'user', 'assistant']
 
 # Padded into the history when a generation is cancelled before any text was
 # produced: an empty assistant turn would be dropped by the model's prompt
@@ -36,9 +29,11 @@ CANCELLED_PLACEHOLDER = "(generation cancelled by user)"
 
 
 def __getattr__(name: str):
-    """Lazily expose ``SpeechGenerator`` so importing this module does not pull
-    in the heavy ``piper``/``sounddevice`` stack. The name stays patchable on
-    the module for callers (and tests) that override it.
+    """Backward-compatible access to ``SpeechGenerator``.
+
+    The speech engine is owned by ``src.tools.speech`` now; this shim keeps
+    older callers (and tests) that import it from this module working without
+    pulling in the heavy ``piper``/``sounddevice`` stack at import time.
     """
     if name == "SpeechGenerator":
         from src.audio_generator import SpeechGenerator
@@ -74,18 +69,24 @@ def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
 
 
 def _default_tools(agent: "Brain") -> list[Callable]:
-    """Tool set of the agent."""
+    """Tool set of the agent.
+
+    Only ``model_info`` stays a session-bound method (model/endpoint/usage
+    state); every other tool lives in a ``src.tools`` submodule and gets its
+    config injected via ``src.tools.configure`` (called by ``main.py``).
+    """
     return [
-        agent.model_info, agent.recall_personal, agent.store_personal,
-        agent.image_response, agent.allow_speech, agent.clear_chat,
-        agent.summarize_doc, agent.query_document, agent.image_search,
-        agent.list_corpora, agent.store_corpus, agent.query_corpus,
-        generate_image, unload_image_generator,
+        agent.model_info,
+        recall_personal, store_personal, clear_chat,
+        image_response, allow_speech,
+        summarize_doc, query_document, image_search,
+        list_corpora, store_corpus, query_corpus,
         capture_image, system_info, current_date_time, get_working_directory,
         run_command, search_in_file, search_pattern_in_files,
         read_text_file, replace_string_in_file, write_text_file,
         web_search, webpage_content, webpage_headlines, download_file, extract_archive, zip_files,
         fetch_financial_data, save_financial_chart,
+        generate_image, unload_image_generator,
         exit_gracefully
     ]
 
@@ -159,6 +160,13 @@ class OpenAICore:
         self._stream = StreamPrinter(text_color="cyan")
         self._cancel_requested = False
         self._active_stream = None
+        # Session-bound tool modules: their config comes from main.py via
+        # src.tools.configure; the live state is bound here (getter first:
+        # the messages list is re-read on every access, so clearing or
+        # reassigning the session history stays visible to the tools).
+        from src.tools import memory as memory_tools, vision as vision_tools
+        memory_tools.bind_history(lambda: self._messages)
+        vision_tools.bind_session(self)
         self.logger.info("✅ Remote model '%s' connected.", self._model_name)
 
     def _resolve_vision_flag(self, config) -> bool:
@@ -418,10 +426,11 @@ class Brain(OpenAICore):
     Tool-bearing assistant built on top of OpenAICore.
 
     Owns the conversation history (plumbing and repair across cancelled or
-    failed turns), streaming generation with cancellation, and the built-in
-    tool set (model info, image responses, personal memory, summarization,
-    corpora search, speech, ...) that an Agent exposes to the model via
-    OpenAI function calling.
+    failed turns), streaming generation with cancellation, and the model
+    info tool. All other LLM tools live in the ``src.tools`` submodules:
+    their config is injected once by ``main.py`` via ``src.tools.configure``,
+    and their session-bound state (chat history, LLM client) is bound to
+    this Brain instance in ``__init__`` via the ``bind_*`` functions.
     """
 
     ## history plumbing (plain OpenAI-style dicts) ##
@@ -461,20 +470,37 @@ class Brain(OpenAICore):
                 continue
             break
 
-    def _get_messages(self) -> list[dict]:
-        # Shape expected by store_personal/_get_messages_from: text at content[0]["text"].
-        return [
-            {"role": m["role"], "content": [{"text": m["content"]}]}
-            for m in self._messages
-            if isinstance(m.get("content"), str)
-        ]
+    ## session view for the session-bound tool modules (src.tools.vision) ##
 
-    @staticmethod
-    def _get_messages_from(role: Role, msg:list) -> list[str]:
-        try:
-            return [m["content"][0]["text"] for m in msg if m["role"] == role]
-        except:
-            return []
+    @property
+    def client(self):
+        """OpenAI-compatible chat client (read-only session view)."""
+        return self._client
+
+    @property
+    def model_name(self) -> str:
+        """Configured model id (read-only session view)."""
+        return self._model_name
+
+    @property
+    def temperature(self) -> float:
+        """Configured sampling temperature (read-only session view)."""
+        return self._temperature
+
+    @property
+    def vision(self) -> bool:
+        """Whether the model supports image input (read-only session view)."""
+        return self._vision
+
+    @property
+    def vision_source(self) -> str:
+        """Where the vision flag came from: 'server' or 'config'."""
+        return self._vision_source
+
+    @property
+    def messages(self) -> list[dict]:
+        """The live conversation history (tools may append/pop entries)."""
+        return self._messages
 
     ## generation ##
 
@@ -562,26 +588,7 @@ class Brain(OpenAICore):
         return float(tokens / self._context_window) * 100, self._context_window
 
 
-    ## TOOLS CALLS ##
-
-    @dump_func_call
-    def clear_chat(self) -> bool:
-        """
-        Useful when user ask for cleaning conversation history.
-        """
-        try:
-            system = next(
-                (m["content"] for m in self._messages if m["role"] == "system"),
-                self.config.brain.system_prompt,
-            )
-            user_msgs = [m["content"] for m in self._messages if m["role"] == "user"]
-            self._messages = [{"role": "system", "content": system}]
-            self._messages.append({"role": "user", "content": self.recall_personal()})
-            if user_msgs:
-                self._messages.append({"role": "user", "content": user_msgs[-1]})
-            return "Chat cleared successfully"
-        except Exception as e:
-            return f"Error: {e}"
+    ## TOOLS ##
 
     @dump_func_call
     def model_info(self) -> str:
@@ -648,261 +655,6 @@ class Brain(OpenAICore):
         ]
         return "\n".join(lines)
 
-    @dump_func_call
-    def image_response(self, image: str, prompt: str = "describe the image") -> str:
-        """
-        Provide text response form an input image.
-        Useful when user asks for getting a description of the input image content.
-        """
-        if not self._vision:
-            if self._vision_source == "server":
-                return (
-                    "Cannot handle images: the server reports the model has no "
-                    "'vision' capability"
-                )
-            return (
-                "Cannot handle images: no 'vision' capability reported by the "
-                "server and no [brain] vision = true override set"
-            )
-        if str(image).startswith(("http://", "https://")):
-            image_url = {"url": str(image)}
-        else:
-            data = pathlib.Path(image).read_bytes()
-            mime = mimetypes.guess_type(str(image))[0] or "image/png"
-            image_url = {"url": f"data:{mime};base64,{base64.b64encode(data).decode()}"}
-        self._messages.append({
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": image_url},
-            ],
-        })
-        try:
-            resp = self._client.chat.completions.create(
-                model=self._model_name,
-                messages=self._messages,
-                temperature=self._temperature,
-            )
-        except Exception as e:
-            self._messages.pop()  # drop the image turn: provider rejected it
-            return f"Error: {e}"
-        answer = resp.choices[0].message.content or ""
-        self._messages.append({"role": "assistant", "content": answer})
-        return answer
-
-    @dump_func_call
-    def summarize_doc(self, file: str, max_sentences: int = 0) -> str:
-        """
-        Summarize the content of a document into its most important sentences.
-        Useful when the user asks to summarize, condense, shorten or outline a
-        document. ``file`` is the path of the document to read; text, PDF, DOCX,
-        XLSX, HTML and image files are supported via ``src.document_loader``.
-        ``max_sentences`` = 0 uses the ratio configured in the
-        ``[summarization]`` section.
-        """
-        try:
-            if getattr(self, "_summarizer", None) is None:
-                cfg = self.config.summarization
-                self._summarizer = Summarizer(
-                    model_path=cfg.model_path,
-                    device=getattr(cfg, "device", "cpu"),
-                    ratio=getattr(cfg, "ratio", 0.1),
-                    threshold=getattr(cfg, "threshold", 0.5),
-                    max_sentences=getattr(cfg, "max_sentences", 0),
-                )
-            return self._summarizer.summarize_file(file, max_sentences or None)
-        except Exception as e:
-            return f"Error: {e}"
-
-    @dump_func_call
-    def query_document(self, file: str, query: str, top_k: int = 0) -> str:
-        """
-        Search one document for the passages most relevant to a query.
-        Useful when the user asks to find, locate or look up something inside a
-        specific file without building a corpus. Any type supported by
-        ``src.document_loader`` works: text, PDF (results keep page numbers),
-        DOCX, XLSX, HTML, ... A CrossEncoder scores query/passage pairs.
-        ``top_k`` = 0 uses the value configured in the ``[document_query]``
-        section.
-        """
-        try:
-            if not query or not query.strip():
-                return "Error: a query is required."
-            return self._document_query().query(file, query, top_k or None)
-        except Exception as e:
-            return f"Error: {e}"
-
-    @dump_func_call
-    def image_search(self, folder: str, query: str, top_k: int = 0) -> str:
-        """
-        Search the images inside a folder for the ones best matching a text query,
-        using the CLIP model. Useful when the user asks to find, locate or show a
-        picture/photo/screenshot in a folder by describing its content. Returns
-        the top_k matches as '<rank>) [<cosine score>] <absolute image path>'
-        lines, best match first; ``top_k`` = 0 uses the value configured in the
-        ``[image_search]`` section (default 3).
-        """
-        try:
-            if not query or not query.strip():
-                return "Error: a query is required."
-            hits = self._image_search().search(folder, query, top_k or None)
-            if not hits:
-                return f"No readable images found in '{folder}'."
-            return "\n".join(
-                f"{rank}) [{score:.3f}] {path}"
-                for rank, (score, path) in enumerate(hits, start=1)
-            )
-        except Exception as e:
-            return f"Error: {e}"
-
-    def _image_search(self):
-        if getattr(self, "_img_search", None) is None:
-            cfg = self.config.image_search
-            self._img_search = ImageSearch(
-                model_path=cfg.model_path,
-                device=getattr(cfg, "device", "cpu"),
-                top_k=getattr(cfg, "top_k", IMAGE_SEARCH_TOP_K),
-            )
-        return self._img_search
-
-    def _document_query(self):
-        if getattr(self, "_doc_query", None) is None:
-            cfg = self.config.document_query
-            self._doc_query = DocumentQuery(
-                model_path=cfg.model_path,
-                device=getattr(cfg, "device", "cpu"),
-                chunk_size=getattr(cfg, "chunk_size", QUERY_CHUNK_SIZE),
-                top_k=getattr(cfg, "top_k", QUERY_TOP_K),
-            )
-        return self._doc_query
-
-    def _embedding_corpus(self):
-        if getattr(self, "_emb_corpus", None) is None:
-            cfg = self.config.embedding
-            self._emb_corpus = EmbeddingCorpus(
-                model_path=cfg.model_path,
-                device=getattr(cfg, "device", "cpu"),
-                extensions=getattr(cfg, "extensions", DEFAULT_EXTENSIONS),
-                chunk_size=getattr(cfg, "chunk_size", DEFAULT_CHUNK_SIZE),
-                top_k=getattr(cfg, "top_k", DEFAULT_TOP_K),
-                image_model_path=getattr(cfg, "image_model_path", None),
-                multimodal=getattr(cfg, "multimodal", False),
-                image_extensions=getattr(cfg, "image_extensions", IMAGE_EXTENSIONS),
-            )
-        return self._emb_corpus
-
-    @dump_func_call
-    def list_corpora(self) -> str:
-        """
-        List the available local corpora (name, mode, record counts, sources, built time).
-        Useful before query_corpus when the user refers to a topic instead of a corpus name.
-        """
-        entries = list_corpora(self.config.embedding.corpora_dir)
-        if not entries:
-            return "No corpora available."
-        lines = [f"Available corpora ({len(entries)}):"]
-        for e in entries:
-            lines.append(
-                f"- {e['name']}: mode={e['mode']}, records={e['records']} "
-                f"(text {e['text_records']} / image {e['image_records']}), "
-                f"sources={e['sources']}, built={e['built_at']}"
-            )
-        return "\n".join(lines)
-
-    @dump_func_call
-    def store_corpus(self, directory: str, corpus_name: str, overwrite: bool = False) -> str:
-        """
-        Build a named corpus from all supported files in a directory.
-        Useful when the user asks to index, embed, or store documents for later semantic search.
-        """
-        try:
-            if not corpus_name or not corpus_name.strip():
-                return "Error: a corpus name is required (call list_corpora to see available corpora)."
-            corpus_dir = resolve_corpus_dir(corpus_name, self.config.embedding.corpora_dir)
-            return self._embedding_corpus().store(directory, corpus_dir, overwrite)
-        except Exception as e:
-            return f"Error: {e}"
-
-    @dump_func_call
-    def query_corpus(self, query: str, corpus_name: str, kind: str = "", top_k: int = 0) -> str:
-        """
-        Search a named corpus for the content most relevant to a query text.
-        Useful when the user asks a question that should be answered from indexed documents
-        or when looking for a matching image.
-        ``kind`` restricts results to 'text' or 'image'; leave it empty to search both.
-        """
-        try:
-            if not corpus_name or not corpus_name.strip():
-                return "Error: a corpus name is required."
-            corpus_dir = resolve_corpus_dir(corpus_name, self.config.embedding.corpora_dir)
-            return self._embedding_corpus().query(corpus_dir, query, top_k or None, kind or None)
-        except Exception as e:
-            return f"Error: {e}"
-
-    @dump_func_call
-    def allow_speech(self, enable:bool) -> str:
-        """
-        Enable or disable speech for Agent responses.
-        When enabled, the Agent will use the Speech Generator.
-        It can be toggled on the fly during the conversation.
-        """
-        if enable and not hasattr(self, "speech"):
-            self.logger.info("Initializing Speech Generator ...")
-            gen_cfg = self.config.speech_gen
-            SpeechGenerator = getattr(sys.modules[__name__], "SpeechGenerator")
-            self.speech = SpeechGenerator(
-                model_path=gen_cfg.model_path,
-                samplerate=gen_cfg.samplerate,
-                volume=gen_cfg.volume,
-                speech_speed=gen_cfg.speech_speed,
-                speaker_id=getattr(gen_cfg, "speaker_id", None),
-                noise_scale=getattr(gen_cfg, "noise_scale", 1.0),
-                noise_w_scale=getattr(gen_cfg, "noise_w_scale", 1.0),
-                normalize_audio=getattr(gen_cfg, "normalize_audio", False),
-            )
-            return "Speech Generator initialized"
-        elif not enable and hasattr(self, "speech"):
-            self.logger.info("Releasing Speech Generator ...")
-            self.speech.close()
-            del self.speech
-            return "Speech Generator released"
-
-    @dump_func_call
-    def store_personal(self) ->  str:
-        """
-        Stores the user personal content to a text file.
-        Useful when the users explicitly mention the prompted text is "personal".
-        """
-        history = pathlib.Path(self.config.brain.history_path).resolve()
-        now = datetime.now(tz=timezone.utc)
-        timestamp = now.strftime("%d/%m/%Y, %H:%M")
-        messages = self._get_messages()
-        user_msgs = self._get_messages_from(role="user", msg=messages)
-        if user_msgs and user_msgs[0] == self.config.agent.bootstrap_prompt:
-            user_msgs = user_msgs[1:]
-        else:
-            user_msgs = user_msgs
-        selected_msgs = [m for m in user_msgs if "personal" in m.lower()]
-        user_prompt = f"At {timestamp} user wrote: {selected_msgs[-1]} \n"
-        if not history.exists():
-            history.write_text(user_prompt, encoding="utf-8")
-        else:
-            with open(file=history, mode="a", encoding="utf-8") as f:
-                f.write(user_prompt)
-        return f"Conversation written to {history}"
-
-    @dump_func_call
-    def recall_personal(self) -> str:
-        """
-        Read users personal data from file.
-        Useful when the users ask to recall their personal data.
-        """
-        history = pathlib.Path(self.config.brain.history_path).resolve()
-        if not history.exists():
-            return "No personal data found!"
-        else:
-            return history.read_text(encoding="utf-8")
-
 
 class Agent(Brain):
     """
@@ -950,8 +702,8 @@ class Agent(Brain):
         self._stream.mark_line_clean()  # spinner may resume for the next round
         self._stream.note("working")
         response = " ".join(self._fragments_buffer).strip()
-        if not self._cancel_requested and hasattr(self, "speech"):
-            self.speech.speak(response)
+        if not self._cancel_requested:
+            speech_tools.speak_if_enabled(response)
         self._fragments_buffer.clear()
 
     def _stream_round(self, tools: list[dict]) -> tuple[str, list[dict]]:

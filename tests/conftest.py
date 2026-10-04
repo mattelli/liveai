@@ -113,8 +113,7 @@ class Frag:
 
 class FakeAgent:
     def __init__(self):
-        self.acted, self.printed, self.speech = [], [], []
-        self.cleared = 0
+        self.acted, self.printed = [], []
         self.flush_count = 0
 
     def act(self, prompt):
@@ -128,12 +127,6 @@ class FakeAgent:
 
     def flush_stream(self):
         self.flush_count += 1
-
-    def clear_chat(self):
-        self.cleared += 1
-
-    def allow_speech(self, enable):
-        self.speech.append(enable)
 
     def model_info(self):
         return "fake-model-info"

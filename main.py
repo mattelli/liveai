@@ -20,6 +20,10 @@ def parse_args(argv=None) -> argparse.Namespace:
 def main(argv=None) -> int:
     args = parse_args(argv)
     config = load_config(args.config)
+
+    from src.tools import configure as configure_tools  # inject config into tool modules
+    configure_tools(config)
+
     logging.basicConfig(
         level=config.logging.level if hasattr(config, "logging") and hasattr(config.logging, "level") else logging.WARNING,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
