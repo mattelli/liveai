@@ -227,8 +227,7 @@ Notes:
 - Inspect a named corpus with `python samples/inspect_corpus.py --list` and
   `python samples/inspect_corpus.py --corpus autosar` (filters: `--sources`,
   `--kind image`, `--source`, `--grep`, `--record N`, `--json`).
-- Requires `faiss-cpu`, `pymupdf`, `python-docx` and `openpyxl` (installed into
-  `.lms` by `setup-lms-cpu.ps1`).
+- Requires `faiss-cpu`, `pymupdf`, `python-docx` and `openpyxl` (installed into Python environment).
 - Rebuild a corpus whenever a model path, `extensions`, `multimodal` or
   `chunk_size` changes.
 - `.res/` is git-ignored, so downloaded weights and corpora are never committed.
@@ -326,10 +325,7 @@ OS Windows 11 (powershell)
 
 ```
 # Ai agent based on an OpenAI-compatible LLM API
-.\setup-lms-cpu.ps1
-
-# Stable-Diffusers pipeline
-.\setup-sd-cpu.ps1  
+.\setup-liveai-cpu.ps1
 
 ```
 

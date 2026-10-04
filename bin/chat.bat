@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-call ..\.lms\Scripts\activate
+call ..\.liveai-cpu\Scripts\activate
 echo --------------------------------------------------
 echo Loading Agent ...
 echo --------------------------------------------------

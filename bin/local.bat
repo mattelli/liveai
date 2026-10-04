@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-call ..\.lms\Scripts\activate
+call ..\.liveai-cpu\Scripts\activate
 echo --------------------------------------------------
 echo Local Model Runner
 echo Interactive menu: pick options while the terminal
