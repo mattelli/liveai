@@ -315,6 +315,12 @@ def test_agent_build_tools_includes_extract_archive():
     assert "extract_archive" in names
 
 
+def test_agent_build_tools_includes_zip_files():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    names = [tool.__name__ for tool in agent._build_tools()]
+    assert "zip_files" in names
+
+
 def test_agent_build_tools_keeps_existing_tools():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]

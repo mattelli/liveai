@@ -474,6 +474,113 @@ def test_archive_stem_variants():
     assert tools._archive_kind(Path("photos.rar")) == ""
 
 
+# ------------------------------------------------------------------ zip_files
+
+
+def test_zip_files_packs_folder_recursively(tmp_path):
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "a.txt").write_text("alpha", encoding="utf-8")
+    (tmp_path / "sub" / "b.txt").write_text("beta", encoding="utf-8")
+
+    out = tools.zip_files(str(tmp_path), str(tmp_path / "bundle.zip"))
+    archive = tmp_path / "bundle.zip"
+    assert archive.exists()
+    with __import__("zipfile").ZipFile(archive) as zf:
+        names = zf.namelist()
+        assert "a.txt" in names and "sub/b.txt" in names  # forward slashes
+        assert zf.read("a.txt").decode("utf-8") == "alpha"
+    assert f"to '{archive.resolve()}'" in out and "2 files" in out
+
+
+def test_zip_files_extension_filters(tmp_path):
+    txt_only = tmp_path / "txt_only"
+    txt_only.mkdir()
+    (txt_only / "keep.txt").write_text("t", encoding="utf-8")
+    (txt_only / "skip.log").write_text("l", encoding="utf-8")
+    (txt_only / "drop.bin").write_bytes(b"b")
+
+    tools.zip_files(str(txt_only), str(tmp_path / "only_txt.zip"), include_extensions="txt")
+    with __import__("zipfile").ZipFile(tmp_path / "only_txt.zip") as zf:
+        assert zf.namelist() == ["keep.txt"]
+
+    no_log = tmp_path / "no_log"
+    no_log.mkdir()
+    (no_log / "keep.txt").write_text("t", encoding="utf-8")
+    (no_log / "skip.log").write_text("l", encoding="utf-8")
+    (no_log / "drop.bin").write_bytes(b"b")
+
+    tools.zip_files(str(no_log), str(tmp_path / "no_log.zip"), exclude_extensions="log, .bin")
+    with __import__("zipfile").ZipFile(tmp_path / "no_log.zip") as zf:
+        assert zf.namelist() == ["keep.txt"]
+
+
+def test_zip_files_exclude_glob_skips_hidden(tmp_path):
+    hidden = tmp_path / ".res"
+    hidden.mkdir()
+    (hidden / "cached.bin").write_bytes(b"x")
+    (tmp_path / "visible.txt").write_text("v", encoding="utf-8")
+
+    tools.zip_files(str(tmp_path), str(tmp_path / "default.zip"))
+    with __import__("zipfile").ZipFile(tmp_path / "default.zip") as zf:
+        assert zf.namelist() == ["visible.txt"]
+
+    tools.zip_files(str(tmp_path), str(tmp_path / "all.zip"), exclude_glob=None)
+    with __import__("zipfile").ZipFile(tmp_path / "all.zip") as zf:
+        assert ".res/cached.bin" in zf.namelist()
+
+
+def test_zip_files_overwrite_guard(tmp_path):
+    (tmp_path / "one.txt").write_text("1", encoding="utf-8")
+    archive = tmp_path / "out.zip"
+    archive.write_bytes(b"stale")
+
+    assert tools.zip_files(str(tmp_path), str(archive)) == "File already exists."
+    assert archive.read_bytes() == b"stale"  # untouched
+
+    out = tools.zip_files(str(tmp_path), str(archive), overwrite=True)
+    assert "1 files" in out
+    with __import__("zipfile").ZipFile(archive) as zf:
+        assert zf.namelist() == ["one.txt"]
+
+
+def test_zip_files_appends_zip_suffix(tmp_path):
+    (tmp_path / "f.txt").write_text("x", encoding="utf-8")
+    tools.zip_files(str(tmp_path), str(tmp_path / "pack"))
+    assert (tmp_path / "pack.zip").exists()
+
+
+def test_zip_files_never_zips_itself(tmp_path):
+    (tmp_path / "data.txt").write_text("d", encoding="utf-8")
+    out = tools.zip_files(str(tmp_path), str(tmp_path / "self.zip"))  # archive inside source
+    with __import__("zipfile").ZipFile(tmp_path / "self.zip") as zf:
+        assert zf.namelist() == ["data.txt"]
+    assert "1 files" in out
+
+
+def test_zip_files_error_and_empty_cases(tmp_path):
+    assert "does not exist" in tools.zip_files(str(tmp_path / "nope"), str(tmp_path / "a.zip"))
+    single = tmp_path / "file.txt"
+    single.write_text("x", encoding="utf-8")
+    assert "is not a directory" in tools.zip_files(str(single), str(tmp_path / "b.zip"))
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert "No files to zip" in tools.zip_files(str(empty), str(tmp_path / "c.zip"))
+
+
+def test_zip_files_roundtrip_with_extract_archive(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "one.txt").write_text("first", encoding="utf-8")
+    (tmp_path / "src" / "nested").mkdir()
+    (tmp_path / "src" / "nested" / "two.txt").write_text("second", encoding="utf-8")
+
+    tools.zip_files(str(tmp_path / "src"), str(tmp_path / "roundtrip"))
+    out = tools.extract_archive(str(tmp_path / "roundtrip.zip"), out_dir=str(tmp_path / "restored"))
+    assert "Extracted 2 entries" in out
+    assert (tmp_path / "restored" / "one.txt").read_text(encoding="utf-8") == "first"
+    assert (tmp_path / "restored" / "nested" / "two.txt").read_text(encoding="utf-8") == "second"
+
+
 # ------------------------------------------------------------------ T6 web_search
 
 
