@@ -14,7 +14,7 @@ from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command,
     web_search, webpage_headlines, webpage_content, capture_image,
-    fetch_financial_data, save_financial_chart, download_file,
+    fetch_financial_data, save_financial_chart, download_file, extract_archive,
     search_pattern_in_files, replace_string_in_file, search_in_file
 )
 from src.summarizer import TextSummarizer
@@ -82,7 +82,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
         capture_image, system_info, current_date_time, get_working_directory,
         run_command, search_in_file, search_pattern_in_files,
         read_text_file, replace_string_in_file, write_text_file,
-        web_search, webpage_content, webpage_headlines, download_file,
+        web_search, webpage_content, webpage_headlines, download_file, extract_archive,
         fetch_financial_data, save_financial_chart,
         exit_gracefully
     ]

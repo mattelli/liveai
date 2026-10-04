@@ -319,6 +319,161 @@ def test_suggested_name_variants():
     assert tools._with_extension("photo", "image/jpeg;charset=utf8") == "photo.jpg"
 
 
+# ------------------------------------------------------------------ archives
+
+
+def make_zip(path, entries):
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+
+
+def make_tar(path, entries, mode):
+    import tarfile
+    import io
+
+    with tarfile.open(path, mode) as archive:
+        for name, content in entries.items():
+            info = tarfile.TarInfo(name)
+            data = content.encode("utf-8")
+            info.size = len(data)
+            archive.addfile(info, io.BytesIO(data))
+
+
+def test_extract_archive_zip_with_nested_folders(tmp_path):
+    source = tmp_path / "bundle.zip"
+    make_zip(source, {"a.txt": "alpha", "sub/b.txt": "beta"})
+    out = tools.extract_archive(str(source))
+    dest = tmp_path / "bundle"
+    assert dest.is_dir()
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "alpha"
+    assert (dest / "sub" / "b.txt").read_text(encoding="utf-8") == "beta"
+    assert f"to '{dest.resolve()}'" in out and "2 entries" in out
+
+
+def test_extract_archive_zip_slip_is_rejected(tmp_path):
+    import zipfile
+
+    source = tmp_path / "evil.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        info = zipfile.ZipInfo("../evil.txt")
+        archive.writestr(info, "boom")
+    out = tools.extract_archive(str(source))
+    assert "unsafe archive entry" in out
+    assert not (tmp_path / "evil.txt").exists()
+
+
+def test_extract_archive_tar_gz_and_plain_tar(tmp_path):
+    tgz = tmp_path / "docs.tar.gz"
+    make_tar(tgz, {"report.txt": "gz content"}, "w:gz")
+    out = tools.extract_archive(str(tgz))
+    assert (tmp_path / "docs" / "report.txt").read_text(encoding="utf-8") == "gz content"
+    assert "1 entries" in out
+
+    tar = tmp_path / "plain.tar"
+    make_tar(tar, {"one.txt": "1", "two.txt": "2"}, "w")
+    tools.extract_archive(str(tar))
+    assert (tmp_path / "plain" / "two.txt").read_text(encoding="utf-8") == "2"
+
+
+def test_extract_archive_tar_traversal_is_filtered(tmp_path):
+    import tarfile
+    import io
+
+    source = tmp_path / "evil.tar"
+    with tarfile.open(source, "w") as archive:
+        info = tarfile.TarInfo("../evil.txt")
+        data = b"boom"
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+    out = tools.extract_archive(str(source))
+    assert "Error extracting" in out
+    assert not (tmp_path / "evil.txt").exists()
+
+
+def test_extract_archive_bare_gz(tmp_path):
+    import gzip
+
+    source = tmp_path / "notes.csv.gz"
+    source.write_bytes(gzip.compress(b"col1,col2\n1,2\n"))
+    # default: decompressed file lands beside the archive
+    out = tools.extract_archive(str(source))
+    assert (tmp_path / "notes.csv").read_text(encoding="utf-8") == "col1,col2\n1,2\n"
+    assert "1 entries" in out
+
+    again = tools.extract_archive(str(source))
+    assert again == "File already exists."
+    tools.extract_archive(str(source), overwrite=True)
+    assert (tmp_path / "notes.csv").exists()
+
+
+def test_extract_archive_bare_gz_out_dir(tmp_path):
+    import gzip
+
+    source = tmp_path / "notes.csv.gz"
+    source.write_bytes(gzip.compress(b"data"))
+    target_dir = tmp_path / "somewhere"
+    tools.extract_archive(str(source), out_dir=str(target_dir))
+    assert (target_dir / "notes.csv").read_text(encoding="utf-8") == "data"
+
+
+def test_extract_archive_7z_requires_py7zr(tmp_path, monkeypatch):
+    import builtins
+    import sys
+
+    source = tmp_path / "pack.7z"
+    source.write_bytes(b"fake 7z")
+    monkeypatch.setitem(sys.modules, "py7zr", None)
+
+    real_import = builtins.__import__
+
+    def no_py7zr(name, *args, **kwargs):
+        if name == "py7zr":
+            raise ImportError("no py7zr")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_py7zr)
+    out = tools.extract_archive(str(source))
+    assert "pip install py7zr" in out
+
+
+def test_extract_archive_unsupported_and_missing(tmp_path):
+    missing = tmp_path / "missing.zip"
+    assert "does not exist" in tools.extract_archive(str(missing))
+    unsupported = tmp_path / "x.rar"
+    unsupported.write_bytes(b"rar-ish")
+    assert "unsupported archive type '.rar'" in tools.extract_archive(str(unsupported))
+    (tmp_path / "folder.zip").mkdir()
+    assert "is a directory" in tools.extract_archive(str(tmp_path / "folder.zip"))
+
+
+def test_extract_archive_refuses_nonempty_destination(tmp_path):
+    source = tmp_path / "again.zip"
+    make_zip(source, {"a.txt": "alpha"})
+    dest = tmp_path / "out"
+    dest.mkdir()
+    (dest / "existing.txt").write_text("keep me", encoding="utf-8")
+
+    out = tools.extract_archive(str(source), out_dir=str(dest))
+    assert "not empty" in out and "overwrite=True" in out
+    assert (dest / "existing.txt").read_text(encoding="utf-8") == "keep me"
+
+    out = tools.extract_archive(str(source), out_dir=str(dest), overwrite=True)
+    assert (dest / "a.txt").read_text(encoding="utf-8") == "alpha"
+    assert "Extracted 1 entries" in out
+
+
+def test_archive_stem_variants():
+    assert tools._archive_stem(Path("data.tar.gz")) == "data"
+    assert tools._archive_stem(Path("data.tgz")) == "data"
+    assert tools._archive_stem(Path("data.zip")) == "data"
+    assert tools._archive_stem(Path("logs.gz")) == "logs"
+    assert tools._archive_kind(Path("photos.tar.xz")) == "tar"
+    assert tools._archive_kind(Path("photos.rar")) == ""
+
+
 # ------------------------------------------------------------------ T6 web_search
 
 

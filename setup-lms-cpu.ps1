@@ -49,6 +49,7 @@ pip install requests
 pip install beautifulsoup4
 pip install selenium
 pip install webdriver-manager
+pip install py7zr
 
 # EMBEDDING
 pip install -U "sentence-transformers[image]"

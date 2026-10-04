@@ -16,6 +16,7 @@ __all__ = [
     "webpage_headlines", "webpage_content", "web_search", "capture_image",
     "fetch_financial_data", "save_financial_chart", "search_in_file",
     "search_pattern_in_files", "replace_string_in_file", "download_file",
+    "extract_archive",
 ]
 
 CAPTURED_IMAGE: str = "captured_image.jpg"
@@ -388,6 +389,128 @@ def download_file(
     except Exception as exc:
         return f"Error downloading: {exc}"
     return f"Saved '{dest_path.resolve()}' ({dest_path.stat().st_size:,} bytes)."
+
+
+# ------------------------------------------------------------------ archives
+
+_ZIP_SUFFIXES = (".zip",)
+_TAR_SUFFIXES = (".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz")
+_SUPPORTED_ARCHIVES = (
+    "zip, 7z, tar, tar.gz, tgz, tar.bz2, tbz2, tar.xz, txz and gz"
+)
+
+
+def _archive_stem(path: Path) -> str:
+    """``foo.tar.gz`` -> ``foo``; ``foo.zip`` -> ``foo``."""
+    name = path.name.lower()
+    for suffix in _TAR_SUFFIXES + _ZIP_SUFFIXES + (".7z", ".gz"):
+        if name.endswith(suffix):
+            return path.name[: -len(suffix)]
+    return path.stem
+
+
+def _archive_kind(path: Path) -> str:
+    """Map an archive path to its extractor: 'zip', 'tar', '7z', 'gz' or ''."""
+    name = path.name.lower()
+    if any(name.endswith(suffix) for suffix in _ZIP_SUFFIXES):
+        return "zip"
+    if any(name.endswith(suffix) for suffix in _TAR_SUFFIXES):
+        return "tar"
+    if name.endswith(".7z"):
+        return "7z"
+    if name.endswith(".gz"):
+        return "gz"
+    return ""
+
+
+def _extract_zip(path: Path, dest: Path) -> int:
+    """Extract a zip archive, rejecting entries that escape ``dest`` (zip slip)."""
+    import zipfile
+
+    with zipfile.ZipFile(path) as archive:
+        members = archive.infolist()
+        root = dest.resolve()
+        for member in members:
+            target = (dest / member.filename).resolve()
+            if not target.is_relative_to(root):
+                raise ValueError(f"unsafe archive entry '{member.filename}'")
+        for member in members:
+            archive.extract(member, dest)
+        return len(members)
+
+
+def _extract_tar(path: Path, dest: Path) -> int:
+    """Extract a tar archive; ``filter='data'`` blocks path traversal (PEP 706)."""
+    import tarfile
+
+    with tarfile.open(path) as archive:
+        members = archive.getmembers()
+        archive.extractall(dest, filter="data")
+        return len(members)
+
+
+def _extract_7z(path: Path, dest: Path) -> int:
+    try:
+        import py7zr
+    except ImportError as exc:
+        raise RuntimeError(
+            "py7zr is required for .7z archives (install it with: pip install py7zr)"
+        ) from exc
+    with py7zr.SevenZipFile(path) as archive:
+        entries = len(archive.list())
+        archive.extractall(path=dest)
+        return entries
+
+
+def _extract_gz(path: Path, dest: Path) -> int:
+    """Decompress a bare ``.gz`` file (not a tar) into ``dest/<stem>``."""
+    import gzip
+    import shutil
+
+    target = dest / _archive_stem(path)
+    with gzip.open(path, "rb") as source, open(target, "wb") as output:
+        shutil.copyfileobj(source, output)
+    return 1
+
+
+@dump_func_call
+def extract_archive(archive: str, out_dir: str | None = None, overwrite: bool = False) -> str:
+    """
+    Unzip / unpack a compressed archive and save its content into a folder.
+    Useful when user asks to extract, unzip, unpack or decompress an archive.
+    Supported formats: zip, 7z, tar, tar.gz, tgz, tar.bz2, tbz2, tar.xz, txz and
+    single-file gz. By default the content is extracted into a new folder named
+    after the archive (e.g. ``data.zip`` -> ``data/``); ``out_dir`` overrides it.
+    A non-empty destination is only written when ``overwrite`` is True. Returns
+    the destination folder and the number of extracted entries.
+    """
+    archive_path = Path(archive).resolve()
+    if not archive_path.exists():
+        return f"Error: '{archive_path}' does not exist!"
+    if archive_path.is_dir():
+        return f"Error: '{archive_path}' is a directory!"
+    kind = _archive_kind(archive_path)
+    if not kind:
+        return f"Error: unsupported archive type '{archive_path.suffix}'. Supported: {_SUPPORTED_ARCHIVES}."
+
+    if kind == "gz":  # single decompressed file, extracted beside the archive
+        dest = Path(out_dir) if out_dir is not None else archive_path.parent
+        if (dest / _archive_stem(archive_path)).exists() and not overwrite:
+            return "File already exists."
+    else:
+        dest = Path(out_dir) if out_dir is not None else archive_path.parent / _archive_stem(archive_path)
+        if dest.exists() and any(dest.iterdir()) and not overwrite:
+            return f"Destination '{dest}' is not empty. Use overwrite=True to extract into it."
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        extractors = {
+            "zip": _extract_zip, "tar": _extract_tar,
+            "7z": _extract_7z, "gz": _extract_gz,
+        }
+        entries = extractors[kind](archive_path, dest)
+    except Exception as exc:
+        return f"Error extracting '{archive_path.name}': {exc}"
+    return f"Extracted {entries} entries from '{archive_path.name}' to '{dest.resolve()}'."
 
 
 @dump_func_call
