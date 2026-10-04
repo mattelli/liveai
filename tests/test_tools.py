@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -1371,6 +1372,43 @@ def test_store_personal_appends_personal_messages(memory_seam, tmp_path):
     assert result == f"Conversation written to {history.resolve()}"
     text = history.read_text(encoding="utf-8")
     assert "personal note" in text and "what time is it?" not in text
+    first_line = text.splitlines()[0]
+    assert re.match(r"At \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} user wrote:", first_line), first_line
+
+
+def test_store_personal_falls_back_to_last_user_message(memory_seam, tmp_path):
+    """No message contains the word 'personal': the latest user message wins."""
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "remember that I like dogs"},
+    ]
+    memory_seam.bind_history(lambda: messages)
+
+    result = memory_seam.store_personal()  # used to raise IndexError
+
+    history = tmp_path / "history.txt"
+    assert result == f"Conversation written to {history.resolve()}"
+    assert "I like dogs" in history.read_text(encoding="utf-8")
+
+
+def test_store_personal_prefers_explicit_content(memory_seam, tmp_path):
+    """Explicit content wins over the history scan and needs no binding."""
+    messages = [{"role": "user", "content": "unrelated chatter"}]
+    memory_seam.bind_history(lambda: messages)
+
+    result = memory_seam.store_personal(content="Birthday: May 5th")
+
+    history = tmp_path / "history.txt"
+    assert result == f"Conversation written to {history.resolve()}"
+    text = history.read_text(encoding="utf-8")
+    assert "Birthday: May 5th" in text and "unrelated chatter" not in text
+
+
+def test_store_personal_without_user_message_returns_error(memory_seam, tmp_path):
+    memory_seam.bind_history(lambda: [{"role": "assistant", "content": "hi"}])
+    out = memory_seam.store_personal()
+    assert out == "Error: no user message found to store."
+    assert not (tmp_path / "history.txt").exists()
 
 
 def test_recall_personal_returns_file_content(memory_seam, tmp_path):

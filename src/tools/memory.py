@@ -14,7 +14,7 @@ live message list of the running session - is bound by ``Brain`` via
 from __future__ import annotations
 
 import pathlib
-from datetime import datetime, timezone
+from datetime import datetime
 
 from src.common import dump_func_call
 
@@ -85,26 +85,40 @@ def recall_personal() -> str:
 
 
 @dump_func_call
-def store_personal() -> str:
+def store_personal(content: str = "") -> str:
     """
-    Stores the user personal content to a text file.
-    Useful when the users explicitly mention the prompted text is "personal".
+    Store the user personal content to a text file for later recall with
+    recall_personal. Useful when the users explicitly mention that the
+    prompted text is "personal" or ask to save/remember something about them.
+    Pass the personal text in ``content``; when omitted, the last user message
+    of the conversation is stored, preferring messages that mention
+    "personal". Returns the file path written.
     """
-    history = _history_file()
-    now = datetime.now(tz=timezone.utc)
-    timestamp = now.strftime("%d/%m/%Y, %H:%M")
-    user_msgs = _shaped_user_messages()
-    bootstrap_prompt = _config("agent", "bootstrap_prompt", None)
-    if user_msgs and user_msgs[0] == bootstrap_prompt:
-        user_msgs = user_msgs[1:]
-    selected_msgs = [m for m in user_msgs if "personal" in m.lower()]
-    user_prompt = f"At {timestamp} user wrote: {selected_msgs[-1]} \n"
-    if not history.exists():
-        history.write_text(user_prompt, encoding="utf-8")
-    else:
-        with open(file=history, mode="a", encoding="utf-8") as f:
-            f.write(user_prompt)
-    return f"Conversation written to {history}"
+    try:
+        text = (content or "").strip()
+        if not text:
+            user_msgs = _shaped_user_messages()
+            bootstrap_prompt = _config("agent", "bootstrap_prompt", None)
+            if user_msgs and user_msgs[0] == bootstrap_prompt:
+                user_msgs = user_msgs[1:]
+            selected = [m for m in user_msgs if "personal" in m.lower()]
+            if not selected and user_msgs:
+                selected = [user_msgs[-1]]  # fall back to the latest user message
+            if not selected:
+                return "Error: no user message found to store."
+            text = selected[-1]
+        history = _history_file()
+        now = datetime.now()  # local time
+        timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+        user_prompt = f"At {timestamp} user wrote: {text} \n"
+        if not history.exists():
+            history.write_text(user_prompt, encoding="utf-8")
+        else:
+            with open(file=history, mode="a", encoding="utf-8") as f:
+                f.write(user_prompt)
+        return f"Conversation written to {history}"
+    except Exception as e:
+        return f"Error: {e}"
 
 
 @dump_func_call
