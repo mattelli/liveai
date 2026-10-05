@@ -1,0 +1,26 @@
+[package]
+name = "la"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+clap = { version = "4.6.7", features = ["derive"] }
+env_logger = "0.11.11"
+la-audio = { version = "0.1.0", path = "../../crates/la-audio" }
+la-core = { version = "0.1.0", path = "../../crates/la-core" }
+la-ml = { version = "0.1.0", path = "../../crates/la-ml", optional = true }
+la-proto = { version = "0.1.0", path = "../../crates/la-proto" }
+log.workspace = true
+tokio.workspace = true
+
+[features]
+default = []
+ml = ["dep:la-ml", "la-ml/embeddings", "la-ml/clip", "la-ml/cross-encoder"]
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+win32job = "2"

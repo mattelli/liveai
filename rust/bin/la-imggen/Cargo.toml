@@ -1,0 +1,20 @@
+[package]
+name = "la-imggen"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+candle-core = { version = "0.11.0", optional = true }
+candle-nn = { version = "0.11.0", optional = true }
+candle-transformers = { version = "0.11.0", optional = true }
+env_logger = "0.11.11"
+image = { version = "0.25.10", features = ["png", "jpeg", "bmp"] }
+la-proto = { version = "0.1.0", path = "../../crates/la-proto" }
+log.workspace = true
+serde_json.workspace = true
+tokenizers = { version = "0.23.2", optional = true }
+
+[features]
+default = []
+sd = ["dep:candle-core", "dep:candle-nn", "dep:candle-transformers", "dep:tokenizers"]

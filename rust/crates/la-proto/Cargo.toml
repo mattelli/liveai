@@ -1,0 +1,10 @@
+[package]
+name = "la-proto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "JSON-lines IPC protocol for the Live Assistant worker processes"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

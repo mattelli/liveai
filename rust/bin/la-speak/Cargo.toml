@@ -1,0 +1,18 @@
+[package]
+name = "la-speak"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+env_logger = "0.11.11"
+la-audio = { version = "0.1.0", path = "../../crates/la-audio" }
+la-proto = { version = "0.1.0", path = "../../crates/la-proto" }
+log.workspace = true
+regex.workspace = true
+serde_json.workspace = true
+sherpa-rs = { version = "0.6.8", features = ["tts", "download-binaries"], optional = true }
+
+[features]
+default = []
+tts = ["dep:sherpa-rs"]

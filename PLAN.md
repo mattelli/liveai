@@ -458,3 +458,98 @@ checked-in snapshot generated from `_default_tools`.
    - flags: `-SkipExisting` (default), `-WhatIf` dry-run listing, `-Only <section>`; works offline for artifacts already stored by the Python setup
 5. Test suites per §10 and the parity checklist §11 updated as phases land.
 6. `PLAN.md` (this file) updated with phase-completion statuses as work progresses.
+
+---
+
+## 14. Status report (snapshot 2026-10-05, second pass)
+
+Updated after the verification + completion pass. Previous snapshot superseded;
+all §10.1 validation gates now pass and Phase 5 is complete.
+
+### 14.0 What this pass changed (delta vs. the first snapshot)
+
+1. **All failing tests fixed** (5): zip-slip guard now compares lexically
+   (Windows verbatim `\\?\` prefix broke `canonicalize`-based containment),
+   `clean_for_speech` test expectation corrected to Python parity (`[link](url)`
+   → `linkurl`), `exit_gracefully` moved to the end of the registry assembly
+   (mirrors `_default_tools`), `required_params()` walks the `required` array in
+   declared order (serde_json maps iterate alphabetically), session-test
+   `FakeAgent::bootstrap` made self-consistent ("bootstrap").
+2. **Printer test isolation** (§14.4 #2): the output-hook test lock moved into
+   `common::output_hook_test_lock()` and is shared by the `printer` and `common`
+   test modules.
+3. **Clippy gate green**: 68 warnings fixed (let-chains, type aliases for
+   `SpeakHook`/`SentenceTokenizer`/`Tokenizer`, `strip_prefix`, `div_ceil`,
+   needless returns/lets, `ptr_arg`, `doc_overindented_list_items`, ...);
+   `cargo clippy --workspace --all-targets -- -D warnings` passes.
+4. **Hardening**: `win32job` Job object (KILL_ON_JOB_CLOSE) now actually wired
+   in `bin/la/src/main.rs` (was only a declared dependency + doc comment).
+5. **Parity bug fixes found during the pass**:
+   - `.env` loading used `dotenvy::from_path_override` (file overrides env)
+     while Python uses `override=False` (env wins) — switched to `dotenvy::from_path`
+     + regression test.
+   - `unquote` in the web tools converted `+` to space and used convoluted
+     byte slicing; now byte-wise hex decoding with Python `urllib.parse.unquote`
+     semantics (invalid escapes pass through, `+` literal) + tests.
+6. **Phase-5 deliverables completed**: `rust/README.md`, `rust/check.ps1`
+   (validated end-to-end), `rust/setup_rust_res.ps1` (validated: fetched the
+   missing clip-ViT-B-32 files incl. the `0_CLIPModel/` flattening and the
+   slow→fast tokenizer conversion, installed `pdfium.dll` into both target
+   dirs; `-WhatIf`/`-Only`/`-Force` flags work).
+7. **New tests per §10.2/§10.3**: worker e2e (`la-imggen` 3, `la-speak` 3 —
+   spawn the real binaries and drive the protocol incl. id matching, stop, and
+   the stdin-EOF watchdog), CLI e2e (`la --prompt` against a fake SSE server,
+   no-tools and tools paths incl. the context-usage-line difference), arg
+   parsing parity (5), `t2i` defaults from `[image_gen]` (params-building
+   extracted for testability), `.env` precedence.
+
+### 14.1 Phase progress
+
+| Phase | Scope | Status |
+|---|---|---|
+| 0 — scaffold | Workspace, config structs (incl. `[rust]` overrides, §6), `la-proto` IPC | ✅ done |
+| 1 — chat parity | Brain/Agent, ToolRegistry, StreamPrinter, InputReader, session, `la` binary | ✅ done (tests green) |
+| 2 — workers + voice | `la-audio`, `la-listen`, `la-speak`, `la-imggen`, supervisor, Ctrl+C path, Job object | ✅ done (heavy backends behind feature flags; stub-mode e2e tested) |
+| 3 — utility tools | web/download/archives/camera/finance | ✅ all 33 §7 tools registered; parity guard green |
+| 4 — ML parity | document_loader, summarizer/LexRank, corpora, cross-encoder, CLIP search, `la-ml` | ✅ done (build errors from the first snapshot resolved) |
+| 5 — hardening & docs | `rust/README.md`, `check.ps1`, `setup_rust_res.ps1` | ✅ done |
+
+### 14.2 Validation gates (§10.1)
+
+| Gate | Result |
+|---|---|
+| `cargo fmt --all -- --check` | ✅ |
+| `cargo clippy --workspace --all-targets -- -D warnings` | ✅ 0 warnings |
+| `cargo check --workspace` | ✅ |
+| `cargo test --workspace` | ✅ 143 passed / 0 failed (15 suites) |
+
+### 14.3 Test coverage
+
+| Suite | Result |
+|---|---|
+| `la-core` lib tests (config, printer, input, agent helpers, all tools, ML modules) | ✅ 100/100 |
+| `la-core` fake_openai integration (SSE, tool rounds, cancel) | ✅ 7/7 |
+| `la-core` session_tests (commands, EOF, bootstrap, launcher) | ✅ 8/8 |
+| `la-core` tool_parity (order + required params + descriptions) | ✅ 3/3 |
+| `la-audio` unit tests | ✅ 7/7 |
+| `la-proto` unit tests | ✅ 4/4 |
+| `la-imggen` worker e2e (spawn binary, protocol, EOF watchdog) | ✅ 3/3 |
+| `la-speak` worker e2e (spawn binary, protocol, unload no-op, EOF) | ✅ 3/3 |
+| `la` CLI e2e (fake SSE server, both tool paths) + arg parsing | ✅ 2/2 + 5/5 |
+| `la-speak` clean_for_speech | ✅ 1/1 |
+
+### 14.4 Open issues
+
+1. **Manual parity runbook (§10.4)** — needs real hardware/models (whisper ggml
+   ~1.5 GB, SD models, microphone); `setup_rust_res.ps1` fetches them; runbook
+   execution outstanding.
+2. **§11 checklist boxes** — still unchecked pending the manual runbook.
+3. **git** — `rust/` was untracked; commit as part of this snapshot.
+4. Feature-enabled builds (`--features ml/whisper/tts/sd`) compile-check via
+   `check.ps1 -Features`; full release builds with native deps (CMake/MSVC for
+   whisper.cpp) documented in `rust/README.md` but not exercised on CI.
+
+### 14.5 Workspace size
+
+~14,624 lines of Rust across 8 crates/bins (11,831→12,000 src + tests) plus
+~625 lines of scripts/docs (README.md, check.ps1, setup_rust_res.ps1).
