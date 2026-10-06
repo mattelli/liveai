@@ -22,6 +22,11 @@ Backends:
   "Available" = models in the local registry; Ollama has no explicit load
   endpoint, so ``load()`` sends the documented empty-prompt generate request
   with a ``keep_alive`` TTL (and ``keep_alive=0`` unloads again).
+* Every model entry/info carries ``capabilities`` ("vision", "tool_use",
+  "tools", ...) and ``max_context_length`` (trained maximum); entries for
+  loaded models additionally carry the active ``context_length``. Ollama
+  capabilities come from its per-model ``show()`` response, LM Studio's are
+  derived from the model info's ``vision`` / ``trained_for_tool_use`` flags.
 
 Both SDKs are imported lazily so the module is importable without either
 installed; instantiating the matching backend without it raises an
@@ -99,6 +104,35 @@ def _is_not_found(exc: Exception) -> bool:
     if getattr(exc, "status_code", None) == 404:
         return True
     return "not found" in str(exc).lower()
+
+
+def _lmstudio_capabilities(info: dict) -> list[str]:
+    """Normalized capability tags for an LM Studio model-info dict.
+
+    LM Studio reports no capability list; it flags vision/tool training on
+    the model info instead (``vision`` / ``trained_for_tool_use`` booleans).
+    """
+    capabilities = []
+    if info.get("vision"):
+        capabilities.append("vision")
+    if info.get("trained_for_tool_use"):
+        capabilities.append("tool_use")
+    return capabilities
+
+
+def _ollama_max_context(modelinfo: dict, details: Any) -> int | None:
+    """The trained maximum context length from an Ollama ``show()`` response.
+
+    It lives in the ``modelinfo`` blob as ``<architecture>.context_length``;
+    ``details.family`` usually names the same architecture.
+    """
+    arch = modelinfo.get("general.architecture") or getattr(details, "family", None)
+    if arch and isinstance(modelinfo.get(f"{arch}.context_length"), int):
+        return int(modelinfo[f"{arch}.context_length"])
+    for key, value in modelinfo.items():  # fallback: any "<arch>.context_length"
+        if key.endswith(".context_length") and isinstance(value, int):
+            return int(value)
+    return None
 
 
 def human_size(num_bytes: float) -> str:
@@ -198,6 +232,7 @@ class LMStudioLocalModelHandler(BaseLocalModelHandler):
         super().__init__()
         self._client = client
         self._host = host
+        self._injected_client = client is not None  # injected clients are never replaced
         if client is None:
             try:
                 import lmstudio as lms  # lazy import: keeps startup light
@@ -220,15 +255,17 @@ class LMStudioLocalModelHandler(BaseLocalModelHandler):
     def _server_call(self, description: str, func: Callable[[], Any]) -> Any:
         """Base wrapping plus a one-shot retry on the standard API server port.
 
-        Without an explicit ``host`` the SDK targets the LM Studio app's
-        daemon port (via its discovery file). With a headless ``lms server
-        start`` that resolution fails ("Local API host port is not yet
-        resolved."); rebind to ``FALLBACK_HOST`` once and retry.
+        Without an explicit ``host`` and with a self-created client the SDK
+        targets the LM Studio app's daemon port (via its discovery file). With
+        a headless ``lms server start`` that resolution fails ("Local API host
+        port is not yet resolved."); rebind to ``FALLBACK_HOST`` once and
+        retry. An explicitly injected ``client`` is never replaced.
         """
         try:
             return super()._server_call(description, func)
         except LocalModelHandlerError as exc:
-            if self._host is None and self._UNRESOLVED_PORT_MARKER in str(exc).lower():
+            if (self._host is None and not self._injected_client
+                    and self._UNRESOLVED_PORT_MARKER in str(exc).lower()):
                 self.logger.info(
                     "LM Studio app port unresolved; retrying against %s ...", self.FALLBACK_HOST)
                 self._host = self.FALLBACK_HOST
@@ -238,11 +275,16 @@ class LMStudioLocalModelHandler(BaseLocalModelHandler):
 
     def _list_available(self) -> list[dict]:
         models: list[dict] = []
-        for downloaded in self._server_call(
-            "listing downloaded models", self._get_client().list_downloaded_models
-        ):
+
+        def list_downloaded():
+            # Lazily resolve the client inside the call: a fallback-host retry
+            # (see _server_call) must rebind _client before the call runs.
+            return self._get_client().list_downloaded_models()
+
+        for downloaded in self._server_call("listing downloaded models", list_downloaded):
             info = _to_dict(downloaded.info)
             info["path"] = str(downloaded.path)
+            info["capabilities"] = _lmstudio_capabilities(info)
             models.append(info)
         return models
 
@@ -253,6 +295,7 @@ class LMStudioLocalModelHandler(BaseLocalModelHandler):
             for handle in self._llm_session().list_loaded():
                 info = _to_dict(handle.get_info())
                 info["identifier"] = getattr(handle, "identifier", info.get("identifier"))
+                info["capabilities"] = _lmstudio_capabilities(info)
                 infos.append(info)
             return infos
         return self._server_call("listing loaded models", fetch)
@@ -281,6 +324,7 @@ class LMStudioLocalModelHandler(BaseLocalModelHandler):
         handle = self._server_call(f"loading model '{model}'", load_model)
         info = _to_dict(self._server_call("fetching instance info", handle.get_info))
         info["identifier"] = handle.identifier
+        info["capabilities"] = _lmstudio_capabilities(info)
         info["loaded"] = True
         self.logger.info("Model '%s' loaded as instance '%s'.", model, handle.identifier)
         return info
@@ -305,12 +349,14 @@ class LMStudioLocalModelHandler(BaseLocalModelHandler):
             if model in (info.get("identifier"), info.get("model_key")):
                 info["loaded"] = True
                 return info
-        for downloaded in self._server_call(
-            "listing downloaded models", self._get_client().list_downloaded_models
-        ):
+        def list_downloaded():
+            return self._get_client().list_downloaded_models()
+
+        for downloaded in self._server_call("listing downloaded models", list_downloaded):
             if model in (downloaded.model_key, getattr(downloaded.info, "display_name", None)):
                 info = _to_dict(downloaded.info)
                 info["path"] = str(downloaded.path)
+                info["capabilities"] = _lmstudio_capabilities(info)
                 info["loaded"] = False
                 return info
         raise ModelNotFoundError(f"LM Studio model not found: {model!r}")
@@ -346,6 +392,16 @@ class OllamaLocalModelHandler(BaseLocalModelHandler):
         self._client = client
         self._keep_alive = keep_alive
 
+    def _show_enrichment(self, model: str) -> dict:
+        """Capabilities + trained max context from a per-model ``show()`` call."""
+        shown = self._server_call(
+            f"fetching capabilities of '{model}'", lambda: self._client.show(model))
+        modelinfo = _to_dict(shown.modelinfo) or {}
+        return {
+            "capabilities": list(getattr(shown, "capabilities", None) or []),
+            "max_context_length": _ollama_max_context(modelinfo, shown.details),
+        }
+
     def _list_available(self) -> list[dict]:
         records = self._server_call("listing available models", lambda: self._client.list().models)
         models = []
@@ -361,6 +417,15 @@ class OllamaLocalModelHandler(BaseLocalModelHandler):
                 "parameter_size": getattr(details, "parameter_size", None),
                 "quantization_level": getattr(details, "quantization_level", None),
             })
+        # Capabilities/context live in the per-model show() response; enrich
+        # best-effort so a single failing model does not break the listing.
+        for entry in models:
+            try:
+                enrichment = self._show_enrichment(entry["model"])
+            except LocalModelHandlerError as exc:
+                self.logger.debug("Skipping info enrichment for %r: %s", entry["model"], exc)
+                continue
+            entry.update({k: v for k, v in enrichment.items() if v is not None})
         return models
 
     def list_loaded(self) -> list[dict]:
@@ -418,16 +483,18 @@ class OllamaLocalModelHandler(BaseLocalModelHandler):
         if response.modelinfo is None:
             raise ModelNotFoundError(f"Ollama model not found: {model!r}")
         details = response.details
+        modelinfo = _to_dict(response.modelinfo)
         return {
             "model": model,
             "modified_at": _to_dict(response.modified_at),
             "capabilities": list(response.capabilities or []),
+            "max_context_length": _ollama_max_context(modelinfo, details),
             "family": getattr(details, "family", None),
             "families": list(getattr(details, "families", None) or []),
             "parameter_size": getattr(details, "parameter_size", None),
             "quantization_level": getattr(details, "quantization_level", None),
             "parameters": self._parse_parameters(response.parameters),
-            "modelinfo": _to_dict(response.modelinfo),
+            "modelinfo": modelinfo,
         }
 
     @staticmethod

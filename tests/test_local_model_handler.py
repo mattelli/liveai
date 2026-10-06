@@ -249,7 +249,10 @@ def test_lmstudio_lists_downloaded_models_with_load_flags(fake_lmstudio):
     assert [m["model_key"] for m in models] == ["qwen/qwen3.5-4b", "nomic-embed"]
     assert models[0]["loaded"] is False
     assert models[0]["params_string"] == "4B"
+    assert models[0]["capabilities"] == ["tool_use"]  # vision=False, tool training=True
+    assert models[0]["max_context_length"] == 131072
     assert models[1]["type"] == "embedding"
+    assert models[1]["capabilities"] == []  # embedding models carry no capability flags
 
 
 def test_lmstudio_list_loaded_reports_instances(fake_lmstudio):
@@ -262,6 +265,8 @@ def test_lmstudio_list_loaded_reports_instances(fake_lmstudio):
     loaded = handler.list_loaded()
     assert loaded[0]["identifier"] == "qwen/qwen3.5-4b::instance"
     assert loaded[0]["context_length"] == 4096
+    assert loaded[0]["max_context_length"] == 131072
+    assert loaded[0]["capabilities"] == []  # fake info has no vision/tool flags
 
 
 def test_lmstudio_load_returns_instance_info_and_flags(fake_lmstudio):
@@ -296,6 +301,7 @@ def test_lmstudio_model_info_loaded_then_downloaded(fake_lmstudio):
     handler.load("qwen/qwen3.5-4b")
     info = handler.model_info("qwen/qwen3.5-4b")  # loaded instance wins
     assert info["loaded"] is True and info["vision"] is True
+    assert info["capabilities"] == ["vision", "tool_use"]
     info = handler.model_info("qwen/qwen3.5-4b::instance")  # by identifier too
     assert info["loaded"] is True
 
@@ -328,7 +334,22 @@ def test_ollama_lists_registry_models_with_load_flags(fake_ollama):
     assert models[0]["loaded"] is True  # running per ps()
     assert models[1]["loaded"] is False
     assert models[0]["parameter_size"] == "3.2B"
+    assert models[0]["capabilities"] == ["completion", "tools", "vision"]  # from show()
+    assert models[0]["max_context_length"] == 131072  # from show()'s modelinfo
     assert models[0]["modified_at"] == "2026-01-15T00:00:00+00:00"
+
+
+def test_ollama_list_skips_enrichment_when_show_fails(fake_ollama):
+    class PartialShowClient(FakeOllamaClient):
+        def show(self, model):
+            if model == "qwen2.5:7b":
+                raise ConnectionError("show blew up")
+            return super().show(model)
+
+    models = OllamaLocalModelHandler(client=PartialShowClient()).list_models()
+    assert models[0]["capabilities"] == ["completion", "tools", "vision"]
+    assert "capabilities" not in models[1]  # failed show(): entry left unenriched
+    assert "max_context_length" not in models[1]
 
 
 def test_ollama_list_loaded_reports_vram_and_context(fake_ollama):
@@ -365,6 +386,7 @@ def test_ollama_model_info_parses_show_response(fake_ollama):
     handler = OllamaLocalModelHandler(client=fake_ollama)
     info = handler.model_info("llama3.2:3b")
     assert info["capabilities"] == ["completion", "tools", "vision"]
+    assert info["max_context_length"] == 131072
     assert info["parameter_size"] == "3.2B"
     assert info["quantization_level"] == "Q4_K_M"
     # parameters block parsed: numerics converted, repeated keys collected
@@ -438,6 +460,18 @@ def test_lmstudio_no_fallback_for_explicit_host(monkeypatch):
     handler = LMStudioLocalModelHandler(host="localhost:9999")
     assert handler.is_available() is False  # explicit host: no fallback retry
     assert handler._host == "localhost:9999"
+
+
+def test_lmstudio_list_models_works_without_prior_probe(monkeypatch):
+    # Regression: the downloaded-model listing used to bind the default-host
+    # client eagerly, so a fallback-host retry re-ran the stale (unresolved)
+    # call and list_models()/model_info() failed when they were the FIRST call
+    # on a fresh handler. The client must be resolved lazily inside the call.
+    monkeypatch.setitem(sys.modules, "lmstudio", FallbackLMStudioModule("lmstudio"))
+    handler = LMStudioLocalModelHandler()  # list_models() is the first server call
+    models = handler.list_models()
+    assert [m["model_key"] for m in models] == ["qwen/qwen3.5-4b"]
+    assert handler._host == LMStudioLocalModelHandler.FALLBACK_HOST
 
 
 # ------------------------------------------------- server-failure wrapping

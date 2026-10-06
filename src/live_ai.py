@@ -6,6 +6,7 @@ import types
 from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 from logging import getLogger
 from datetime import datetime, timezone
+from urllib.parse import urlsplit
 from src.common import SimpleNamespace, dump_func_call, cprint, StreamPrinter
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
@@ -116,7 +117,8 @@ class OpenAICore:
     (OpenAI, Mistral, Groq, OpenRouter, DeepSeek, Together, Gemini, xAI,
     Anthropic, ...) and local servers (Ollama, LM Studio) share one
     implementation: connection handling, model metadata resolution (context
-    window, vision) from the OpenAI models endpoint, and the function-calling
+    window, vision) from the OpenAI models endpoint - plus the native APIs of
+    local servers, whose OpenAI /models data is thin - and the function-calling
     helpers (JSON Schema tool definitions, stream chunk parsing).
     The API key is read from the environment variable named by
     ``[brain] api_key_env`` (default ``<PROVIDER>_API_KEY``, also resolved
@@ -174,8 +176,9 @@ class OpenAICore:
 
         The OpenAI models endpoint may include a ``capabilities`` list (e.g.
         LM Studio: ["completion", "tools", "vision"]); when the server
-        reports it, that value is authoritative. Servers without capability
-        info (Ollama, most cloud providers) fall back to the optional
+        reports it, that value is authoritative. Local servers are covered by
+        the native-API fallback in ``_fetch_model_metadata``; servers still
+        reporting nothing (most cloud providers) fall back to the optional
         ``[brain] vision`` config flag (default False), so the key stays
         usable as an override but is no longer required.
         """
@@ -276,6 +279,11 @@ class OpenAICore:
         LM Studio: max_context_length, loaded_context_length, capabilities,
         quantization, arch) are passed through untouched.
 
+        When the OpenAI endpoint reports neither capabilities nor context
+        lengths (true for every local server), the server's native API is
+        probed as well (see ``_fetch_native_model_metadata``) and fills the
+        missing keys (existing keys are never overwritten).
+
         ``use_raw_fallback=False`` skips the tolerant re-request for servers
         returning a bare JSON array. Failures degrade silently. Successful
         results are cached on the instance (model metadata is static for the
@@ -314,6 +322,12 @@ class OpenAICore:
                 elif not isinstance(value, (str, int, float, bool)):
                     continue  # skip nested structures
                 meta[key] = value
+        if not meta.get("capabilities") or not any(
+                "context" in k.lower() for k in meta):
+            # Local servers report neither through the OpenAI endpoint; fill
+            # the gaps from their native APIs (no-op for cloud hosts).
+            for key, value in self._fetch_native_model_metadata().items():
+                meta.setdefault(key, value)
         if meta:
             self._model_meta = meta
         return meta
@@ -346,6 +360,129 @@ class OpenAICore:
             (m for m in data if isinstance(m, dict) and m.get("id") == self._model_name),
             None,
         )
+
+    ## native-API metadata (local servers) ##
+
+    _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "::1"}
+
+    def _server_root(self) -> str:
+        """The server root URL: the OpenAI base_url without a trailing '/v1'."""
+        base = self._base_url.rstrip("/")
+        return base[:-3] if base.endswith("/v1") else base
+
+    def _fetch_native_model_metadata(self) -> dict:
+        """Model metadata from a local server's native API.
+
+        The OpenAI ``/models`` endpoints of local servers are thin (no
+        capabilities, no context lengths), while their native APIs carry the
+        full picture: Ollama (``POST /api/show`` + ``GET /api/ps``) and LM
+        Studio (``GET /api/v0/models`` - ``type == "vlm"`` adds a "vision"
+        capability, the REST capability list only covers tool use). Tries
+        Ollama first, then LM Studio; probes only loopback hosts and returns
+        {} when neither server answers, so cloud providers are unaffected and
+        callers degrade to the OpenAI-endpoint data.
+        """
+        if urlsplit(self._base_url).hostname not in self._LOOPBACK_HOSTS:
+            return {}  # the native APIs are a local-server thing
+        for fetcher in (self._ollama_native_metadata, self._lmstudio_native_metadata):
+            meta = fetcher()
+            if meta:
+                return meta
+        return {}
+
+    def _ollama_native_metadata(self) -> dict:
+        """Ollama-native metadata for the model ({} when not an Ollama server)."""
+        try:
+            import httpx
+            resp = httpx.post(
+                self._server_root() + "/api/show",
+                json={"model": self._model_name},
+                # local servers need no auth; tolerate clients without api_key
+                headers={"Authorization": f"Bearer {getattr(self._client, 'api_key', '')}"},
+                timeout=5.0,
+            )
+            resp.raise_for_status()
+            shown = resp.json()
+            if not isinstance(shown, dict):
+                return {}
+        except Exception as exc:
+            self.logger.debug("GET /api/show failed: %s", exc)
+            return {}
+        meta: dict = {}
+        capabilities = shown.get("capabilities")
+        if isinstance(capabilities, (list, tuple)) and capabilities:
+            meta["capabilities"] = [str(c) for c in capabilities]
+        modelinfo = shown.get("model_info")
+        if isinstance(modelinfo, dict):
+            max_ctx = self._ollama_context_length(modelinfo)
+            if max_ctx:
+                meta["max_context_length"] = max_ctx
+        loaded_ctx = self._ollama_loaded_context()
+        if loaded_ctx:
+            meta["loaded_context_length"] = loaded_ctx
+        return meta
+
+    @staticmethod
+    def _ollama_context_length(modelinfo: dict) -> int | None:
+        """Trained maximum context from Ollama's modelinfo blob.
+
+        Stored as ``<architecture>.context_length``, with the architecture
+        also under ``general.architecture`` (mirrors src.local_model_handler).
+        """
+        arch = modelinfo.get("general.architecture")
+        if arch and isinstance(modelinfo.get(f"{arch}.context_length"), int):
+            return int(modelinfo[f"{arch}.context_length"])
+        for key, value in modelinfo.items():
+            if key.endswith(".context_length") and isinstance(value, int):
+                return int(value)
+        return None
+
+    def _ollama_loaded_context(self) -> int | None:
+        """The model's currently allocated context (``GET /api/ps``), if loaded."""
+        try:
+            import httpx
+            resp = httpx.get(self._server_root() + "/api/ps", timeout=5.0)
+            resp.raise_for_status()
+            models = resp.json().get("models") or []
+        except Exception as exc:
+            self.logger.debug("GET /api/ps failed: %s", exc)
+            return None
+        for entry in models:
+            if isinstance(entry, dict) and self._model_name in (
+                    entry.get("model"), entry.get("name")):
+                if isinstance(entry.get("context_length"), int):
+                    return entry["context_length"]
+        return None
+
+    def _lmstudio_native_metadata(self) -> dict:
+        """LM Studio-native metadata for the model ({} when not LM Studio)."""
+        try:
+            import httpx
+            resp = httpx.get(self._server_root() + "/api/v0/models", timeout=5.0)
+            resp.raise_for_status()
+            records = resp.json().get("data") or []
+        except Exception as exc:
+            self.logger.debug("GET /api/v0/models failed: %s", exc)
+            return {}
+        record = next(
+            (r for r in records
+             if isinstance(r, dict) and r.get("id") == self._model_name),
+            None,
+        )
+        if record is None:
+            return {}
+        meta: dict = {}
+        for key in ("type", "publisher", "arch", "quantization", "state",
+                    "max_context_length", "loaded_context_length"):
+            value = record.get(key)
+            if value not in (None, ""):
+                meta[key] = value
+        capabilities = [str(c) for c in (record.get("capabilities") or [])]
+        if record.get("type") == "vlm" and "vision" not in capabilities:
+            capabilities.append("vision")  # LM Studio marks vision models by type
+        if capabilities:
+            meta["capabilities"] = capabilities
+        return meta
 
     ## OpenAI function-calling helpers (tool definitions, stream chunks) ##
 
@@ -594,9 +731,9 @@ class Brain(OpenAICore):
     def model_info(self) -> str:
         """
         Returns detailed info about the loaded model: endpoint, provider and
-        everything the server reports through the OpenAI models endpoint
-        (ownership, context lengths, capabilities, quantization, ...), plus
-        the current session settings.
+        everything the server reports through the OpenAI models endpoint (or
+        through its native API for local servers: ownership, context lengths,
+        capabilities, quantization, ...), plus the current session settings.
         Useful when user ask for information about the loaded model.
         """
         meta = self._fetch_model_metadata()

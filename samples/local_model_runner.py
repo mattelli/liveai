@@ -76,8 +76,15 @@ def print_models(title: str, models: list[dict]) -> None:
                 parts.append(f"{field}={m[field]}")
         if m.get("size_vram"):
             parts.append(f"vram={human_size(m['size_vram'])}")
+        if m.get("capabilities"):
+            parts.append("caps=" + ",".join(str(c) for c in m["capabilities"]))
+        if m.get("max_context_length"):
+            parts.append(f"ctx={m['max_context_length']}")
         if m.get("context_length"):
-            parts.append(f"ctx={m['context_length']}")
+            if m.get("max_context_length"):
+                parts.append(f"run_ctx={m['context_length']}")
+            else:
+                parts.append(f"ctx={m['context_length']}")
         if m.get("identifier"):
             parts.append(f"instance={m['identifier']}")
         if m.get("loaded"):

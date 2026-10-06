@@ -482,10 +482,14 @@ def test_fetch_model_metadata_uses_openai_retrieve():
     assert "root" not in meta and "object" not in meta
 
 
-def test_fetch_model_metadata_falls_back_to_models_list():
+def test_fetch_model_metadata_falls_back_to_models_list(monkeypatch):
     """Servers without retrieve-by-id (e.g. Ollama) answer via GET /models."""
     def broken_retrieve(model):
         raise RuntimeError("not supported")
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", broken_retrieve)  # native probes stay offline
+    monkeypatch.setattr(httpx, "get", broken_retrieve)
 
     brain = _bare_info_brain(_client=SimpleNamespace(models=SimpleNamespace(
         retrieve=broken_retrieve,
@@ -531,6 +535,7 @@ def test_fetch_model_metadata_degrades_gracefully(monkeypatch):
         raise RuntimeError("server down")
 
     import httpx
+    monkeypatch.setattr(httpx, "post", broken)
     monkeypatch.setattr(httpx, "get", broken)
     brain = _bare_info_brain(
         _client=SimpleNamespace(models=SimpleNamespace(retrieve=broken, list=broken)))
@@ -539,18 +544,119 @@ def test_fetch_model_metadata_degrades_gracefully(monkeypatch):
     assert not hasattr(brain, "_model_meta")
 
 
-def test_fetch_model_metadata_caches_successful_result():
+def test_fetch_model_metadata_caches_successful_result(monkeypatch):
     calls = {"count": 0}
 
     def retrieve(model):
         calls["count"] += 1
         return SimpleNamespace(id="test-model", owned_by="ollama")
 
+    def broken(*args, **kwargs):
+        raise RuntimeError("no native api")
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", broken)  # no capabilities/context -> native fires
+    monkeypatch.setattr(httpx, "get", broken)
     brain = _bare_info_brain(
         _client=SimpleNamespace(models=SimpleNamespace(retrieve=retrieve)))
     first = brain._fetch_model_metadata()
     assert brain._fetch_model_metadata() is first
     assert calls["count"] == 1
+
+
+def test_fetch_model_metadata_merges_ollama_native_metadata(monkeypatch):
+    """Ollama's OpenAI /models is thin; capabilities/context come from /api/show
+    (+ the loaded allocation from /api/ps)."""
+    def broken(*args, **kwargs):
+        raise RuntimeError("not supported")
+
+    import httpx
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        assert url == "http://localhost:11434/api/show"
+        assert json == {"model": "test-model"}
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {
+                "capabilities": ["completion", "vision", "tools", "thinking"],
+                "model_info": {"general.architecture": "qwen35",
+                               "qwen35.context_length": 262144},
+            },
+        )
+
+    def fake_ps(url, timeout=None):
+        assert url == "http://localhost:11434/api/ps"
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"models": [
+                {"model": "other:1b", "context_length": 8192},
+                {"name": "test-model", "context_length": 4096},
+            ]},
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_ps)
+    brain = _bare_info_brain(_client=SimpleNamespace(models=SimpleNamespace(
+        retrieve=broken, list=lambda: SimpleNamespace(data=[
+            SimpleNamespace(id="test-model", owned_by="ollama")]))))
+    assert brain._fetch_model_metadata() == {
+        "owned_by": "ollama",
+        "capabilities": ["completion", "vision", "tools", "thinking"],
+        "max_context_length": 262144,
+        "loaded_context_length": 4096,
+    }
+
+
+def test_fetch_model_metadata_merges_lmstudio_native_metadata(monkeypatch):
+    """LM Studio's native /api/v0/models adds capabilities (type vlm -> vision)
+    and the context lengths its OpenAI endpoint hides."""
+    def broken(*args, **kwargs):
+        raise RuntimeError("no openai metadata")
+
+    import httpx
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        raise RuntimeError("/api/show: no such route")  # not an Ollama server
+
+    def fake_get(url, timeout=None):
+        assert url == "http://localhost:1234/api/v0/models"
+        return SimpleNamespace(
+            raise_for_status=lambda: None,
+            json=lambda: {"data": [
+                {"id": "other-model", "type": "llm"},
+                {"id": "test-model", "object": "model", "type": "vlm",
+                 "publisher": "qwen", "arch": "qwen3vl", "quantization": "Q4_K_M",
+                 "state": "loaded", "max_context_length": 262144,
+                 "loaded_context_length": 8192, "capabilities": ["tool_use"]},
+            ]},
+        )
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    brain = _bare_info_brain(
+        _base_url="http://localhost:1234/v1",
+        _client=SimpleNamespace(models=SimpleNamespace(retrieve=broken, list=broken)))
+    assert brain._fetch_model_metadata() == {
+        "type": "vlm", "publisher": "qwen", "arch": "qwen3vl",
+        "quantization": "Q4_K_M", "state": "loaded",
+        "max_context_length": 262144, "loaded_context_length": 8192,
+        "capabilities": ["tool_use", "vision"],
+    }
+
+
+def test_fetch_model_metadata_skips_native_probes_for_cloud_hosts(monkeypatch):
+    """Only loopback servers are probed with their native APIs."""
+    def must_not_be_called(*args, **kwargs):
+        raise AssertionError("native probe attempted")
+
+    import httpx
+    monkeypatch.setattr(httpx, "post", must_not_be_called)
+    monkeypatch.setattr(httpx, "get", must_not_be_called)
+    brain = _bare_info_brain(
+        _base_url="https://api.together.xyz/v1",
+        _client=SimpleNamespace(models=SimpleNamespace(
+            retrieve=lambda m: SimpleNamespace(owned_by="together"))))
+    assert brain._fetch_model_metadata() == {"owned_by": "together"}
 
 
 def test_model_info_renders_server_metadata(monkeypatch):
