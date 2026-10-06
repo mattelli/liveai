@@ -191,7 +191,8 @@ def test_text2image_uses_defaults(torch_cpu, fake_diffusers):
     gen.load_t2i_pipe()
     gen.text2image("a cat")
     args, kwargs = fake_diffusers[-1][1].call_args
-    assert args[0] == "a cat" and args[1] == ig.DEFAULT_NEGATIVE_PROMPT
+    assert args == ("a cat",)
+    assert kwargs["negative_prompt"] == ig.DEFAULT_NEGATIVE_PROMPT
     assert kwargs["width"] == 512 and kwargs["height"] == 512
     assert kwargs["num_inference_steps"] == 50
     assert gen.last_seed == ig.DEFAULT_SEED
@@ -202,7 +203,7 @@ def test_text2image_explicit_params_override(torch_cpu, fake_diffusers):
     gen.load_t2i_pipe()
     gen.text2image("a cat", width=256, height=384, steps=5, seed=1, negative_prompt="")
     args, kwargs = fake_diffusers[-1][1].call_args
-    assert args[1] == ""  # explicit empty negative prompt is kept
+    assert kwargs["negative_prompt"] == ""  # explicit empty negative prompt is kept
     assert kwargs["width"] == 256 and kwargs["height"] == 384
     assert kwargs["num_inference_steps"] == 5
     assert gen.last_seed == 1

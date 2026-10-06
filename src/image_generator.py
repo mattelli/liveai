@@ -219,7 +219,7 @@ class ImageGenerator:
         with torch.inference_mode():
             out_image = self._t2i_pipe(
                 prompt,
-                negative_prompt,
+                negative_prompt=negative_prompt,  # keyword: __call__'s 2nd positional is height
                 width=width,
                 height=height,
                 num_inference_steps=steps,
