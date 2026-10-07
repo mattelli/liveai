@@ -81,11 +81,11 @@ top_k = 3                 # default number of results returned by image_search
 t2i_model = "UnfilteredAI/NSFW-GEN-ANIME"     # text-to-image model (HuggingFace id or local path)
 i2i_model = "runwayml/stable-diffusion-v1-5"  # image-to-image / inpaint model
 device = "auto"         # "auto" (cuda when available), "cpu" or "cuda"
-negative_prompt = "blurry, low quality, deformed, extra limbs, watermark, text"
+negative_prompt = ""    # default img2img/inpaint negative prompt (empty = none)
 width = 512             # default image width in pixels (multiple of 8)
 height = 512            # default image height in pixels (multiple of 8)
 steps = 50              # default diffusion steps (higher = slower, more refined)
-seed = 42               # default seed; negative -> random seed for every image
+seed = -1               # default seed; negative -> random seed for every image
 guidance = 5.0          # default img2img/inpaint prompt guidance (3-12)
 denoise = 0.5           # default img2img/inpaint denoise strength (0-1)
 out_dir = ".out_images" # folder for generated images (resolved relative to this file)
