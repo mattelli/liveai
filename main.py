@@ -41,7 +41,7 @@ def main(argv=None) -> int:
             read_prompt = iter([args.prompt, None]).__next__
         elif args.chat:
             reader = _build_chat_reader(config, ConversationSession)
-            read_prompt = lambda: reader.read("[You] (type / for hints): ")  # noqa: E731
+            read_prompt = lambda: reader.read(_chat_label(config))  # noqa: E731
         else:
             from src.audio_wrapper import AudioDeviceError, SpeechDetector  # lazy import
 
@@ -74,6 +74,12 @@ def main(argv=None) -> int:
             reader.close()
 
 
+def _chat_label(config) -> str:
+    """Chat-mode input label from the optional `[ui]` block (space-terminated)."""
+    text = getattr(getattr(config, "ui", None), "prompt", None) or "You ›"
+    return text if text.endswith(" ") else f"{text} "
+
+
 def _build_chat_reader(config, session_cls):
     """Build the chat InputReader from the optional `[input]` config block."""
     from src.input_reader import InputReader  # lazy import
@@ -100,6 +106,7 @@ def _build_chat_reader(config, session_cls):
         completer=completer,
         multiline=getattr(in_cfg, "multiline", False),
         explicit_paste=getattr(in_cfg, "explicit_paste", True),
+        prompt_color=getattr(getattr(config, "ui", None), "prompt_color", "cyan"),
     )
 
 

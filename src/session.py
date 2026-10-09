@@ -173,15 +173,30 @@ class ConversationSession:
         return True
 
     def _cmd_help(self) -> None:
-        cprint("Available commands:", "cyan")
-        cprint("  /help              - show this help", "cyan")
-        cprint("  /quit              - exit the session (alias: exit)", "cyan")
-        cprint("  /clear             - clear the conversation history", "cyan")
-        cprint("  /voice on|off      - toggle speech output", "cyan")
-        cprint("  /tools             - list and run an available tool", "cyan")
-        cprint("  /info              - show model/context info", "cyan")
-        cprint("  Ctrl+C             - stop the response being generated", "cyan")
-        cprint("  Ctrl+D             - exit the session", "cyan")
+        rows = [
+            ("/help", "show this help"),
+            ("/quit", "exit the session (alias: exit)"),
+            ("/clear", "clear the conversation history"),
+            ("/voice on|off", "toggle speech output"),
+            ("/tools", "list and run an available tool"),
+            ("/info", "show model/context info"),
+            ("Ctrl+C", "stop the response being generated"),
+            ("Ctrl+D", "exit the session"),
+        ]
+        try:
+            from rich.console import Console
+            from rich.table import Table
+
+            table = Table(show_header=False, box=None, padding=(0, 2, 0, 0), pad_edge=False)
+            table.add_column(style="cyan", no_wrap=True)
+            table.add_column(style="cyan")
+            for command, description in rows:
+                table.add_row(command, description)
+            Console().print(table)
+        except ImportError:  # pragma: no cover - rich is a hard dependency
+            cprint("Available commands:", "cyan")
+            for command, description in rows:
+                cprint(f"  {command:<15} - {description}", "cyan")
 
     def _cmd_clear(self) -> None:
         clear_chat()
@@ -312,10 +327,30 @@ class ConversationSession:
         return value
 
     def _cmd_info(self) -> None:
-        if hasattr(self.agent, "model_info"):
-            cprint(self.agent.model_info(), "cyan")
-        else:
+        if not hasattr(self.agent, "model_info"):
             cprint("Info unavailable", "grey")
+            return
+        info = str(self.agent.model_info())
+        try:
+            from rich.console import Console
+            from rich.markup import escape
+            from rich.table import Table
+
+            table = Table(show_header=False, box=None, padding=(0, 2, 0, 0), pad_edge=False)
+            table.add_column(style="cyan", no_wrap=True)
+            table.add_column()
+            for line in info.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                key, sep, value = line.partition("=")
+                if sep:
+                    table.add_row(escape(key), escape(value))
+                else:  # not key=value shaped: render as a plain row
+                    table.add_row("", escape(line))
+            Console().print(table)
+        except ImportError:  # pragma: no cover - rich is a hard dependency
+            cprint(info, "cyan")
 
     # -------------------------------------------------------------- shutdown
 
@@ -332,13 +367,38 @@ class ConversationSession:
     # ---------------------------------------------------------------- banner
 
     def banner(self) -> None:
+        ui = getattr(getattr(self.agent, "config", None), "ui", None)
+        tools = "enabled" if self.use_tools else "disabled"
         hint = (
             ""
             if self._quit_on_prompt_interrupt
             else " Ctrl+C stops a response; Ctrl+D quits."
         )
-        cprint(
-            f"Agent ready. Tools are {'enabled' if self.use_tools else 'disabled'}."
-            f"{hint}",
-            "green",
-        )
+        plain = f"Agent ready. Tools are {tools}.{hint}"
+        if ui is not None and not getattr(ui, "banner", True):
+            cprint(plain, "green")
+            return
+        try:
+            from rich.console import Console
+            from rich.markup import escape
+            from rich.panel import Panel
+
+            lines = []
+            model = getattr(self.agent, "_model_name", None)
+            if model:
+                lines.append(f"[bold]model[/bold] {escape(str(model))}")
+            lines.append(
+                f"tools {tools} · /help commands · Ctrl+C stop"
+                + ("" if self._quit_on_prompt_interrupt else " · Ctrl+D quit")
+            )
+            Console().print(
+                Panel(
+                    "\n".join(lines),
+                    title="Live Assistant",
+                    border_style="cyan",
+                    expand=True,
+                    padding=(0, 2),
+                )
+            )
+        except ImportError:  # pragma: no cover - rich is a hard dependency
+            cprint(plain, "green")

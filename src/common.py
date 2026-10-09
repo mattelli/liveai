@@ -69,6 +69,25 @@ def prompt_input(label: str, color: Colors = "yellow") -> str | None:
         return None
 
 
+def crule(title: str = "", style: str = "dim") -> None:
+    """Print a terminal-width horizontal rule carrying an optional title.
+
+    The title is rendered as plain text (no rich markup parsing, so values
+    like "[28k]" are safe). Honors the output hook (spinner suppression)
+    like cprint, and falls back to a dashed line if rich is unavailable.
+    """
+    if _output_hook is not None:
+        _output_hook()
+    try:
+        from rich.console import Console
+        from rich.rule import Rule
+        from rich.text import Text
+
+        Console().print(Rule(Text(title) if title else "", style=style))
+    except ImportError:  # pragma: no cover - rich is a hard dependency
+        cprint("-" * 50)
+
+
 class StreamPrinter:
     """
     Prints streamed model output with syntax-highlighted fenced code blocks.

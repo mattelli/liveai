@@ -34,6 +34,7 @@ pip install ollama
 pip install python-dotenv
 pip install piper-tts
 pip install faster-whisper
+pip install "av==14.2.0"  # faster-whisper uses PyAV APIs incompatible with av>=15 wheels; 14.4+ ships source-only
 pip install soundfile
 pip install sounddevice
 pip install numpy

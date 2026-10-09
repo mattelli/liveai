@@ -19,17 +19,24 @@ from typing import Callable
 from src.common import prompt_input
 
 try:  # pragma: no cover - env dependent
-    from prompt_toolkit import PromptSession
+    from prompt_toolkit import PromptSession, ANSI
     from prompt_toolkit.history import FileHistory, InMemoryHistory
     from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
 
     _PROMPT_TOOLKIT = True
 except ImportError:  # pragma: no cover - env dependent
     PromptSession = None  # type: ignore[assignment]
+    ANSI = None  # type: ignore[assignment]
     FileHistory = None  # type: ignore[assignment]
     InMemoryHistory = None  # type: ignore[assignment]
     AutoSuggestFromHistory = None  # type: ignore[assignment]
     _PROMPT_TOOLKIT = False
+
+# Bold ANSI codes for the prompt label (same palette as src.common.cprint).
+_PROMPT_COLORS = {
+    "black": "30", "red": "31", "green": "32", "yellow": "33",
+    "blue": "34", "magenta": "35", "cyan": "36", "grey": "90", "white": "37",
+}
 
 
 class InputReader:
@@ -58,6 +65,10 @@ class InputReader:
         Enable the ``/paste`` ... ``.`` fallback for terminals that do not send
         bracketed-paste markers. Defaults to ``False`` (bracketed paste is
         handled natively by prompt_toolkit).
+    prompt_color:
+        Color name (black/red/green/yellow/blue/magenta/cyan/grey/white) used
+        to render the prompt label in bold on the prompt_toolkit path. The
+        builtin ``input()`` fallback ignores it (keeps its default color).
     continuation:
         Prompt used for continuation lines in explicit-paste / multiline mode.
     """
@@ -71,6 +82,7 @@ class InputReader:
         session=None,
         fallback: Callable[[str], str | None] | None = None,
         explicit_paste: bool = False,
+        prompt_color: str | None = None,
         continuation: str = "... ",
     ):
         self._fallback = fallback
@@ -92,6 +104,7 @@ class InputReader:
         self._auto_suggest = auto_suggest
         self._completer = completer
         self._multiline = multiline
+        self._prompt_color = prompt_color
 
     def _ensure_session(self):
         if self._session is None:
@@ -127,9 +140,16 @@ class InputReader:
         if self._explicit_paste:
             return self._read_explicit_paste(session, label)
         try:
-            return session.prompt(label)
+            return session.prompt(self._styled_label(label))
         except EOFError:
             return None
+
+    def _styled_label(self, label: str):
+        """Colorize the prompt label (bold) when a prompt_color is configured."""
+        code = _PROMPT_COLORS.get((self._prompt_color or "").lower())
+        if code is None:
+            return label
+        return ANSI(f"\x1b[1;{code}m{label}\x1b[0m")
 
     def _read_explicit_paste(self, session, label: str) -> str | None:
         """Read a line; if it is exactly ``/paste``, collect lines until ``.``."""

@@ -23,13 +23,13 @@ history_path = "chat_history.log"
 max_response_tokens = 0.2                   # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
 temperature = 0.6
 
-# api_key_env = "TOGETHER_API_KEY"
-# base_url = "https://api.together.ai/v1"
-# model = "Prism-ML/Ternary-Bonsai-27B"        # NO Vision, NO Thinking
+api_key_env = "TOGETHER_API_KEY"
+base_url = "https://api.together.ai/v1"
+model = "Prism-ML/Ternary-Bonsai-27B"        # NO Vision, NO Thinking
 
-api_key_env = "LMSTUDIO_API_KEY"
-base_url = "http://localhost:1234/v1"
-model = "qwen3.5-4b-uncensored-hauhaucs-aggressive"                   # OK Vision, NO Thinking
+# api_key_env = "LMSTUDIO_API_KEY"
+# base_url = "http://localhost:1234/v1"
+# model = "qwen3.5-4b-uncensored-hauhaucs-aggressive"                   # OK Vision, NO Thinking
 
 # api_key_env = "OLLAMA_API_KEY"
 # base_url = "http://localhost:11434/v1"
@@ -49,6 +49,13 @@ speech_speed = 1.0
 noise_scale = 1.0
 noise_w_scale = 1.0
 normalize_audio = false
+
+[ui] # chat appearance (all keys optional)
+prompt = "You ›"          # chat-mode input label
+prompt_color = "cyan"     # label color: black/red/green/yellow/blue/magenta/cyan/grey/white (prompt_toolkit path only)
+assistant_color = "cyan"  # streamed assistant text color (any rich style: bright_blue, #5fd7ff, ...)
+code_theme = "monokai"    # Pygments theme for fenced code blocks (ansi_dark, dracula, github-dark, ...)
+banner = true             # false -> single-line "Agent ready." startup banner
 
 [input]
 # Interactive chat input (prompt_toolkit). All keys optional.

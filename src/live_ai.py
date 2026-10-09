@@ -2,12 +2,13 @@ import inspect
 import json
 import os
 import pathlib
+import time
 import types
 from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 from logging import getLogger
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
-from src.common import SimpleNamespace, dump_func_call, cprint, StreamPrinter
+from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command,
@@ -27,6 +28,28 @@ from src.tools import speech as speech_tools
 # produced: an empty assistant turn would be dropped by the model's prompt
 # template and break user/assistant role alternation on the next request.
 CANCELLED_PLACEHOLDER = "(generation cancelled by user)"
+
+
+def _validated_style(value: str | None, default: str = "cyan") -> str:
+    """`[ui]` assistant color: any rich style name, falling back to `default`."""
+    value = value or default
+    try:
+        from rich.style import Style
+        Style.parse(value)
+    except Exception:
+        return default
+    return value
+
+
+def _validated_code_theme(value: str | None, default: str = "monokai") -> str:
+    """`[ui]` code theme: any Pygments style name, falling back to `default`."""
+    value = value or default
+    try:
+        from pygments.styles import get_style_by_name
+        get_style_by_name(value)
+    except Exception:
+        return default
+    return value
 
 
 def __getattr__(name: str):
@@ -159,7 +182,11 @@ class OpenAICore:
             self._context_window,
         )
         self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
-        self._stream = StreamPrinter(text_color="cyan")
+        ui = getattr(config, "ui", None)
+        self._stream = StreamPrinter(
+            text_color=_validated_style(getattr(ui, "assistant_color", None)),
+            code_theme=_validated_code_theme(getattr(ui, "code_theme", None)),
+        )
         self._cancel_requested = False
         self._active_stream = None
         # Session-bound tool modules: their config comes from main.py via
@@ -835,7 +862,11 @@ class Agent(Brain):
         context_usage_percentage, context_window = self._context_usage()
         self._stream.flush()  # keep the spinner alive across rounds
         cprint("")
-        cprint("-"*50 + f"\ncontext: {context_usage_percentage:.2f} % [{int(context_window / 1000)}k]\n", "grey")
+        stats = f"context {context_usage_percentage:.1f}% [{int(context_window / 1000)}k]"
+        started = getattr(self, "_turn_started", None)
+        if started is not None:
+            stats += f" · {time.monotonic() - started:.1f}s"
+        crule(stats)
         self._stream.mark_line_clean()  # spinner may resume for the next round
         self._stream.note("working")
         response = " ".join(self._fragments_buffer).strip()
@@ -893,6 +924,7 @@ class Agent(Brain):
         self.logger.info("Sending to Agent [🤖: %s] ...", self._model_name)
         self._add_user_prompt(prompt)
         self._cancel_requested = False  # fresh turn
+        self._turn_started = time.monotonic()
         self._stream.start_spinner("thinking")
         try:
             for round_index in range(self.MAX_ACT_ROUNDS):
