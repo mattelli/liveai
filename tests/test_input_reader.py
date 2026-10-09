@@ -131,6 +131,34 @@ def test_explicit_paste_disabled(pt_input):
     assert r.read("You: ") == "/paste"
 
 
+# --------------------------------------------------------- prompt color
+
+
+def test_styled_label_uses_bold_ansi_code():
+    r = InputReader(prompt_color="yellow")
+    assert r._styled_label("You: ").value == "\x1b[1;33mYou: \x1b[0m"
+    # Unknown / unset colors keep the plain label.
+    assert InputReader(prompt_color="chartreuse")._styled_label("You: ") == "You: "
+    assert InputReader()._styled_label("You: ") == "You: "
+
+
+def test_explicit_paste_also_styles_label(pt_input):
+    # Regression: with explicit_paste=True the styled label was bypassed.
+    pt_input.send_text("hi\n")
+    seen = []
+    real = make_session(pt_input)
+
+    class Recording:
+        def prompt(self, message):
+            seen.append(message)
+            return real.prompt(message)
+
+    r = InputReader(session=Recording(), explicit_paste=True, prompt_color="yellow")
+    assert r.read("You: ") == "hi"
+    first = getattr(seen[0], "value", seen[0])
+    assert "\x1b[1;33m" in first
+
+
 # ----------------------------------------------------------- P6 completion
 
 

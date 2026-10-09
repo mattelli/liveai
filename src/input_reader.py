@@ -154,7 +154,7 @@ class InputReader:
     def _read_explicit_paste(self, session, label: str) -> str | None:
         """Read a line; if it is exactly ``/paste``, collect lines until ``.``."""
         try:
-            first = session.prompt(label)
+            first = session.prompt(self._styled_label(label))
         except EOFError:
             return None
         if first.strip() != "/paste":
