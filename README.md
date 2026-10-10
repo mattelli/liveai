@@ -4,6 +4,8 @@ Simple example to create locally a live AI assistant.
 
 Mic → Whisper (STT) → LLM (OpenAI-compatible API) → Piper (TTS)
 
+Chat mode is supported, several tools are available.
+
 
 ## Whisper
 Whisper is a pre-trained model for automatic speech recognition (ASR) and speech translation. 
@@ -258,7 +260,12 @@ For multilingual text corpora, use the sample's aligned model instead by
 changing `model_path` (and rebuilding the corpus):
 
 ```bash
-hf download sentence-transformers/quora-distilbert-multilingual     --local-dir .res/embedding/quora-distilbert-multilingual
+# A) Hugging Face CLI (recommended)
+hf download sentence-transformers/quora-distilbert-multilingual  --local-dir .res/embedding/quora-distilbert-multilingual
+
+# B) git + git-lfs
+git lfs install
+git clone https://huggingface.co/sentence-transformers/quora-distilbert-multilingual .res/embedding/quora-distilbert-multilingual
 ```
 
 The corpora root is configured in `config.toml` (resolved relative to it):
@@ -324,8 +331,12 @@ top_k = 5                 # default number of results returned by query_document
 Store the model locally before first use (`.res/` is git-ignored):
 
 ```bash
-huggingface-cli download cross-encoder/ms-marco-TinyBERT-L2 \
-  --local-dir .res/crossencoder/ms-marco-TinyBERT-L2
+# A) Hugging Face CLI (recommended)
+hf download cross-encoder/ms-marco-TinyBERT-L2 --local-dir .res/crossencoder/ms-marco-TinyBERT-L2
+
+# B) git + git-lfs
+git lfs install
+git clone https://huggingface.co/cross-encoder/ms-marco-TinyBERT-L2 .res/crossencoder/ms-marco-TinyBERT-L2
 ```
 
 Example:
@@ -370,8 +381,12 @@ The model is the same CLIP encoder as the multimodal semantic search mode, so
 if it is already stored there is nothing new to download. Otherwise:
 
 ```bash
-huggingface-cli download sentence-transformers/clip-ViT-B-32 \
-  --local-dir .res/embedding/clip-ViT-B-32
+# A) Hugging Face CLI (recommended)
+hf download sentence-transformers/clip-ViT-B-32 --local-dir .res/embedding/clip-ViT-B-32
+
+# B) git + git-lfs
+git lfs install
+git clone https://huggingface.co/sentence-transformers/clip-ViT-B-32 .res/embedding/clip-ViT-B-32
 ```
 
 Example:
@@ -388,22 +403,6 @@ Notes:
   narrower folder when possible.
 
 
-## Setup (Python 3.12.10)
-
-OS Windows 11 (powershell)
-
-```
-# Ai agent based on an OpenAI-compatible LLM API
-.\setup-liveai-cpu.ps1
-
-```
-
-OS Linux / macOS (bash)
-
-```
-# Install Python 3.12, then run the setup script
-./setup-liveai-cpu.sh
-```
 
 
 ## Interactive chat input
@@ -455,6 +454,24 @@ role alternation intact for the next request), and any further tool-call
 rounds are skipped. Before each new prompt, the agent also repairs the
 history from older cancelled/failed turns (drops unanswered prompts, pads
 empty assistant turns).
+
+## Setup (Python 3.12.10)
+
+OS Windows 11 (powershell)
+
+```
+# Ai agent based on an OpenAI-compatible LLM API
+.\setup-liveai-cpu.ps1
+
+```
+
+OS Linux / macOS (bash)
+
+```
+# Install Python 3.12, then run the setup script
+./setup-liveai-cpu.sh
+```
+
 
 
 ## System Notes
