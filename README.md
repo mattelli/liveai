@@ -398,6 +398,13 @@ OS Windows 11 (powershell)
 
 ```
 
+OS Linux / macOS (bash)
+
+```
+# Install Python 3.12, then run the setup script
+./setup-liveai-cpu.sh
+```
+
 
 ## Interactive chat input
 
