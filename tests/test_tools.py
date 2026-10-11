@@ -16,7 +16,7 @@ import src.tools as tools
 def test_import_tools_is_lazy():
     import importlib
 
-    heavy = ("cv2", "selenium", "yfinance", "matplotlib", "bs4", "torch", "diffusers")
+    heavy = ("cv2", "ddgs", "yfinance", "matplotlib", "bs4", "torch", "diffusers")
     for name in heavy:
         sys.modules.pop(name, None)
     sys.modules.pop("src.tools", None)
@@ -726,6 +726,12 @@ def test_web_news_empty_and_errors(monkeypatch):
     assert "No results" in tools.web.web_news("q")
     _patch_ddgs(monkeypatch, FakeDDGS(error=RuntimeError("throttled")))
     assert "throttled" in tools.web.web_news("q")
+
+
+def test_remaining_web_kinds_report_errors(monkeypatch):
+    for tool_call in (tools.web.web_images, tools.web.web_videos, tools.web.web_books):
+        _patch_ddgs(monkeypatch, FakeDDGS(error=RuntimeError("boom")))
+        assert "boom" in tool_call("q")
 
 
 # ------------------------------------------------------------------ T7 financial
