@@ -38,6 +38,13 @@ def select_financial_columns(data, symbol: str):
     date_col = "Date" if "Date" in frame.columns else (
         "Datetime" if "Datetime" in frame.columns else None
     )
+    if date_col is None and isinstance(frame.index, pd.DatetimeIndex):
+        # yfinance keeps the date as the DataFrame index, not as a column:
+        # promote it (reset_index() names it 'Date'/'Datetime', or 'index' if unnamed).
+        frame = frame.reset_index()
+        date_col = next(
+            (c for c in ("Date", "Datetime", "index") if c in frame.columns), None
+        )
     if date_col is None:
         return "Date is missing"
     frame = frame.rename(columns={date_col: "Date"})
