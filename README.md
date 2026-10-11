@@ -405,6 +405,49 @@ Notes:
 
 
 
+## Web search and page extraction (DDGS)
+
+The web tools are thin wrappers around the [DDGS](https://github.com/deedy5/ddgs)
+metasearch library (`pip install ddgs`), which aggregates results from multiple
+engines (bing, duckduckgo, google, yahoo, ...). No browser or web driver is
+needed — the old Selenium/ChromeDriver stack was removed.
+
+| Tool | DDGS call | Returns |
+|---|---|---|
+| `web_search(query, n_results=5, region, safesearch, timelimit)` | `text()` | page results: `title`, `href`, `body` |
+| `web_images(query, n_results=5, ..., size, color, type_image, layout, license_image)` | `images()` | image URLs: `title`, `image`, `thumbnail`, `width`, `height`, `source` |
+| `web_videos(query, n_results=5, ..., resolution, duration)` | `videos()` | video results: `title`, `content` (URL), `duration`, `publisher`, `uploader` |
+| `web_news(query, n_results=5, timelimit)` | `news()` | news results: `date`, `title`, `body`, `url`, `source` |
+| `web_books(query, n_results=5)` | `books()` | book results: `title`, `author`, `publisher`, `info`, `url` |
+| `extract_webpage(url, fmt="text_markdown")` | `extract()` | the page content as markdown/plain/rich text (truncated at 4000 chars) |
+
+`timelimit` accepts `d` (day), `w` (week), `m` (month), `y` (year); `safesearch`
+is `on`, `moderate` or `off`. Every tool returns a numbered results block as a
+string, or an `Error: ...` string when the search fails — failures never raise.
+
+Examples:
+
+```python
+web_search("python programming", n_results=3)
+web_images("two dogs in the snow", n_results=3, size="Large")
+web_videos("lo-fi jazz", n_results=2)
+web_news("space exploration", n_results=3, timelimit="w")
+web_books("the sea wolf jack london")
+extract_webpage("https://example.com")
+```
+
+Notes:
+
+- Image and video URLs returned by `web_images`/`web_videos` can be saved to
+  disk with `download_file(url, out_dir=...)`.
+- `extract_webpage` supports `fmt` of `text_markdown` (default, keeps links /
+  headers / lists), `text_plain`, `text_rich` and `text` (raw HTML).
+- The old `webpage_headlines` / `webpage_content` tools were replaced by
+  `extract_webpage`.
+
+
+
+
 ## Interactive chat input
 
 `python main.py --chat` uses [prompt_toolkit](https://python-prompt-toolkit.readthedocs.io/)
