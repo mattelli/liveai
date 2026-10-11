@@ -1,4 +1,4 @@
-"""Web tools: DDGS metasearch, page text extraction and file downloads."""
+"""Web tools: DDGS metasearch, webpage extraction and file downloads."""
 
 import re
 from collections.abc import Sequence
@@ -9,9 +9,8 @@ from src.common import dump_func_call
 from .files import safe_filename
 
 __all__ = [
-    "download_file", "extract_text", "format_search_results", "web_books",
+    "download_file", "extract_webpage", "format_search_results", "web_books",
     "web_images", "web_news", "web_search", "web_videos",
-    "webpage_content", "webpage_headlines",
 ]
 
 
@@ -23,15 +22,6 @@ _FIELDS_BY_KIND = {
     "news": ("date", "title", "body", "url", "source"),
     "books": ("title", "author", "publisher", "info", "url"),
 }
-
-
-def extract_text(soup, tags, min_len: int = 20) -> list[str]:
-    """Return the stripped text of matching tags longer than ``min_len``."""
-    return [
-        text
-        for tag in soup.find_all(tags)
-        if len(text := tag.get_text(strip=True)) > min_len
-    ]
 
 
 def format_search_results(
@@ -80,19 +70,6 @@ def _run_ddgs_search(
     return _format_ddgs_results(kind, results, n_results)
 
 
-def _fetch_soup(url: str, timeout_s: int = 10):
-    """Fetch a URL and return a BeautifulSoup document, or an error string."""
-    import requests
-    from bs4 import BeautifulSoup
-
-    try:
-        response = requests.get(url, timeout=timeout_s)
-        response.raise_for_status()
-    except Exception as exc:
-        return f"Error fetching URL: {exc}"
-    return BeautifulSoup(response.text, "html.parser")
-
-
 # Content types that complete a download name missing its extension (e.g. a
 # bare ``https://host/photo`` URL answered with ``Content-Type: image/png``).
 _CONTENT_TYPE_EXT = {
@@ -131,27 +108,24 @@ def _with_extension(name: str, content_type: str) -> str:
 
 
 @dump_func_call
-def webpage_headlines(url: str = "https://www.ansa.it/english/", relevant_text_length: int = 20, timeout_s: int = 10) -> str:
+def extract_webpage(url: str, fmt: str = "text_markdown", timeout_s: float = 10.0) -> str:
     """
-    Automatic extraction of headlines from a URL. Returns headlines as string.
-    Useful when user is asking to summarize webpage headlines given its URL.
+    Fetch a URL and extract its page content as markdown/plain/rich text
+    through DDGS. Useful when user is asking to summarize or read the content
+    of a webpage given its URL.
     """
-    soup = _fetch_soup(url, timeout_s)
-    if isinstance(soup, str):
-        return soup
-    return f"\nFrom [{url}]\n" + "\n".join(extract_text(soup, ["h1", "h2"], relevant_text_length))
-
-
-@dump_func_call
-def webpage_content(url: str, relevant_text_length: int = 20, timeout_s: int = 10) -> str:
-    """
-    Automatic extraction paragraph content from a URL as string.
-    Useful when user is asking to summarize the webpage content of a webpage given its URL.
-    """
-    soup = _fetch_soup(url, timeout_s)
-    if isinstance(soup, str):
-        return soup
-    return f"\nFrom [{url}]\n" + "\n".join(extract_text(soup, ["p"], relevant_text_length))
+    if fmt == "content":
+        return "Error: fmt='content' returns raw bytes; use text_markdown, text_plain, text_rich or text."
+    try:
+        result = _ddgs_client(timeout_s).extract(url, fmt=fmt)
+    except Exception as exc:
+        return f"Error: {exc}"
+    content = result.get("content")
+    if content is None:
+        return f"Error: no content extracted from {url}"
+    if isinstance(content, bytes):
+        content = content.decode(errors="replace")
+    return f"\nFrom [{result.get('url', url)}]\n{content[:4000]}"
 
 
 @dump_func_call

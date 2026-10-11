@@ -165,43 +165,40 @@ def test_exit_gracefully_raises_system_exit():
     assert exc.value.code == 0
 
 
-# ------------------------------------------------------------------ T5 webpages
+# ------------------------------------------------------------------ T5 extract_webpage
 
 
-class FakeResponse:
-    def __init__(self, text, status=200):
-        self.text = text
-        self._status = status
-
-    def raise_for_status(self):
-        if self._status >= 400:
-            raise RuntimeError(f"HTTP {self._status}")
+def test_extract_webpage_formats_content(monkeypatch):
+    fake = FakeDDGS(results="# Example Domain\n\nThis domain is for use in examples")
+    _patch_ddgs(monkeypatch, fake)
+    out = tools.web.extract_webpage("https://example.com")
+    assert out.startswith("\nFrom [https://example.com]\n# Example Domain")
+    assert fake.calls[0] == ("extract", {"url": "https://example.com", "fmt": "text_markdown"})
 
 
-def test_webpage_headlines(monkeypatch):
-    html = (
-        "<h1>Big headline number one</h1>"
-        "<h2>small</h2>"
-        "<h1>Another long headline here</h1>"
-    )
-    monkeypatch.setattr(tools.requests, "get", lambda url, timeout: FakeResponse(html))
-    out = tools.webpage_headlines("http://x", relevant_text_length=5)
-    assert "Big headline number one" in out and "Another long headline here" in out
-    assert "small" not in out
+def test_extract_webpage_passes_fmt(monkeypatch):
+    fake = FakeDDGS(results="plain text")
+    _patch_ddgs(monkeypatch, fake)
+    tools.web.extract_webpage("https://example.com", fmt="text_plain")
+    assert fake.calls[0][1]["fmt"] == "text_plain"
 
 
-def test_webpage_content(monkeypatch):
-    html = "<p>a paragraph long enough here</p><p>tiny</p>"
-    monkeypatch.setattr(tools.requests, "get", lambda url, timeout: FakeResponse(html))
-    out = tools.webpage_content("http://x", relevant_text_length=5)
-    assert "a paragraph long enough here" in out and "tiny" not in out
+def test_extract_webpage_truncates_long_content(monkeypatch):
+    _patch_ddgs(monkeypatch, FakeDDGS(results="x" * 9000))
+    out = tools.web.extract_webpage("https://example.com")
+    assert len(out.split("]\n", 1)[1]) == 4000
 
 
-def test_webpage_fetch_error(monkeypatch):
-    monkeypatch.setattr(
-        tools.requests, "get", lambda url, timeout: FakeResponse("", status=500)
-    )
-    assert "Error fetching URL" in tools.webpage_content("http://x")
+def test_extract_webpage_rejects_raw_bytes_fmt(monkeypatch):
+    fake = FakeDDGS(results=b"raw")
+    _patch_ddgs(monkeypatch, fake)
+    out = tools.web.extract_webpage("https://example.com", fmt="content")
+    assert "Error" in out and fake.calls == []
+
+
+def test_extract_webpage_reports_errors(monkeypatch):
+    _patch_ddgs(monkeypatch, FakeDDGS(error=RuntimeError("dns fail")))
+    assert "dns fail" in tools.web.extract_webpage("https://example.com")
 
 
 # ------------------------------------------------------------------ downloads

@@ -2,7 +2,7 @@
 
 - ``system``    : platform info, date/time, working directory, shell commands
 - ``files``     : read/write/search/replace files + shared filename helpers
-- ``web``       : DuckDuckGo search, page extraction, file downloads
+- ``web``       : DDGS metasearch, webpage extraction, file downloads
 - ``archives``  : extract zip/7z/tar/gz archives and zip folder contents
 - ``camera``    : webcam frame capture
 - ``image_gen`` : text-to-image generation (local Stable-Diffusion pipeline)
@@ -35,8 +35,7 @@ from .files import (
     search_in_file, search_pattern_in_files, write_text_file,
 )
 from .web import (
-    download_file, extract_text, format_search_results, webpage_content,
-    webpage_headlines, web_search,
+    download_file, extract_webpage, format_search_results, web_search,
 )
 from .archives import extract_archive, zip_files
 from .camera import CAPTURED_IMAGE, capture_image
@@ -55,7 +54,7 @@ from .vision import image_response
 __all__ = [
     "CAPTURED_IMAGE", "GENERATED_IMAGE", "ValidYF", "allow_speech",
     "capture_image", "clear_chat", "current_date_time", "download_file",
-    "exit_gracefully", "extract_archive", "extract_text",
+    "exit_gracefully", "extract_archive", "extract_webpage",
     "fetch_financial_data", "format_search_results", "generate_image",
     "get_working_directory", "image_response", "image_search",
     "list_corpora", "normalize_extensions", "query_corpus",
@@ -64,7 +63,7 @@ __all__ = [
     "save_financial_chart", "search_in_file", "search_pattern_in_files",
     "select_financial_columns", "store_corpus", "store_personal",
     "summarize_doc", "system_info", "unload_image_generator", "web_search",
-    "webpage_content", "webpage_headlines", "write_text_file", "zip_files",
+    "write_text_file", "zip_files",
 ]
 
 
