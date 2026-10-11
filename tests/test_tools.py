@@ -27,7 +27,8 @@ def test_import_tools_is_lazy():
 
 def test_public_tools_are_callable():
     for name in ("system_info", "read_text_file", "write_text_file", "run_command",
-                 "web_search", "capture_image", "generate_image",
+                 "web_search", "web_images", "web_videos", "web_news",
+                 "web_books", "extract_webpage", "capture_image", "generate_image",
                  "unload_image_generator", "fetch_financial_data",
                  "save_financial_chart", "search_in_file", "search_pattern_in_files",
                  "replace_string_in_file"):

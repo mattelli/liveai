@@ -43,6 +43,16 @@ def test_agent_build_tools_includes_zip_files():
     assert "zip_files" in names
 
 
+def test_agent_build_tools_registers_web_tools():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    names = [tool.__name__ for tool in agent._build_tools()]
+    for name in ("web_search", "web_images", "web_videos", "web_news",
+                 "web_books", "extract_webpage", "download_file"):
+        assert name in names
+    for removed in ("webpage_content", "webpage_headlines"):
+        assert removed not in names
+
+
 def test_agent_build_tools_keeps_existing_tools():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]

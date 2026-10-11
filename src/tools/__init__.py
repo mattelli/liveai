@@ -35,7 +35,8 @@ from .files import (
     search_in_file, search_pattern_in_files, write_text_file,
 )
 from .web import (
-    download_file, extract_webpage, format_search_results, web_search,
+    download_file, extract_webpage, format_search_results, web_books,
+    web_images, web_news, web_search, web_videos,
 )
 from .archives import extract_archive, zip_files
 from .camera import CAPTURED_IMAGE, capture_image
@@ -62,8 +63,9 @@ __all__ = [
     "replace_string_in_file", "run_command", "safe_filename",
     "save_financial_chart", "search_in_file", "search_pattern_in_files",
     "select_financial_columns", "store_corpus", "store_personal",
-    "summarize_doc", "system_info", "unload_image_generator", "web_search",
-    "write_text_file", "zip_files",
+    "summarize_doc", "system_info", "unload_image_generator", "web_books",
+    "web_images", "web_news", "web_search", "web_videos", "write_text_file",
+    "zip_files",
 ]
 
 
