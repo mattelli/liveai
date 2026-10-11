@@ -587,42 +587,86 @@ def test_zip_files_roundtrip_with_extract_archive(tmp_path):
 # ------------------------------------------------------------------ T6 web_search
 
 
-class FakeDriver:
-    def __init__(self):
-        self.quit_calls = 0
+class FakeDDGS:
+    """Canned ``DDGS`` double: returns ``results`` from every search call."""
 
-    def quit(self):
-        self.quit_calls += 1
+    def __init__(self, results=None, error=None):
+        self.results = results if results is not None else []
+        self.error = error
+        self.calls = []
+
+    def _respond(self, method, **kwargs):
+        self.calls.append((method, kwargs))
+        if self.error:
+            raise self.error
+        return self.results
+
+    def text(self, query, **kwargs):
+        return self._respond("text", query=query, **kwargs)
+
+    def images(self, query, **kwargs):
+        return self._respond("images", query=query, **kwargs)
+
+    def videos(self, query, **kwargs):
+        return self._respond("videos", query=query, **kwargs)
+
+    def news(self, query, **kwargs):
+        return self._respond("news", query=query, **kwargs)
+
+    def books(self, query, **kwargs):
+        return self._respond("books", query=query, **kwargs)
+
+    def extract(self, url, fmt="text_markdown"):
+        self.calls.append(("extract", {"url": url, "fmt": fmt}))
+        if self.error:
+            raise self.error
+        return {"url": url, "content": self.results}
+
+
+def _patch_ddgs(monkeypatch, fake):
+    """Patch the ``_ddgs_client`` seam in ``src.tools.web`` with ``fake``."""
+    monkeypatch.setattr(tools.web, "_ddgs_client", lambda timeout_s=10.0: fake)
 
 
 def test_format_search_results_limits_and_formats():
-    out = tools.format_search_results(["a › b", "c", "d"], n_results=2)
-    assert "1) a/b" in out and "2) c" in out and "3)" not in out
+    results = [
+        {"title": "a", "href": "b", "body": "c"},
+        {"title": "d"},
+        {"title": "e"},
+        {"title": "f"},
+    ]
+    out = tools.format_search_results(results, n_results=2)
+    assert "1) title: a | href: b | body: c" in out
+    assert "2) title: d" in out
+    assert "3)" not in out
 
 
 def test_web_search_formats_results(monkeypatch):
-    monkeypatch.setattr(tools.web, "_create_chrome_driver", lambda: FakeDriver())
-    monkeypatch.setattr(tools.web, "_collect_results", lambda driver, query, timeout: ["a › b"])
+    fake = FakeDDGS(results=[{"title": "t", "href": "h", "body": "b"}])
+    _patch_ddgs(monkeypatch, fake)
     out = tools.web_search("q", n_results=1)
-    assert "a/b" in out
+    assert "1) title: t | href: h | body: b" in out
 
 
-def test_web_search_quits_owned_driver(monkeypatch):
-    fake = FakeDriver()
-    monkeypatch.setattr(tools.web, "_create_chrome_driver", lambda: fake)
-    monkeypatch.setattr(tools.web, "_collect_results", lambda driver, query, timeout: ["a"])
-    assert "1) a" in tools.web_search("q")
-    assert fake.quit_calls == 1
+def test_web_search_passes_parameters_to_ddgs(monkeypatch):
+    fake = FakeDDGS(results=[{"title": "t"}])
+    _patch_ddgs(monkeypatch, fake)
+    tools.web_search("q", n_results=2, region="uk-en", safesearch="off", timelimit="m")
+    method, kwargs = fake.calls[0]
+    assert method == "text"
+    assert kwargs["max_results"] == 2
+    assert kwargs["region"] == "uk-en"
+    assert kwargs["safesearch"] == "off" and kwargs["timelimit"] == "m"
+
+
+def test_web_search_empty_results(monkeypatch):
+    _patch_ddgs(monkeypatch, FakeDDGS(results=[]))
+    assert "No results" in tools.web_search("q")
 
 
 def test_web_search_reports_errors(monkeypatch):
-    monkeypatch.setattr(tools.web, "_create_chrome_driver", lambda: FakeDriver())
-
-    def boom(driver, query, timeout):
-        raise RuntimeError("no chrome")
-
-    monkeypatch.setattr(tools.web, "_collect_results", boom)
-    assert "no chrome" in tools.web_search("q")
+    _patch_ddgs(monkeypatch, FakeDDGS(error=RuntimeError("no network")))
+    assert "no network" in tools.web_search("q")
 
 
 # ------------------------------------------------------------------ T7 financial

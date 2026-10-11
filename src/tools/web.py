@@ -1,6 +1,7 @@
-"""Web tools: DuckDuckGo search, page text extraction and file downloads."""
+"""Web tools: DDGS metasearch, page text extraction and file downloads."""
 
 import re
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -22,13 +23,32 @@ def extract_text(soup, tags, min_len: int = 20) -> list[str]:
     ]
 
 
-def format_search_results(results: list[str], n_results: int = 5) -> str:
-    """Render search results as the numbered block returned to the model."""
+def format_search_results(
+    results: list[dict],
+    n_results: int = 5,
+    fields: Sequence[str] = ("title", "href", "body"),
+) -> str:
+    """Render DDGS result dicts as the numbered block returned to the model.
+
+    Only ``fields`` present and non-empty in a result are shown.
+    """
     lines = ["\nSearch Results:\n"]
     for index, item in enumerate(results[:n_results], 1):
-        lines.append(f"{index}) {item.replace(' › ', '/')}")
+        parts = [f"{field}: {item[field]}" for field in fields if item.get(field)]
+        lines.append(f"{index}) " + (" | ".join(parts) if parts else str(item)))
         lines.append(50 * "=")
     return "\n".join(lines) + "\n"
+
+
+def _ddgs_client(timeout_s: float = 10.0):
+    """Return a lazily imported ``DDGS`` client (https://github.com/deedy5/ddgs).
+
+    Test seam: tests patch this function (see ``tests/test_tools.py``) so no
+    network access happens. ``DDGS`` accepts an integer timeout in seconds.
+    """
+    from ddgs import DDGS
+
+    return DDGS(timeout=max(1, int(timeout_s)))
 
 
 def _fetch_soup(url: str, timeout_s: int = 10):
@@ -42,39 +62,6 @@ def _fetch_soup(url: str, timeout_s: int = 10):
     except Exception as exc:
         return f"Error fetching URL: {exc}"
     return BeautifulSoup(response.text, "html.parser")
-
-
-def _create_chrome_driver():
-    """Create a headless-ish Chrome WebDriver. Imported lazily."""
-    from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
-    from webdriver_manager.chrome import ChromeDriverManager
-
-    options = Options()
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--incognito")
-    service = Service(ChromeDriverManager().install())
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.set_window_size(width=300, height=200)
-    return driver
-
-
-def _collect_results(driver, query: str, timeout_s: float) -> list[str]:
-    """Drive a webdriver through a DuckDuckGo search and return result texts."""
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-
-    driver.get("https://duckduckgo.com/")
-    wait = WebDriverWait(driver, timeout_s)
-    search_bar = wait.until(EC.element_to_be_clickable((By.NAME, "q")))
-    search_bar.send_keys(query)
-    search_bar.submit()
-    wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "article")))
-    elements = driver.find_elements(By.CSS_SELECTOR, "article")
-    return [element.text.strip() for element in elements if element.text.strip()]
 
 
 # Content types that complete a download name missing its extension (e.g. a
@@ -139,19 +126,29 @@ def webpage_content(url: str, relevant_text_length: int = 20, timeout_s: int = 1
 
 
 @dump_func_call
-def web_search(query: str, n_results: int = 5, timeout_s: float = 10.0) -> str:
+def web_search(
+    query: str,
+    n_results: int = 5,
+    region: str = "us-en",
+    safesearch: str = "moderate",
+    timelimit: str | None = None,
+    timeout_s: float = 10.0,
+) -> str:
     """
-    Search web pages based on the query.
+    Search web pages based on the query through the DDGS metasearch engines
+    (bing, duckduckgo, google, ...).
     Useful when user asks for search on a topic.
     """
-    driver = _create_chrome_driver()
     try:
-        results = _collect_results(driver, query, timeout_s)
-        return format_search_results(results, n_results)
+        results = _ddgs_client(timeout_s).text(
+            query, region=region, safesearch=safesearch,
+            timelimit=timelimit, max_results=n_results,
+        )
     except Exception as exc:
-        return f"Error: {exc!r}"
-    finally:
-        driver.quit()
+        return f"Error: {exc}"
+    if not results:
+        return f"No results found for: {query}"
+    return format_search_results(results, n_results)
 
 
 @dump_func_call
