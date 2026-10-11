@@ -9,9 +9,20 @@ from src.common import dump_func_call
 from .files import safe_filename
 
 __all__ = [
-    "download_file", "extract_text", "format_search_results", "web_search",
+    "download_file", "extract_text", "format_search_results", "web_books",
+    "web_images", "web_news", "web_search", "web_videos",
     "webpage_content", "webpage_headlines",
 ]
+
+
+# Result fields rendered per DDGS search kind (https://github.com/deedy5/ddgs).
+_FIELDS_BY_KIND = {
+    "text": ("title", "href", "body"),
+    "images": ("title", "image", "thumbnail", "width", "height", "source"),
+    "videos": ("title", "content", "duration", "publisher", "uploader"),
+    "news": ("date", "title", "body", "url", "source"),
+    "books": ("title", "author", "publisher", "info", "url"),
+}
 
 
 def extract_text(soup, tags, min_len: int = 20) -> list[str]:
@@ -49,6 +60,24 @@ def _ddgs_client(timeout_s: float = 10.0):
     from ddgs import DDGS
 
     return DDGS(timeout=max(1, int(timeout_s)))
+
+
+def _format_ddgs_results(kind: str, results: list[dict], n_results: int) -> str:
+    """Render ``kind`` results with the fields defined in ``_FIELDS_BY_KIND``."""
+    return format_search_results(results, n_results, _FIELDS_BY_KIND[kind])
+
+
+def _run_ddgs_search(
+    kind: str, query: str, n_results: int, timeout_s: float, **params
+) -> str:
+    """Run the DDGS ``kind`` search (text/images/videos/news/books) and render it."""
+    try:
+        results = getattr(_ddgs_client(timeout_s), kind)(query, max_results=n_results, **params)
+    except Exception as exc:
+        return f"Error: {exc}"
+    if not results:
+        return f"No results found for: {query}"
+    return _format_ddgs_results(kind, results, n_results)
 
 
 def _fetch_soup(url: str, timeout_s: int = 10):
@@ -149,6 +178,84 @@ def web_search(
     if not results:
         return f"No results found for: {query}"
     return format_search_results(results, n_results)
+
+
+@dump_func_call
+def web_images(
+    query: str,
+    n_results: int = 5,
+    region: str = "us-en",
+    safesearch: str = "moderate",
+    timelimit: str | None = None,
+    size: str | None = None,
+    color: str | None = None,
+    type_image: str | None = None,
+    layout: str | None = None,
+    license_image: str | None = None,
+    timeout_s: float = 10.0,
+) -> str:
+    """
+    Search pictures on the web: direct image URL, thumbnail, size and source.
+    Useful when user asks to find pictures/images/photos of something; an
+    image URL can be saved to disk with ``download_file``.
+    """
+    return _run_ddgs_search(
+        "images", query, n_results, timeout_s,
+        region=region, safesearch=safesearch, timelimit=timelimit,
+        size=size, color=color, type_image=type_image,
+        layout=layout, license_image=license_image,
+    )
+
+
+@dump_func_call
+def web_videos(
+    query: str,
+    n_results: int = 5,
+    region: str = "us-en",
+    safesearch: str = "moderate",
+    timelimit: str | None = None,
+    resolution: str | None = None,
+    duration: str | None = None,
+    timeout_s: float = 10.0,
+) -> str:
+    """
+    Search videos on the web: video URL, duration, publisher and uploader.
+    Useful when user asks to find videos of something; a video URL can be
+    downloaded with ``download_file``.
+    """
+    return _run_ddgs_search(
+        "videos", query, n_results, timeout_s,
+        region=region, safesearch=safesearch, timelimit=timelimit,
+        resolution=resolution, duration=duration,
+    )
+
+
+@dump_func_call
+def web_news(
+    query: str,
+    n_results: int = 5,
+    region: str = "us-en",
+    safesearch: str = "moderate",
+    timelimit: str | None = None,
+    timeout_s: float = 10.0,
+) -> str:
+    """
+    Search recent news articles about a topic: date, source and summary.
+    Useful when user asks for the latest news on a topic.
+    """
+    return _run_ddgs_search(
+        "news", query, n_results, timeout_s,
+        region=region, safesearch=safesearch, timelimit=timelimit,
+    )
+
+
+@dump_func_call
+def web_books(query: str, n_results: int = 5, timeout_s: float = 10.0) -> str:
+    """
+    Search books by title, author or topic: author, publisher and format info.
+    Useful when user asks to find a book.
+    """
+    return _run_ddgs_search("books", query, n_results, timeout_s)
 
 
 @dump_func_call

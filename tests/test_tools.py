@@ -669,6 +669,67 @@ def test_web_search_reports_errors(monkeypatch):
     assert "no network" in tools.web_search("q")
 
 
+def test_web_images_formats_results(monkeypatch):
+    fake = FakeDDGS(results=[{
+        "title": "sun", "image": "http://i/x.jpg", "thumbnail": "http://t",
+        "width": 10, "height": 20, "source": "Bing",
+    }])
+    _patch_ddgs(monkeypatch, fake)
+    out = tools.web.web_images("sun", n_results=1)
+    assert "1) title: sun | image: http://i/x.jpg | thumbnail: http://t" in out
+    assert "width: 10 | height: 20 | source: Bing" in out
+
+
+def test_web_images_passes_filters(monkeypatch):
+    fake = FakeDDGS(results=[{"title": "t"}])
+    _patch_ddgs(monkeypatch, fake)
+    tools.web.web_images("q", size="Large", color="Red", type_image="photo",
+                     layout="Wide", license_image="any")
+    method, kwargs = fake.calls[0]
+    assert method == "images"
+    assert kwargs["size"] == "Large" and kwargs["color"] == "Red"
+    assert kwargs["type_image"] == "photo" and kwargs["layout"] == "Wide"
+    assert kwargs["license_image"] == "any"
+
+
+def test_web_videos_formats_results(monkeypatch):
+    fake = FakeDDGS(results=[{
+        "title": "v", "content": "http://yt/1", "duration": "8:22",
+        "publisher": "YouTube", "uploader": "Sun TV",
+    }])
+    _patch_ddgs(monkeypatch, fake)
+    out = tools.web.web_videos("v", n_results=1)
+    assert "1) title: v | content: http://yt/1 | duration: 8:22" in out
+    assert "publisher: YouTube | uploader: Sun TV" in out
+
+
+def test_web_news_formats_results(monkeypatch):
+    fake = FakeDDGS(results=[{
+        "date": "2026-01-02", "title": "n", "body": "b",
+        "url": "http://u", "source": "s",
+    }])
+    _patch_ddgs(monkeypatch, fake)
+    out = tools.web.web_news("n", n_results=1)
+    assert "1) date: 2026-01-02 | title: n | body: b" in out
+
+
+def test_web_books_formats_results(monkeypatch):
+    fake = FakeDDGS(results=[{
+        "title": "The Sea-Wolf", "author": "Jack London", "publisher": "DigiCat",
+        "info": "English [en], .epub", "url": "http://u",
+    }])
+    _patch_ddgs(monkeypatch, fake)
+    out = tools.web.web_books("sea wolf", n_results=1)
+    assert "1) title: The Sea-Wolf | author: Jack London" in out
+
+
+def test_web_news_empty_and_errors(monkeypatch):
+    _patch_ddgs(monkeypatch, FakeDDGS(results=[]))
+    assert "No results" in tools.web.web_news("q")
+    _patch_ddgs(monkeypatch, FakeDDGS(error=RuntimeError("throttled")))
+    assert "throttled" in tools.web.web_news("q")
+
+
 # ------------------------------------------------------------------ T7 financial
 
 
