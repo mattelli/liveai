@@ -1,4 +1,5 @@
 import re
+import threading
 import wave
 import sounddevice as sd
 from pathlib import Path
@@ -60,6 +61,48 @@ class SpeechGenerator:
             channels=channels,
             dtype=datatype,
         )
+        # Stop request for the running playback (Ctrl+C during speech); an
+        # Event is safely settable from a signal handler or any other thread.
+        self._stop_event = threading.Event()
+
+    # Audio written per blocking write call (~50 ms): small enough that a stop
+    # request is honored quickly - the SIGINT handler can only run between
+    # blocking write() calls, which block in real time for the buffered audio -
+    # large enough to keep the per-call overhead negligible.
+    _SLICE_SECONDS = 0.05
+    _SAMPLE_SIZES = {"int8": 1, "uint8": 1, "int16": 2, "int32": 4, "float32": 4}
+
+    def _slice_bytes(self) -> int:
+        """Byte length of one write slice (about ``_SLICE_SECONDS`` of audio)."""
+        frame = self.channels * self._SAMPLE_SIZES.get(self.datatype, 2)
+        return max(frame, int(self.samplerate * self._SLICE_SECONDS) * frame)
+
+    def _write_chunk(self, data: bytes) -> int:
+        """Write one synthesis chunk in small slices; return bytes written.
+
+        The stop event is checked between slices: piper yields one chunk per
+        sentence (seconds of audio), and ``stream.write`` blocks until the
+        buffer is consumed - a whole-chunk write would defer a Ctrl+C until
+        the sentence finished playing.
+        """
+        written = 0
+        for off in range(0, len(data), self._slice_bytes()):
+            if self._stop_event.is_set():
+                break
+            piece = data[off:off + self._slice_bytes()]
+            self.stream.write(piece)
+            written += len(piece)
+        return written
+
+    def request_stop(self) -> None:
+        """
+        Ask the running speak() playback to stop as soon as possible.
+
+        Stops the audio only: buffered audio is dropped for immediate
+        silence, and a subsequent speak() call plays normally again. Safe to
+        call from a signal handler or any other thread; a no-op while idle.
+        """
+        self._stop_event.set()
 
     def _ensure_voice(self):
         """Load the Piper voice once and return it."""
@@ -140,6 +183,12 @@ class SpeechGenerator:
 
         Returns the number of audio bytes written. Empty (or fully stripped)
         text is a no-op: the stream is neither started nor stopped.
+
+        A stop request (Ctrl+C or ``request_stop``) breaks the loop between
+        write slices (about 50 ms of audio each) and aborts the stream,
+        dropping still-buffered audio so the silence is immediate; the written
+        count reflects only the played audio. A later speak() call plays
+        normally again.
         """
         if strip_formatting:
             self.logger.debug("Removing formatted syntax...")
@@ -149,15 +198,32 @@ class SpeechGenerator:
             return 0
 
         voice = self._ensure_voice()
+        self._stop_event.clear()  # a stale stop request must not skip playback
         self.logger.info("🔊 Streaming output audio ...")
         written = 0
         self.stream.start()
         try:
             for chunk in voice.synthesize(text, syn_config=self.syn_config):
-                data = chunk.audio_int16_bytes
-                self.stream.write(data)
-                written += len(data)
+                if self._stop_event.is_set():
+                    self.logger.info("🔇 Speech playback stopped by request.")
+                    break
+                written += self._write_chunk(chunk.audio_int16_bytes)
         finally:
-            self.stream.stop()
+            if self._stop_event.is_set():
+                self._abort_stream()
+                self._stop_event.clear()
+            else:
+                self.stream.stop()
         self.logger.info("🔊 Finished streaming audio.")
         return written
+
+    def _abort_stream(self) -> None:
+        """Stop the output stream immediately, dropping buffered audio."""
+        abort = getattr(self.stream, "abort", None)
+        try:
+            if callable(abort):
+                abort()
+            else:
+                self.stream.stop()  # stream without abort support
+        except Exception:  # already stopped / no device
+            self.logger.debug("Aborting audio stream failed.", exc_info=True)

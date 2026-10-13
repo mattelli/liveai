@@ -1637,6 +1637,100 @@ def test_speak_if_enabled_only_speaks_when_enabled(speech_seam):
     assert spoken == ["hello"]
 
 
+def test_stop_speech_noop_without_generator(speech_seam):
+    speech_seam.allow_speech(False)  # nothing enabled
+    speech_seam.stop_speech()  # must not raise
+
+
+def test_speak_if_enabled_installs_and_restores_sigint_handler(speech_seam):
+    import signal
+
+    captured = {}
+
+    class Recorder:
+        def speak(self, text):
+            captured["during"] = signal.getsignal(signal.SIGINT)
+
+        def request_stop(self):
+            captured["stopped"] = True
+
+        def close(self):
+            pass
+
+    previous = signal.getsignal(signal.SIGINT)
+    try:
+        speech_seam._speech_generator = Recorder()
+        speech_seam.speak_if_enabled("hello")
+        assert captured["during"] is not previous  # speech handler wins
+        assert signal.getsignal(signal.SIGINT) is previous  # restored after
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def test_speak_if_enabled_routes_sigint_to_stop_speech(speech_seam, capsys):
+    """Ctrl+C while audio plays stops the speech, never unwinds the turn."""
+    import signal
+
+    seen = {}
+
+    class Recorder:
+        def speak(self, text):
+            handler = signal.getsignal(signal.SIGINT)
+            handler(signal.SIGINT, None)  # simulate Ctrl+C during playback
+            seen["reached_end"] = True  # playback body completed normally
+
+        def request_stop(self):
+            seen["stopped"] = True
+
+        def close(self):
+            pass
+
+    speech_seam._speech_generator = Recorder()
+    speech_seam.speak_if_enabled("hello")  # must not raise
+    assert seen["stopped"] is True and seen["reached_end"] is True
+    assert speech_seam._speech_stopped is False  # flag consumed after printing
+    assert "speech stopped" in capsys.readouterr().out.lower()
+
+
+def test_ctrl_c_during_playback_stops_audio_only(speech_seam, tmp_path, capsys):
+    """End-to-end: real SpeechGenerator, Ctrl+C mid-playback drops the audio."""
+    pytest.importorskip("piper", reason="requires piper")
+    pytest.importorskip("sounddevice", reason="requires sounddevice")
+    import signal
+
+    import src.audio_generator as ag
+    from tests.conftest import FakeOutputStream, FakePiperVoice
+
+    class SigintSecondWriteStream(FakeOutputStream):
+        """FakeOutputStream simulating Ctrl+C on the second write."""
+
+        def write(self, data):
+            super().write(data)
+            if len(self.written) == 2:
+                handler = signal.getsignal(signal.SIGINT)
+                assert handler is not signal.default_int_handler
+                handler(signal.SIGINT, None)
+
+    model = tmp_path / "voice.onnx"
+    model.write_bytes(b"not-a-real-model")
+    gen = ag.SpeechGenerator(
+        model_path=model,
+        voice=FakePiperVoice(chunks=(b"\x01\x02",) * 4),
+        stream=SigintSecondWriteStream(),
+    )
+    speech_seam._speech_generator = gen
+    previous = signal.getsignal(signal.SIGINT)
+    try:
+        speech_seam.speak_if_enabled("hello")  # must not raise
+        assert gen.stream.written == [b"\x01\x02", b"\x01\x02"]  # 2 chunks played
+        assert gen.stream.aborted == 1 and gen.stream.stopped == 0
+        assert gen._stop_event.is_set() is False  # next round may speak again
+        assert "speech stopped" in capsys.readouterr().out.lower()
+        assert signal.getsignal(signal.SIGINT) is previous  # generation guard back
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 # ------------------------------------------------------------------ T17 vision
 
 

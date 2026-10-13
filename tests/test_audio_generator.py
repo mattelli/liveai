@@ -145,6 +145,94 @@ def test_speak_cleans_text_by_default(tmp_path):
     assert voice.last_text == "hi"
 
 
+# ------------------------------------------------------------- G4b stop request
+
+
+class StopRequestingVoice:
+    """Fake piper voice: requests a stop while producing the second chunk."""
+
+    def __init__(self, gen):
+        self.gen = gen
+        self.config = SimpleNamespace(sample_rate=22050)
+
+    def synthesize(self, text, syn_config=None):
+        yield SimpleNamespace(audio_int16_bytes=b"\x01\x02")
+        self.gen.request_stop()  # stop arrives while chunk 2 is synthesized
+        yield SimpleNamespace(audio_int16_bytes=b"\x03\x04")
+        yield SimpleNamespace(audio_int16_bytes=b"\x05\x06")
+
+
+def test_speak_stops_on_request_mid_stream(tmp_path):
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)
+    gen.voice = StopRequestingVoice(gen)  # injected fake voice is not reloaded
+    written = gen.speak("hello", strip_formatting=False)
+    assert written == 2  # only the first chunk was played
+    assert stream.written == [b"\x01\x02"]
+    assert stream.aborted == 1 and stream.stopped == 0  # buffered audio dropped
+    assert gen._stop_event.is_set() is False  # cleared: the next speak() plays
+
+
+def test_speak_clears_stale_stop_request(tmp_path):
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)
+    gen.request_stop()  # e.g. pressed during generation, before speech starts
+    written = gen.speak("hello", strip_formatting=False)
+    assert written == 4  # a stale request does not skip the next playback
+    assert stream.aborted == 0 and stream.stopped == 1
+
+
+def test_natural_finish_does_not_abort(tmp_path):
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)
+    gen.speak("hello", strip_formatting=False)
+    assert stream.stopped == 1 and stream.aborted == 0
+
+
+def test_large_chunk_is_written_in_slices(tmp_path):
+    """A sentence-sized chunk goes out as ~50 ms slices, not one blocking write."""
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)  # 22050 Hz -> 2204 B per slice
+    big = b"\x01\x02" * 5000  # 10000 bytes -> 5 slices
+
+    class BigVoice:
+        config = SimpleNamespace(sample_rate=22050)
+
+        def synthesize(self, text, syn_config=None):
+            yield SimpleNamespace(audio_int16_bytes=big)
+
+    gen.voice = BigVoice()
+    written = gen.speak("hello", strip_formatting=False)
+    assert written == 10000
+    assert len(stream.written) == 5  # sliced writes
+    assert b"".join(stream.written) == big  # audio is preserved
+
+
+def test_stop_is_honored_between_slices(tmp_path):
+    """Ctrl+C during a long chunk stops within one slice, not after the chunk."""
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)  # 22050 Hz -> 2204 B per slice
+    big = b"\x01\x02" * 5000  # 10000 bytes -> 5 slices
+
+    class BigVoice:
+        config = SimpleNamespace(sample_rate=22050)
+
+        def synthesize(self, text, syn_config=None):
+            yield SimpleNamespace(audio_int16_bytes=big)
+
+    gen.voice = BigVoice()
+
+    def write_and_stop(data):  # Ctrl+C arriving during the second slice
+        stream.written.append(data)
+        if len(stream.written) == 2:
+            gen.request_stop()
+
+    stream.write = write_and_stop
+    written = gen.speak("hello", strip_formatting=False)
+    assert written == 2 * 2204  # stopped after the second ~50 ms slice
+    assert stream.aborted == 1  # the queued rest of the chunk is dropped
+
+
 # ---------------------------------------------------------------- G5 config
 
 

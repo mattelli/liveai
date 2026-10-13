@@ -406,6 +406,68 @@ def test_session_without_bootstrap_ok():
     assert ConversationSession(FakeAgent(), lambda: next(it)).run() == 0
 
 
+# ------------------------------------------ T21 Ctrl+C stops speech, not the turn
+
+
+def test_ctrl_c_during_speech_stops_audio_only(capsys, monkeypatch, tmp_path):
+    """Ctrl+C while the agent speaks: audio stops, turn and session continue."""
+    pytest.importorskip("piper", reason="requires piper")
+    pytest.importorskip("sounddevice", reason="requires sounddevice")
+    import signal
+
+    import src.audio_generator as audio_gen
+    import src.tools.speech as speech_mod
+    from tests.conftest import FakeOutputStream, FakePiperVoice
+
+    class SigintSecondWriteStream(FakeOutputStream):
+        """FakeOutputStream simulating Ctrl+C on the second audio write."""
+
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self._writes_this_playback = 0
+
+        def start(self):
+            super().start()
+            self._writes_this_playback = 0
+
+        def write(self, data):
+            super().write(data)
+            self._writes_this_playback += 1
+            if self._writes_this_playback == 2:
+                handler = signal.getsignal(signal.SIGINT)
+                assert handler is not signal.default_int_handler  # speech guard
+                handler(signal.SIGINT, None)
+
+    model = tmp_path / "voice.onnx"
+    model.write_bytes(b"not-a-real-model")
+    generator = audio_gen.SpeechGenerator(
+        model_path=model,
+        voice=FakePiperVoice(chunks=(b"\x01\x02",) * 4),
+        stream=SigintSecondWriteStream(),
+    )
+    monkeypatch.setattr(speech_mod, "_speech_generator", generator)
+    monkeypatch.setattr(speech_mod, "_speech_stopped", False)
+
+    class SpeakingAgent(FakeAgent):
+        def act(self, prompt):
+            super().act(prompt)
+            speech_mod.speak_if_enabled("a spoken response")
+
+    counter = {"n": 0}
+
+    def reader():
+        counter["n"] += 1
+        return ["hi", "again", "/quit"][counter["n"] - 1]
+
+    agent = SpeakingAgent()
+    assert ConversationSession(agent, reader).run() == 0
+    assert agent.acted == ["hi", "again"]  # turn/session survived, not cancelled
+    assert generator.stream.aborted == 2  # speech stopped on both turns
+    out = capsys.readouterr().out.lower()
+    assert out.count("speech stopped") == 2
+    assert "generation cancelled" not in out
+
+
 # ----------------------------------------------------------------- T20 sessions
 
 

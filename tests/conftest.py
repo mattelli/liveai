@@ -90,6 +90,7 @@ class FakeOutputStream:
         self.kw = kw
         self.started = 0
         self.stopped = 0
+        self.aborted = 0
         self.closed = 0
         self.written = []
 
@@ -98,6 +99,10 @@ class FakeOutputStream:
 
     def stop(self):
         self.stopped += 1
+
+    def abort(self):
+        """Drop buffered audio: immediate stop without draining."""
+        self.aborted += 1
 
     def write(self, data):
         self.written.append(data)

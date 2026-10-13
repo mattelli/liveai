@@ -4,17 +4,26 @@ Follows the ``src.tools.image_gen`` pattern: ``main.py`` injects the
 application config via :func:`configure` (``[speech_gen]``), the heavy
 ``SpeechGenerator`` (piper + sounddevice) is imported lazily on first enable
 and cached at module level, and tests override the ``_SPEECH_FACTORY`` seam.
+
+While audio plays, Ctrl+C stops the speech only (never the agent turn): a
+temporary SIGINT handler routes the interrupt to :func:`stop_speech`, and the
+previous handler - the session's generation cancel or the default - is
+restored afterwards.
 """
 
 from __future__ import annotations
 
-from src.common import dump_func_call
+import contextlib
+import signal
 
-__all__ = ["configure", "allow_speech", "speak_if_enabled"]
+from src.common import cprint, dump_func_call
+
+__all__ = ["configure", "allow_speech", "speak_if_enabled", "stop_speech"]
 
 _config_cache = None       # [speech_gen] section injected via configure()
 _speech_generator = None   # cached shared SpeechGenerator instance (None = disabled)
 _SPEECH_FACTORY = None     # test seam: factory(section) -> SpeechGenerator
+_speech_stopped = False    # set by the SIGINT handler while playback runs
 
 
 def configure(config) -> None:
@@ -64,7 +73,62 @@ def allow_speech(enable: bool) -> str:
     return ""
 
 
+def stop_speech() -> None:
+    """
+    Request the running speech playback to stop (audio only).
+
+    Never cancels the agent turn: remaining tool rounds may speak again.
+    Safe to call while speech is disabled (no-op), from a signal handler or
+    any other thread.
+    """
+    generator = _speech_generator
+    if generator is not None:
+        generator.request_stop()
+
+
 def speak_if_enabled(text: str) -> None:
-    """Speak ``text`` through the session speech generator, when enabled."""
-    if _speech_generator is not None:
+    """
+    Speak ``text`` through the session speech generator, when enabled.
+
+    While the audio plays, Ctrl+C is routed to :func:`stop_speech` - dropping
+    buffered audio for immediate silence - instead of the agent's generation
+    cancel; the previous SIGINT handler is restored afterwards.
+    """
+    global _speech_stopped
+    if _speech_generator is None:
+        return
+    _speech_stopped = False
+    with _speech_sigint_guard():
         _speech_generator.speak(text)
+    if _speech_stopped:
+        _speech_stopped = False  # consume: the message is printed once
+        cprint("🔇 Speech stopped", "yellow")
+
+
+@contextlib.contextmanager
+def _speech_sigint_guard():
+    """
+    Route Ctrl+C to :func:`stop_speech` while speech audio is playing.
+
+    Nested over the session's generation guard (``_generation_sigint_guard``):
+    during playback the handler installed here wins, and on exit the previous
+    handler - the generation cancel or the default - is restored. When
+    installation is not possible (e.g. not the main thread), speech plays
+    uninterruptible, as before this feature.
+    """
+    previous = signal.getsignal(signal.SIGINT)
+
+    def _on_sigint(signum, frame):
+        global _speech_stopped
+        _speech_stopped = True
+        stop_speech()
+
+    try:
+        signal.signal(signal.SIGINT, _on_sigint)
+    except (ValueError, OSError):  # e.g. not the main thread
+        yield
+        return
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
