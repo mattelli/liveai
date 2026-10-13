@@ -1,4 +1,7 @@
+import json
+
 import pytest
+from types import SimpleNamespace
 
 import src.session as session_mod
 from src.session import ConversationSession
@@ -51,7 +54,7 @@ def test_help_lists_commands(capsys):
     s = make(["/help", "/quit"])
     s.run()
     out = capsys.readouterr().out
-    for cmd in ["/help", "/quit", "/clear", "/voice", "/tools", "/info"]:
+    for cmd in ["/help", "/quit", "/clear", "/voice", "/tools", "/info", "/session"]:
         assert cmd in out
     assert s.agent.acted == []
 
@@ -401,3 +404,145 @@ def test_session_calls_bootstrap_once(capsys):
 def test_session_without_bootstrap_ok():
     it = iter(["hi", "/quit"])  # FakeAgent has no bootstrap()
     assert ConversationSession(FakeAgent(), lambda: next(it)).run() == 0
+
+
+# ----------------------------------------------------------------- T20 sessions
+
+
+class SessionAgent(FakeAgent):
+    """FakeAgent carrying a live history and a [brain] config for /session."""
+
+    def __init__(self, sessions_dir):
+        super().__init__()
+        self._messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "hello"},
+        ]
+        self.config = SimpleNamespace(brain=SimpleNamespace(sessions_dir=sessions_dir))
+        self._model_name = "fake-model"
+
+    @property
+    def messages(self):
+        return self._messages
+
+
+def test_session_store_writes_json(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session store", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    files = list(tmp_path.glob("*.json"))
+    assert len(files) == 1
+    data = json.loads(files[0].read_text(encoding="utf-8"))
+    assert data["messages"] == agent._messages
+    assert data["model"] == "fake-model"
+    assert "stored" in capsys.readouterr().out.lower()
+
+
+def test_session_store_named_sanitizes_name(tmp_path):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session store my chat", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert (tmp_path / "my_chat.json").exists()
+
+
+def test_session_store_refuses_overwrite(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session store dup", "/session store dup", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert len(list(tmp_path.glob("*.json"))) == 1
+    assert "already exists" in capsys.readouterr().out.lower()
+
+
+def test_session_store_without_dir(tmp_path, capsys):
+    agent = SessionAgent(None)  # config present, sessions_dir unset
+    it = iter(["/session store", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert "sessions_dir" in capsys.readouterr().out.lower()
+
+
+def test_session_store_without_history(capsys):
+    it = iter(["/session store", "/quit"])  # FakeAgent has no messages
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert "no chat history" in capsys.readouterr().out.lower()
+
+
+def test_session_list_shows_files(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session store alpha", "/session list", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "alpha.json" in out
+    assert "  3  " in out  # message count column (right-aligned)
+
+
+def test_session_list_empty(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session list", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert "no session files" in capsys.readouterr().out.lower()
+
+
+def test_session_load_restores_history(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session store alpha", "/session load alpha", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent._messages == [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "hello"},
+    ]
+    assert "loaded" in capsys.readouterr().out.lower()
+
+
+def test_session_load_by_index(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session store one", "/session store two", "/session load 1", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert "one.json" in capsys.readouterr().out.lower()
+
+
+def test_session_load_mutates_history_in_place(tmp_path):
+    """Loading replaces the list contents (bind_history sees the same object)."""
+    agent = SessionAgent(tmp_path)
+    live = agent._messages
+    it = iter(["/session store alpha", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    live.clear()
+    live.append({"role": "user", "content": "junk"})
+    it = iter(["/session load alpha", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert live is agent._messages
+    assert "junk" not in [m.get("content") for m in live]
+    assert [m.get("content") for m in live] == ["sys", "hi", "hello"]
+
+
+def test_session_load_invalid_file(tmp_path, capsys):
+    (tmp_path / "broken.json").write_text('{"messages": "nope"}', encoding="utf-8")
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session load broken", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out.lower()
+    assert "error loading session" in out
+    assert agent._messages[0]["content"] == "sys"  # history untouched
+
+
+def test_session_load_missing_file(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session load nope", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert "no session file" in capsys.readouterr().out.lower()
+
+
+def test_session_load_requires_target(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session load", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert "usage" in capsys.readouterr().out.lower()
+
+
+def test_session_usage_on_bare_and_bad_subcommand(tmp_path, capsys):
+    agent = SessionAgent(tmp_path)
+    it = iter(["/session", "/session frobnicate", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert capsys.readouterr().out.lower().count("usage") == 2

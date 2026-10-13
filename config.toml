@@ -16,6 +16,7 @@ guard_factor = 1.0
 # LLM configuration with OpenAI-compatible endpoint, envvar holding api-keys (also resolved from .env)
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 history_path = "chat_history.log"
+sessions_dir = ".sessions"   # folder for /session store|list|load chat session files (JSON)
 # Vision support and the context window are auto-detected from the model metadata reported by the server (OpenAI /models endpoint, e.g. LMStudio max_context_length). 
 # Only set the optional overrides below for servers that do not report them:
 # vision = true

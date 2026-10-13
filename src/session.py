@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import contextlib
 import inspect
+import json
+import pathlib
 import signal
+from datetime import datetime
 from typing import Callable
 
 from src.common import cprint
-from src.tools import allow_speech, clear_chat
+from src.tools import allow_speech, clear_chat, safe_filename
 
 
 @contextlib.contextmanager
@@ -50,7 +53,7 @@ class ConversationSession:
     shutdown. All collaborators are injected, so no heavy module is imported.
     """
 
-    COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info")
+    COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info", "/session")
 
     def __init__(self, agent, read_prompt: Callable[[], str | None], use_tools: bool = True,
                  quit_on_prompt_interrupt: bool = False):
@@ -168,6 +171,9 @@ class ConversationSession:
         if cmd == "/info":
             self._cmd_info()
             return True
+        if cmd == "/session":
+            self._cmd_session(arg)
+            return True
 
         cprint(f"Unknown command: {text}. Type /help.", "red")
         return True
@@ -180,6 +186,7 @@ class ConversationSession:
             ("/voice on|off", "toggle speech output"),
             ("/tools", "list and run an available tool"),
             ("/info", "show model/context info"),
+            ("/session store|list|load", "save/list/restore chat sessions (JSON)"),
             ("Ctrl+C", "stop the response being generated"),
             ("Ctrl+D", "exit the session"),
         ]
@@ -351,6 +358,148 @@ class ConversationSession:
             Console().print(table)
         except ImportError:  # pragma: no cover - rich is a hard dependency
             cprint(info, "cyan")
+
+    # ------------------------------------------------- session files (/session)
+
+    def _cmd_session(self, arg: str) -> None:
+        """Dispatch the ``/session`` sub-commands (store/list/load)."""
+        parts = arg.split(maxsplit=1)
+        sub = parts[0].lower() if parts else ""
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        if sub == "store":
+            self._session_store(rest or None)
+        elif sub == "list":
+            self._session_list()
+        elif sub == "load":
+            self._session_load(rest)
+        else:
+            cprint("Usage: /session store [name] | /session list | "
+                   "/session load <name|index>", "yellow")
+
+    def _sessions_dir(self) -> pathlib.Path | None:
+        """Session folder from ``[brain] sessions_dir`` (None when unset)."""
+        brain = getattr(getattr(self.agent, "config", None), "brain", None)
+        value = getattr(brain, "sessions_dir", None) if brain is not None else None
+        return pathlib.Path(value) if value else None
+
+    def _chat_history(self) -> list[dict] | None:
+        """Live conversation history of the agent (None when unavailable)."""
+        messages = getattr(self.agent, "messages", None)
+        return messages if isinstance(messages, list) else None
+
+    def _session_store(self, name: str | None) -> None:
+        """Store the full chat history as a JSON file in the session folder."""
+        messages = self._chat_history()
+        if messages is None:
+            cprint("No chat history available to store.", "red")
+            return
+        directory = self._sessions_dir()
+        if directory is None:
+            cprint("No session folder configured: "
+                   "set [brain] sessions_dir in config.toml", "red")
+            return
+        if name:
+            stem = safe_filename(name)
+            filename = stem if stem.endswith(".json") else f"{stem}.json"
+        else:
+            filename = datetime.now().strftime("session-%Y%m%d-%H%M%S.json")
+        path = directory / filename
+        if path.exists():
+            cprint(f"Session file already exists: {path}", "red")
+            return
+        payload = {
+            "stored_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "model": getattr(self.agent, "_model_name", None) or "unknown",
+            "messages": messages,
+        }
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8"
+            )
+        except OSError as exc:
+            cprint(f"Error storing session: {exc}", "red")
+            return
+        cprint(f"Session stored: {path} ({len(messages)} messages)", "green")
+
+    def _session_list(self) -> None:
+        """List the session files in the configured folder."""
+        directory = self._sessions_dir()
+        files = sorted(directory.glob("*.json")) if directory and directory.is_dir() else []
+        if not files:
+            cprint("No session files found.", "grey")
+            return
+        rows = []
+        for path in files:
+            stat = path.stat()
+            count = "-"
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data.get("messages"), list):
+                    count = str(len(data["messages"]))
+            except Exception:
+                pass  # unreadable file: keep the row with a '-' count
+            rows.append((
+                path.name,
+                count,
+                datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                f"{stat.st_size / 1024:.1f} KB",
+            ))
+        try:
+            from rich.console import Console
+            from rich.table import Table
+
+            table = Table(show_header=True, box=None, padding=(0, 2, 0, 0), pad_edge=False)
+            table.add_column("session file", style="cyan", no_wrap=True)
+            table.add_column("messages", style="cyan", justify="right")
+            table.add_column("stored", style="cyan")
+            table.add_column("size", style="cyan", justify="right")
+            for row in rows:
+                table.add_row(*row)
+            Console().print(table)
+        except ImportError:  # pragma: no cover - rich is a hard dependency
+            for name, count, stored, size in rows:
+                cprint(f"  {name:<40} {count:>8}  {stored}  {size:>9}", "cyan")
+
+    def _resolve_session_file(self, target: str) -> pathlib.Path | None:
+        """Resolve a ``/session load`` target: 1-based list index or file name."""
+        directory = self._sessions_dir()
+        if directory is None or not directory.is_dir():
+            return None
+        files = sorted(directory.glob("*.json"))
+        if target.isdigit():
+            return files[int(target) - 1] if 1 <= int(target) <= len(files) else None
+        name = target if target.endswith(".json") else f"{target}.json"
+        path = directory / name
+        return path if path.exists() else None
+
+    def _session_load(self, target: str) -> None:
+        """Replace the live chat history with a stored session file."""
+        messages = self._chat_history()
+        if messages is None:
+            cprint("No chat history available to load into.", "red")
+            return
+        if not target:
+            cprint("Usage: /session load <name|index>  (see /session list)", "yellow")
+            return
+        path = self._resolve_session_file(target)
+        if path is None:
+            cprint(f"No session file: {target}", "red")
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            loaded = data["messages"]
+            if not (isinstance(loaded, list) and
+                    all(isinstance(m, dict) and m.get("role") for m in loaded)):
+                raise ValueError("invalid 'messages' list")
+        except Exception as exc:
+            cprint(f"Error loading session {path.name}: {exc}", "red")
+            return
+        messages.clear()  # in place: the session keeps the same list object
+        messages.extend(loaded)
+        model = data.get("model") or "unknown model"
+        cprint(f"Session loaded: {path.name} "
+               f"({len(loaded)} messages, model {model})", "green")
 
     # -------------------------------------------------------------- shutdown
 

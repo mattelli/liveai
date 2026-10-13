@@ -498,6 +498,30 @@ rounds are skipped. Before each new prompt, the agent also repairs the
 history from older cancelled/failed turns (drops unanswered prompts, pads
 empty assistant turns).
 
+## Session files (`/session`)
+
+The full chat history can be saved to and restored from JSON files with the
+`/session` command (a plain session command, not an agent tool):
+
+- `/session store [name]` — store the full conversation history (system
+  prompt, user/assistant turns and tool calls) as `<name>.json` in the
+  configured folder; without a name a timestamped
+  `session-YYYYMMDD-HHMMSS.json` file is created. An existing file is never
+  overwritten.
+- `/session list` — list the stored session files (message count, storage
+  time, size).
+- `/session load <name|index>` — replace the current conversation with the
+  stored one; `<name>` is the file name with or without the `.json` suffix,
+  or the 1-based index shown by `/session list`.
+
+The storage folder comes from `[brain] sessions_dir` in `config.toml`
+(resolved relative to the config file and created on first store):
+
+```toml
+[brain]
+sessions_dir = ".sessions"
+```
+
 ## Setup (Python 3.12.10)
 
 OS Windows 11 (powershell)
