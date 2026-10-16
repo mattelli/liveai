@@ -5,8 +5,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from src.common import dump_func_call
-from .files import safe_filename
+from src.common import dump_func_call, safe_filename
 
 __all__ = [
     "download_file", "extract_webpage", "format_search_results", "web_books",

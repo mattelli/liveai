@@ -8,8 +8,8 @@ import signal
 from datetime import datetime
 from typing import Callable
 
-from src.common import cprint
-from src.tools import allow_speech, clear_chat, safe_filename
+from src.common import cprint, safe_filename
+from src.tools import allow_speech, clear_chat
 
 
 @contextlib.contextmanager

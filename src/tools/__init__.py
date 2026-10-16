@@ -1,7 +1,7 @@
 """Tool collection for the Live Assistant agent, split by topic.
 
 - ``system``    : platform info, date/time, working directory, shell commands
-- ``files``     : read/write/search/replace files + shared filename helpers
+- ``files``     : read/write/search/replace files
 - ``web``       : DDGS metasearch, webpage extraction, file downloads
 - ``archives``  : extract zip/7z/tar/gz archives and zip folder contents
 - ``camera``    : webcam frame capture
@@ -26,12 +26,14 @@ section it needs; session-bound state (chat history, LLM client, speech
 device) is bound by ``Brain`` via the ``bind_*`` functions.
 """
 
+from src.common import normalize_extensions, safe_filename
+
 from .system import (
     current_date_time, exit_gracefully, get_working_directory, run_command,
     system_info,
 )
 from .files import (
-    normalize_extensions, read_text_file, replace_string_in_file, safe_filename,
+    read_text_file, replace_string_in_file,
     search_in_file, search_pattern_in_files, write_text_file,
 )
 from .web import (

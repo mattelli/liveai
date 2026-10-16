@@ -1,9 +1,9 @@
-import sys
 import threading
 import time
 import tomllib
 import json
 import inspect
+import re
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
@@ -342,6 +342,26 @@ def write_json(file_path: Path, data):
     """
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+
+def normalize_extensions(value: str) -> list[str]:
+    """Parse a comma separated extension list into lowercase dotted suffixes.
+
+    ``"py, .MD ,txt"`` -> ``[".py", ".md", ".txt"]``.
+    """
+    result: list[str] = []
+    for item in (value or "").split(","):
+        item = item.strip().lower()
+        if not item:
+            continue
+        result.append(item if item.startswith(".") else "." + item)
+    return result
+
+
+def safe_filename(symbol: str) -> str:
+    """Turn ``'^GSPC'`` / ``'BRK/B'`` into a filesystem-safe filename stem."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", symbol).strip("._")
+    return cleaned or "symbol"
 
 
 def dump_func_call(func):

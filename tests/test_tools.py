@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 import src.tools as tools
+from src.common import normalize_extensions, safe_filename
 
 
 # ------------------------------------------------------------------ T0 lazy imports

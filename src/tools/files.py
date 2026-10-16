@@ -1,40 +1,14 @@
-"""File tools: read/write text, search and replace, plus filename helpers.
+"""File tools: read/write text files, search and replace their content."""
 
-``normalize_extensions`` and ``safe_filename`` live here because they are the
-shared filename utilities used by the other tool modules (``web``, ``archives``
-and ``finance``).
-"""
-
-import re
 from pathlib import Path
 
-from src.common import dump_func_call
+from src.common import dump_func_call, normalize_extensions
 
 __all__ = [
-    "normalize_extensions", "read_text_file", "replace_string_in_file",
-    "safe_filename", "search_in_file", "search_pattern_in_files",
+    "read_text_file", "replace_string_in_file",
+    "search_in_file", "search_pattern_in_files",
     "write_text_file",
 ]
-
-
-def normalize_extensions(value: str) -> list[str]:
-    """Parse a comma separated extension list into lowercase dotted suffixes.
-
-    ``"py, .MD ,txt"`` -> ``[".py", ".md", ".txt"]``.
-    """
-    result: list[str] = []
-    for item in (value or "").split(","):
-        item = item.strip().lower()
-        if not item:
-            continue
-        result.append(item if item.startswith(".") else "." + item)
-    return result
-
-
-def safe_filename(symbol: str) -> str:
-    """Turn ``'^GSPC'`` / ``'BRK/B'`` into a filesystem-safe filename stem."""
-    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", symbol).strip("._")
-    return cleaned or "symbol"
 
 
 @dump_func_call

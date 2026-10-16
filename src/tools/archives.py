@@ -2,8 +2,7 @@
 
 from pathlib import Path
 
-from src.common import dump_func_call
-from .files import normalize_extensions
+from src.common import dump_func_call, normalize_extensions
 
 __all__ = ["extract_archive", "zip_files"]
 
