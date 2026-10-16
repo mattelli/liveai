@@ -138,16 +138,21 @@ class OpenAICore:
     """
     Core client for an OpenAI-compatible chat API (API-key providers).
 
-    Talks to ``[brain] base_url`` with the ``openai`` client, so cloud models
-    (OpenAI, Mistral, Groq, OpenRouter, DeepSeek, Together, Gemini, xAI,
-    Anthropic, ...) and local servers (Ollama, LM Studio) share one
-    implementation: connection handling, model metadata resolution (context
-    window, vision) from the OpenAI models endpoint - plus the native APIs of
-    local servers, whose OpenAI /models data is thin - and the function-calling
-    helpers (JSON Schema tool definitions, stream chunk parsing).
-    The API key is read from the environment variable named by
-    ``[brain] api_key_env`` (default ``<PROVIDER>_API_KEY``, also resolved
-    from a project ``.env`` file) and must never be stored in config.toml.
+    Talks to an OpenAI-compatible endpoint with the ``openai`` client, so
+    cloud models (OpenAI, Mistral, Groq, OpenRouter, DeepSeek, Together,
+    Gemini, xAI, Anthropic, ...) and local servers (Ollama, LM Studio) share
+    one implementation: connection handling, model metadata resolution
+    (context window, vision) from the OpenAI models endpoint - plus the
+    native APIs of local servers, whose OpenAI /models data is thin - and the
+    function-calling helpers (JSON Schema tool definitions, stream chunk
+    parsing).
+    The connection comes from the models JSON file (``[brain] models_file``):
+    its first entry boots the session and ``/model`` switches between the
+    entries at runtime; without a models file the legacy ``[brain]``
+    model/base_url/api_key_env keys are used. The API key is read from the
+    environment variable named by the entry's ``api_key_env`` (also resolved
+    from a project ``.env`` file) and must never be stored in config.toml or
+    the models file.
     """
 
     DEFAULT_CONTEXT_WINDOW = 128_000
@@ -160,21 +165,11 @@ class OpenAICore:
         except ImportError as exc:
             raise ImportError("pip install openai  # required for the OpenAI-based Brain") from exc
 
-        base_url = getattr(config.brain, "base_url", "")
-        if not base_url:
-            raise ValueError(f"Missing [brain] base_url")
-        api_key_env = getattr(config.brain, "api_key_env", "")
-        _load_env_file()  # fill unset variables from .env (real env vars win)
-        api_key = os.environ.get(api_key_env)
-        if not api_key:
-            raise ValueError(
-                f"API key not found: set the '{api_key_env}' environment variable, "
-                f"e.g. put '{api_key_env}=sk-...' in the project .env file "
-                f"or run: setx {api_key_env} 'sk-...'")
+        model, base_url, api_key = self._boot_connection()
 
-        self.logger.info("🚀 Connecting to remote model '%s' @ %s ...", config.brain.model, base_url)
+        self.logger.info("🚀 Connecting to remote model '%s' @ %s ...", model, base_url)
         self._client = OpenAI(base_url=base_url, api_key=api_key)
-        self._model_name = config.brain.model
+        self._model_name = model
         self._base_url = base_url
         self._context_window = self._resolve_context_window(config)
         self._vision = self._resolve_vision_flag(config)
@@ -199,6 +194,175 @@ class OpenAICore:
         memory_tools.bind_history(lambda: self._messages)
         vision_tools.bind_session(self)
         self.logger.info("✅ Remote model '%s' connected.", self._model_name)
+
+    ## models file: boot connection + /model switching ##
+
+    def _models_file(self) -> pathlib.Path | None:
+        """Models JSON file from ``[brain] models_file`` (None when unset)."""
+        value = getattr(self.config.brain, "models_file", None)
+        return pathlib.Path(value) if value else None
+
+    def _load_model_entries(self) -> dict[str, dict]:
+        """Read the models JSON file into ``{name: entry}`` (file order kept).
+
+        Accepted shapes: a ``name -> entry`` mapping, a list of entries each
+        carrying a ``name``, and both wrapped in a top-level ``"models"`` key.
+        A bare string stands for a model id selectable under its own name.
+        Every usable entry needs a ``model`` id; anything else is skipped.
+        """
+        path = self._models_file()
+        if path is None:
+            raise ValueError(
+                "No models file configured: set [brain] models_file in config.toml")
+        if not path.is_file():
+            raise FileNotFoundError(f"Models file not found: {path}")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Invalid JSON in models file {path}: {exc}") from exc
+        if isinstance(data, dict) and isinstance(data.get("models"), (list, dict)):
+            data = data["models"]
+        if isinstance(data, dict):
+            pairs = list(data.items())
+        elif isinstance(data, list):
+            pairs = []
+            for entry in data:
+                if isinstance(entry, dict):
+                    pairs.append((entry.get("name"), entry))
+                else:  # bare model id: selectable under its own name
+                    text = str(entry).strip()
+                    pairs.append((text, {"model": text}))
+        else:
+            raise ValueError(
+                f"Models file {path} must hold a name->entry mapping or a list of entries")
+        entries: dict[str, dict] = {}
+        for name, entry in pairs:
+            if isinstance(entry, str):  # shorthand mapping value: {"alias": "model-id"}
+                entry = {"model": entry.strip()}
+            name = str(name or "").strip()
+            if name and isinstance(entry, dict) and str(entry.get("model") or "").strip():
+                entries[name] = entry
+        if not entries:
+            raise ValueError(
+                f"No usable model entries in models file {path} "
+                "(every entry needs a name and a 'model' id)")
+        return entries
+
+    def list_models(self) -> dict[str, dict]:
+        """Selectable models from the models JSON file (``{name: entry}``)."""
+        return self._load_model_entries()
+
+    def _entry_connection(self, display_name: str, entry: dict) -> tuple[str, str, str]:
+        """Connection triple ``(model, base_url, api_key)`` for a models entry.
+
+        Entry values win; missing ``base_url``/``api_key_env`` fall back to the
+        ``[brain]`` config (legacy setups keep them there). The API key is
+        resolved from the environment (``.env`` included) exactly as at
+        startup and is never stored in the JSON file.
+        """
+        brain = self.config.brain
+        model = str(entry.get("model") or "").strip()
+        base_url = str(entry.get("base_url")
+                       or getattr(brain, "base_url", "") or "").strip()
+        api_key_env = str(entry.get("api_key_env")
+                          or getattr(brain, "api_key_env", "") or "").strip()
+        if not model:
+            raise ValueError(f"Model entry {display_name!r} has no 'model' id")
+        if not base_url:
+            raise ValueError(
+                f"Model entry {display_name!r} has no 'base_url' and none is configured")
+        if not api_key_env:
+            raise ValueError(
+                f"Model entry {display_name!r} has no 'api_key_env' and none is configured")
+        _load_env_file()  # fill unset variables from .env (real env vars win)
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            raise ValueError(
+                f"API key not found for model {display_name!r}: set the '{api_key_env}' "
+                "environment variable, e.g. put "
+                f"'{api_key_env}=sk-...' in the project .env file "
+                f"or run: setx {api_key_env} 'sk-...'")
+        return model, base_url, api_key
+
+    def _boot_connection(self) -> tuple[str, str, str]:
+        """Resolve the startup connection: ``(model, base_url, api_key)``.
+
+        With ``[brain] models_file`` configured, the **first entry** of the
+        models JSON file boots the session: the startup model is always one of
+        the ``/model``-switchable entries and ``[brain]`` carries no duplicate
+        ``model``/``base_url``/``api_key_env``. Without a models file the
+        legacy ``[brain]`` keys are used directly.
+        """
+        brain = self.config.brain
+        if getattr(brain, "models_file", None):
+            entries = self._load_model_entries()
+            display_name, entry = next(iter(entries.items()))
+            self._model_entry = display_name
+            self.logger.info("Boot model: first entry '%s' of the models file.",
+                             display_name)
+            return self._entry_connection(display_name, entry)
+        model = str(getattr(brain, "model", "") or "").strip()
+        base_url = str(getattr(brain, "base_url", "") or "").strip()
+        api_key_env = str(getattr(brain, "api_key_env", "") or "").strip()
+        if not base_url:
+            raise ValueError("Missing [brain] base_url")
+        if not model:
+            raise ValueError("Missing [brain] model")
+        _load_env_file()  # fill unset variables from .env (real env vars win)
+        api_key = os.environ.get(api_key_env)
+        if not api_key:
+            raise ValueError(
+                f"API key not found: set the '{api_key_env}' environment variable, "
+                f"e.g. put '{api_key_env}=sk-...' in the project .env file "
+                f"or run: setx {api_key_env} 'sk-...'")
+        return model, base_url, api_key
+
+    def select_model(self, name: str) -> str:
+        """Switch the live session to a model entry from the models JSON file.
+
+        Every entry carries ``model`` (the model id) plus optional
+        ``api_key_env`` and ``base_url``; missing connection fields keep the
+        values currently configured under ``[brain]``. The API key is resolved
+        from the environment (``.env`` included) exactly as at startup and is
+        never stored in the JSON file. On success the client is rebuilt for
+        the new endpoint, the cached model metadata is dropped and the context
+        window / vision support are re-resolved from the new server (the
+        per-generation token cap follows the new window). The conversation
+        history is kept. Any failure raises before the current model is
+        touched; success returns a human-readable confirmation.
+        """
+        entries = self._load_model_entries()
+        lookup = {key.lower(): (key, entry) for key, entry in entries.items()}
+        match = lookup.get(str(name or "").strip().lower())
+        if match is None:
+            raise KeyError(
+                f"Unknown model {name!r} in the models file. Available: "
+                + ", ".join(entries))
+        display_name, entry = match
+        model, base_url, api_key = self._entry_connection(display_name, entry)
+
+        self.logger.info("🔄 Switching to model '%s' @ %s ...", model, base_url)
+        from openai import OpenAI  # installed: __init__ already imported it
+        client = OpenAI(base_url=base_url, api_key=api_key)
+
+        # Validation passed: swap the connection, drop the cached metadata and
+        # re-resolve the model-dependent state from the new server.
+        self._client = client
+        self._model_name = model
+        self._base_url = base_url
+        self._model_entry = display_name
+        self.__dict__.pop("_model_meta", None)
+        self._context_window = self._resolve_context_window(self.config)
+        self._vision = self._resolve_vision_flag(self.config)
+        self._max_tokens = _response_token_cap(
+            getattr(self.config.brain, "max_response_tokens", 0), self._context_window)
+        self.logger.info(
+            "✅ Model '%s' is now active (context %d, vision %s).",
+            model, self._context_window, "yes" if self._vision else "no",
+        )
+        return (f"Model switched to {display_name}: {model} @ {base_url} "
+                f"(context window {self._context_window}, "
+                f"vision {'yes' if self._vision else 'no'})")
 
     def _resolve_vision_flag(self, config) -> bool:
         """Derive vision support from the server-reported model capabilities.

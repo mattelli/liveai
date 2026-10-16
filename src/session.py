@@ -53,7 +53,7 @@ class ConversationSession:
     shutdown. All collaborators are injected, so no heavy module is imported.
     """
 
-    COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info", "/session")
+    COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info", "/model", "/session")
 
     def __init__(self, agent, read_prompt: Callable[[], str | None], use_tools: bool = True,
                  quit_on_prompt_interrupt: bool = False):
@@ -171,6 +171,9 @@ class ConversationSession:
         if cmd == "/info":
             self._cmd_info()
             return True
+        if cmd == "/model":
+            self._cmd_model(arg)
+            return True
         if cmd == "/session":
             self._cmd_session(arg)
             return True
@@ -186,6 +189,7 @@ class ConversationSession:
             ("/voice on|off", "toggle speech output"),
             ("/tools", "list and run an available tool"),
             ("/info", "show model/context info"),
+            ("/model [name]", "switch to a model from the models JSON file"),
             ("/session store|list|load", "save/list/restore chat sessions (JSON)"),
             ("Ctrl+C", "stop the response being generated"),
             ("Ctrl+D", "exit the session"),
@@ -358,6 +362,60 @@ class ConversationSession:
             Console().print(table)
         except ImportError:  # pragma: no cover - rich is a hard dependency
             cprint(info, "cyan")
+
+    # ------------------------------------------------- model switching (/model)
+
+    def _cmd_model(self, arg: str) -> None:
+        """Switch the live session to a model entry from the models JSON file.
+
+        ``/model`` lists the selectable models (current one marked);
+        ``/model <name>`` rebuilds the client for that entry's
+        ``api_key_env``/``base_url``/``model`` (see ``Brain.select_model``).
+        """
+        arg = arg.strip()
+        if not hasattr(self.agent, "select_model"):
+            cprint("Model switching unavailable for this agent.", "grey")
+            return
+        if not arg:
+            self._model_list()
+            cprint("Usage: /model <name>", "yellow")
+            return
+        try:
+            message = self.agent.select_model(arg)
+        except Exception as exc:
+            cprint(f"Error switching model: {exc}", "red")
+            return
+        cprint(message, "green")
+
+    def _model_list(self) -> None:
+        """Render the models JSON file entries as a table (current one marked)."""
+        try:
+            entries = self.agent.list_models()
+        except Exception as exc:
+            cprint(f"Error reading models file: {exc}", "red")
+            return
+        current = getattr(self.agent, "model_name", None)
+        rows = []
+        for name, entry in entries.items():
+            model = str(entry.get("model") or "")
+            base_url = str(entry.get("base_url") or "")
+            rows.append((name, model, base_url))
+        try:
+            from rich.console import Console
+            from rich.table import Table
+
+            table = Table(show_header=True, box=None, padding=(0, 2, 0, 0), pad_edge=False)
+            table.add_column("name", style="cyan", no_wrap=True)
+            table.add_column("model", style="cyan")
+            table.add_column("base_url", style="cyan")
+            for name, model, base_url in rows:
+                marker = "→ " if name.lower() == (current or "").lower() else ""
+                table.add_row(f"{marker}{name}", model, base_url)
+            Console().print(table)
+        except ImportError:  # pragma: no cover - rich is a hard dependency
+            for name, model, base_url in rows:
+                marker = " ->" if name.lower() == (current or "").lower() else "   "
+                cprint(f"  {marker} {name:<20} {model:<40} {base_url}", "cyan")
 
     # ------------------------------------------------- session files (/session)
 

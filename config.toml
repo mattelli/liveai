@@ -13,29 +13,26 @@ calibration_chunks = 20
 guard_factor = 1.0
 
 [brain] 
-# LLM configuration with OpenAI-compatible endpoint, envvar holding api-keys (also resolved from .env)
+# LLM configuration: the model connection (model, base_url, api_key_env) lives
+# in the models JSON file ([brain] models_file); its FIRST entry boots the
+# session and /model switches between the entries at runtime. The API keys are
+# read from the environment variables named by each entry (also resolved from .env).
+
+# Legacy, models-file-less setup (used only when models_file is unset):
+# base_url = "https://openrouter.ai/api/v1"
+# api_key_env = "OPENROUTER_API_KEY"
+# model = "z-ai/glm-5.3-flash"
+
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 history_path = "chat_history.log"
 sessions_dir = ".sessions"   # folder for /session store|list|load chat session files (JSON)
+models_file = "models.json"  # models: first entry boots, /model switches (JSON: name -> {api_key_env, base_url, model})
 # Vision support and the context window are auto-detected from the model metadata reported by the server (OpenAI /models endpoint, e.g. LMStudio max_context_length). 
 # Only set the optional overrides below for servers that do not report them:
 # vision = true
 # context_window = 8192
 max_response_tokens = 0.2                   # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
 temperature = 0.6
-
-api_key_env = "TOGETHER_API_KEY"
-base_url = "https://api.together.ai/v1"
-model = "Prism-ML/Ternary-Bonsai-27B"        # NO Vision, NO Thinking
-
-# api_key_env = "LMSTUDIO_API_KEY"
-# base_url = "http://localhost:1234/v1"
-# model = "qwen3.5-4b-uncensored-hauhaucs-aggressive"                   # OK Vision, NO Thinking
-
-# api_key_env = "OLLAMA_API_KEY"
-# base_url = "http://localhost:11434/v1"
-# model = "llama3.2:3b"                       # NO Vision, NO Thinking (quick simple test)
-
 
 [agent]
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."

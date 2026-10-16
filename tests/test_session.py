@@ -54,7 +54,7 @@ def test_help_lists_commands(capsys):
     s = make(["/help", "/quit"])
     s.run()
     out = capsys.readouterr().out
-    for cmd in ["/help", "/quit", "/clear", "/voice", "/tools", "/info", "/session"]:
+    for cmd in ["/help", "/quit", "/clear", "/voice", "/tools", "/info", "/model", "/session"]:
         assert cmd in out
     assert s.agent.acted == []
 

@@ -825,3 +825,210 @@ def test_brain_max_tokens_uses_server_context_window(monkeypatch):
     assert agent._context_window == 131072
     assert agent._context_window_source == "server"
     assert agent._max_tokens == int(131072 * 0.2)
+
+
+# ------------------------------------------- runtime model switching (/model)
+
+def _write_models_file(tmp_path, data, name="models.json"):
+    import json
+    path = tmp_path / name
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _switch_brain(monkeypatch, tmp_path, models_data, **brain_overrides):
+    """A Brain (offline stub client) with a models JSON file configured."""
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "key-a")
+    models_file = _write_models_file(tmp_path, models_data)
+    brain_overrides.setdefault("models_file", str(models_file))
+    return live_ai_mod.Brain(_remote_config(**brain_overrides))
+
+
+def test_load_model_entries_accepts_mapping_list_and_wrapper(tmp_path):
+    """All three JSON shapes: name->entry mapping, list, and a "models" wrapper."""
+    mapping = _write_models_file(tmp_path, {"a": {"model": "m-a"}}, name="mapping.json")
+    listing = _write_models_file(tmp_path, [
+        {"name": "b", "model": "m-b"}, "m-c"], name="listing.json")
+    wrapped = _write_models_file(tmp_path, {"models": {"d": {"model": "m-d"}}},
+                                 name="wrapped.json")
+
+    brain = _bare_info_brain()
+    brain.config = SimpleNamespace(brain=SimpleNamespace(models_file=str(mapping)))
+    assert brain.list_models() == {"a": {"model": "m-a"}}
+
+    brain.config = SimpleNamespace(brain=SimpleNamespace(models_file=str(listing)))
+    entries = brain.list_models()
+    assert entries["b"] == {"name": "b", "model": "m-b"}
+    assert entries["m-c"] == {"model": "m-c"}  # bare id selectable under its name
+
+    brain.config = SimpleNamespace(brain=SimpleNamespace(models_file=str(wrapped)))
+    assert brain.list_models() == {"d": {"model": "m-d"}}
+
+
+def test_load_model_entries_skips_unusable_rows(tmp_path):
+    """Entries without a name or a model id are dropped, not fatal."""
+    path = _write_models_file(tmp_path, {
+        "ok": {"model": "m"},
+        "no-model": {"api_key_env": "X"},
+        "": {"model": "m"},
+        "shorthand": "just-a-model-id",
+    })
+    brain = _bare_info_brain()
+    brain.config = SimpleNamespace(brain=SimpleNamespace(models_file=str(path)))
+    assert brain.list_models() == {
+        "ok": {"model": "m"},
+        "shorthand": {"model": "just-a-model-id"},
+    }
+
+
+def test_select_model_requires_configured_models_file():
+    brain = _bare_info_brain()
+    brain.config = SimpleNamespace(brain=SimpleNamespace())
+    with pytest.raises(ValueError, match="models_file"):
+        brain.select_model("anything")
+
+
+def test_select_model_missing_file_raises(tmp_path):
+    brain = _bare_info_brain()
+    brain.config = SimpleNamespace(
+        brain=SimpleNamespace(models_file=str(tmp_path / "nope.json")))
+    with pytest.raises(FileNotFoundError):
+        brain.select_model("anything")
+
+
+def test_select_model_invalid_json_raises(tmp_path):
+    path = tmp_path / "broken.json"
+    path.write_text("{not json", encoding="utf-8")
+    brain = _bare_info_brain()
+    brain.config = SimpleNamespace(brain=SimpleNamespace(models_file=str(path)))
+    with pytest.raises(ValueError, match="Invalid JSON"):
+        brain.select_model("anything")
+
+
+def test_select_model_unknown_name_lists_available(monkeypatch, tmp_path):
+    brain = _switch_brain(monkeypatch, tmp_path, {"a": {"model": "m-a"}})
+    with pytest.raises(KeyError, match="Available: a"):
+        brain.select_model("nope")
+    assert brain._model_name == "m-a"  # current model untouched
+
+
+def test_select_model_switches_client_endpoint_and_key(monkeypatch, tmp_path):
+    brain = _switch_brain(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},  # first entry: boots the session
+        "other": {"api_key_env": "OTHER_API_KEY",
+                  "base_url": "https://api.other/v1", "model": "other-model"},
+    })
+    monkeypatch.setenv("OTHER_API_KEY", "key-other")
+    assert brain._model_name == "boot-model"  # sanity: first entry booted
+
+    message = brain.select_model("other")
+
+    assert brain._model_name == "other-model"
+    assert brain._base_url == "https://api.other/v1"
+    assert brain._client.api_key == "key-other"
+    assert brain._model_entry == "other"
+    assert "other" in message and "other-model" in message
+
+
+def test_select_model_defaults_to_brain_connection_fields(monkeypatch, tmp_path):
+    """Entry without api_key_env/base_url keeps the [brain] connection values."""
+    brain = _switch_brain(monkeypatch, tmp_path, {"plain": {"model": "plain-model"}})
+
+    brain.select_model("plain")
+
+    assert brain._model_name == "plain-model"
+    assert brain._base_url == "https://api.test/v1"
+    assert brain._client.api_key == "key-a"  # from TEST_API_KEY
+
+
+def test_select_model_missing_api_key_raises_before_switch(monkeypatch, tmp_path):
+    brain = _switch_brain(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "locked": {"api_key_env": "MISSING_API_KEY",
+                   "base_url": "https://api.x/v1", "model": "m"}})
+    monkeypatch.delenv("MISSING_API_KEY", raising=False)
+    monkeypatch.setattr(live_ai_mod, "_load_env_file", lambda: None)
+
+    with pytest.raises(ValueError, match="MISSING_API_KEY"):
+        brain.select_model("locked")
+    assert brain._model_name == "boot-model"  # the old model stays active
+
+
+def test_select_model_entry_without_any_base_url_raises(tmp_path):
+    """Neither the entry nor [brain] carries a base_url -> refuse to switch."""
+    path = _write_models_file(tmp_path, {"orphan": {"model": "m"}})
+    brain = _bare_info_brain()
+    brain.config = SimpleNamespace(brain=SimpleNamespace(models_file=str(path)))
+    with pytest.raises(ValueError, match="base_url"):
+        brain.select_model("orphan")
+
+
+def test_select_model_resets_metadata_and_recomputes_caps(monkeypatch, tmp_path):
+    """Cached metadata is dropped; context window / vision / cap re-resolve."""
+    brain = _switch_brain(monkeypatch, tmp_path, {"big": {"model": "big-model"}},
+                          context_window=1000, max_response_tokens=0.2)
+    assert brain._model_name == "big-model"  # first entry booted the session
+    brain._model_meta = {"owned_by": "stale"}  # cached by a previous turn
+
+    brain.select_model("big")
+
+    assert not hasattr(brain, "_model_meta")  # cache dropped for the new server
+    assert brain._context_window == 1000
+    assert brain._max_tokens == 200  # ratio re-applied to the (new) window
+    assert brain._vision is False
+
+
+# ------------------------------------------------- boot from the models file
+
+def test_boot_uses_first_models_file_entry(monkeypatch, tmp_path):
+    """With models_file set, its first entry boots: no [brain] duplicates."""
+    brain = _switch_brain(monkeypatch, tmp_path, {
+        "first": {"api_key_env": "TEST_API_KEY",
+                  "base_url": "https://api.first/v1", "model": "first-model"},
+        "second": {"api_key_env": "TEST_API_KEY",
+                   "base_url": "https://api.second/v1", "model": "second-model"},
+    })
+    assert brain._model_name == "first-model"
+    assert brain._base_url == "https://api.first/v1"
+    assert brain._client.api_key == "key-a"
+    assert brain._model_entry == "first"
+
+
+def test_boot_first_entry_falls_back_to_brain_connection(monkeypatch, tmp_path):
+    """A first entry without base_url/api_key_env inherits them from [brain]."""
+    brain = _switch_brain(monkeypatch, tmp_path, {"only": {"model": "only-model"}})
+    assert brain._model_name == "only-model"
+    assert brain._base_url == "https://api.test/v1"
+    assert brain._client.api_key == "key-a"
+
+
+def test_boot_first_entry_missing_key_raises(monkeypatch, tmp_path):
+    """A non-resolvable key of the first entry fails startup (before .env)."""
+    path = _write_models_file(tmp_path, {
+        "locked": {"api_key_env": "MISSING_BOOT_KEY",
+                   "base_url": "https://api.x/v1", "model": "m"}})
+    monkeypatch.delenv("MISSING_BOOT_KEY", raising=False)
+    monkeypatch.setattr(live_ai_mod, "_load_env_file", lambda: None)
+    with pytest.raises(ValueError, match="MISSING_BOOT_KEY"):
+        live_ai_mod.Brain(_remote_config(models_file=str(path)))
+
+
+def test_boot_without_models_file_keeps_brain_keys(monkeypatch):
+    """Legacy setup: no models_file -> [brain] model/base_url/api_key_env boot."""
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "key-a")
+    agent = live_ai_mod.Brain(_remote_config())
+    assert agent._model_name == "test-model"
+    assert agent._base_url == "https://api.test/v1"
+    assert agent._client.api_key == "key-a"
+    assert not hasattr(agent, "_model_entry")
+
+
+def test_boot_without_models_file_requires_model_and_base_url(monkeypatch):
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    with pytest.raises(ValueError, match="base_url"):
+        live_ai_mod.Brain(_remote_config(base_url=""))
+    with pytest.raises(ValueError, match="model"):
+        live_ai_mod.Brain(_remote_config(model=""))

@@ -19,9 +19,15 @@ git clone https://huggingface.co/guillaumekln/faster-whisper-medium
 ## LLM backend (OpenAI-compatible API)
 Run AI models from API-key providers through any OpenAI-compatible chat API
 (OpenAI, Mistral, Groq, OpenRouter, DeepSeek, Together, Gemini, xAI, ...)
-with the `openai` client. See `config.toml` `[brain]` for model, `base_url`
-and `api_key_env`; the API key itself lives in the environment or a `.env`
-file (see `.env.example`), never in config.toml.
+with the `openai` client. See `config.toml` `[brain]` for the models JSON file
+(`models_file`) holding each model's `base_url` and `api_key_env`; the API
+keys themselves live in the environment or a `.env` file (see
+`.env.example`), never in config.toml. The first entry of the models file
+boots the session.
+
+Several models can be prepared in a JSON file and switched at runtime with the
+`/model` command - see [Model switching (`/model`)](#model-switching-model)
+below.
 
 ### Local models (LM Studio / Ollama servers)
 The same Brain also runs fully local models: both LM Studio and Ollama expose
@@ -523,6 +529,75 @@ The storage folder comes from `[brain] sessions_dir` in `config.toml`
 [brain]
 sessions_dir = ".sessions"
 ```
+
+## Model switching (`/model`)
+
+The active model can be changed at runtime with the `/model` command (a plain
+session command, not an agent tool) from a JSON file listing the selectable
+models. Each entry carries the connection details of one model:
+
+- `model` (required) — the model id sent to the server.
+- `api_key_env` (optional) — name of the environment variable holding the API
+  key (resolved from the environment and `.env`, never stored in the JSON).
+- `base_url` (optional) — the OpenAI-compatible endpoint.
+
+Missing `api_key_env`/`base_url` fall back to the values configured under
+`[brain]` in `config.toml`, so entries of one provider can carry only `model`.
+The file location comes from `[brain] models_file` (resolved relative to
+`config.toml`):
+
+```toml
+[brain]
+models_file = "models.json"
+```
+
+The **first entry of the file boots the session**: at startup the assistant
+connects to that entry's model/endpoint/key, so `[brain]` needs no duplicate
+`model`/`base_url`/`api_key_env` (those keys are only used by the legacy
+models-file-less setup). To change the startup model, reorder the entries in
+the JSON file.
+
+```json
+{
+  "glm-flash": {
+    "api_key_env": "OPENROUTER_API_KEY",
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "z-ai/glm-5.3-flash"
+  },
+  "llama32-local": {
+    "api_key_env": "OLLAMA_API_KEY",
+    "base_url": "http://localhost:11434/v1",
+    "model": "llama3.2:3b"
+  }
+}
+```
+
+Commands:
+
+- `/model` — list the selectable models (name, model id, endpoint) with the
+  currently active one marked `→`, plus the usage hint.
+- `/model <name>` — switch to that entry (name matching is case-insensitive).
+
+Switching rebuilds the OpenAI client for the entry's endpoint and key, keeps
+the conversation history, and re-resolves the model-dependent settings from
+the new server: context window and vision support (server-reported when
+available, `[brain]` overrides otherwise) and the per-generation token cap
+(`max_response_tokens` ratio re-applied to the new window). A failed switch
+(unknown name, missing file, missing API key, ...) never touches the current
+model: the error is reported and the session continues with the previous one.
+
+Notes:
+
+- The JSON file also accepts a list of entries (each carrying a `name`) and a
+  top-level `"models"` wrapper around either shape; a bare string stands for a
+  model id selectable under its own name.
+- The API key of the target model must be resolvable at switch time (set it in
+  `.env` or the environment); local servers still accept a dummy value.
+- The switch is validated before any state changes: an entry without any
+  `base_url`/`api_key_env` (entry and `[brain]` alike) is rejected.
+- The same validation applies at startup for the first entry: a missing file,
+  invalid JSON or a non-resolvable API key aborts the launch with a clear
+  message.
 
 ## Setup (Python 3.12.10)
 
