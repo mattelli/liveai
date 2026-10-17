@@ -2,7 +2,7 @@
 # ============================================
 # Live Assistant - Interactive Chat Launcher
 # ============================================
-# Activates the .liveai-cpu virtual environment and runs main-chat.py
+# Activates the .liveai-cpu virtual environment and runs main.py --chat
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
@@ -10,4 +10,4 @@ cd "$SCRIPT_DIR"
 source "../.liveai-cpu/bin/activate"
 
 echo "Loading Agent ..."
-python "../main-chat.py" "$@"
+python "../main.py" "--chat" "$@"
