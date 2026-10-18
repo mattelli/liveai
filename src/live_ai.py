@@ -1,9 +1,12 @@
+import copy
 import inspect
 import json
 import os
 import pathlib
+import threading
 import time
 import types
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type_hints
 from logging import getLogger
 from datetime import datetime, timezone
@@ -1237,3 +1240,68 @@ class Agent(Brain):
         finally:
             self._stream.stop_spinner()
             self._active_stream = None
+
+
+class AgentPool:
+    """Named sub-agents beside the running one (PLAN.md task 4).
+
+    Built from ``[agent] parallel_agents``/``agent_models`` (see
+    :func:`agent_pool_settings`): one quiet, tool-isolated ``Agent`` per
+    configured model, each resolved from the models JSON file entries
+    (``[brain] models_file``). ``ask`` delegates a prompt to one agent and
+    returns its final answer; ``ask_parallel`` fans out independent tasks on
+    a thread pool (LLM calls are I/O-bound, threads are enough).
+    """
+
+    def __init__(self, config: SimpleNamespace, settings: dict):
+        self.agents: dict[str, Agent] = {}
+        self.logger = getLogger("AgentPool")
+        if not getattr(config.brain, "models_file", None):
+            raise ValueError(
+                "Agent pool requires [brain] models_file: the agent_models "
+                "entries are models.json entry names")
+        for index, name in enumerate(settings["models"]):
+            agent_config = copy.deepcopy(config)
+            # Per-agent system prompt (optional, None keeps [brain] default).
+            prompt = settings["system_prompts"][index]
+            if prompt:
+                agent_config.brain.system_prompt = prompt
+            try:
+                # Boot falls back to the models file's first entry; switch to
+                # the configured entry (reuses the /model machinery, so the
+                # connection, context window and vision flag all re-resolve).
+                agent = Agent(agent_config, isolated_tools=True, quiet=True)
+                if agent._model_entry != name:
+                    agent.select_model(name)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Agent pool: unknown model entry {name!r} in the models file "
+                    f"([agent] agent_models)") from exc
+            except Exception as exc:
+                raise ValueError(
+                    f"Agent pool: cannot build agent {index + 1} from model entry "
+                    f"{name!r}: {exc}"
+                ) from exc
+            self.agents[name] = agent
+            self.logger.info("✅ Pool agent %d/%d ready: %s (%s)",
+                             index + 1, len(settings["models"]), name,
+                             agent._model_name)
+        if not self.agents:
+            raise ValueError("Agent pool: no agents configured "
+                             "([agent] parallel_agents/agent_models)")
+
+    def ask(self, agent_name: str, prompt: str) -> str:
+        """Delegate a prompt to one pooled agent; return its final answer."""
+        agent = self.agents.get(str(agent_name or "").strip())
+        if agent is None:
+            raise KeyError(
+                f"Unknown agent {agent_name!r}. Available: " + ", ".join(self.agents))
+        agent.act(prompt)
+        return agent.messages[-1]["content"]
+
+    def ask_parallel(self, tasks: list[tuple[str, str]]) -> list[str]:
+        """Run (agent_name, prompt) tasks concurrently; results in task order."""
+        if not tasks:
+            return []
+        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+            return list(executor.map(lambda task: self.ask(*task), tasks))
