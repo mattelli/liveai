@@ -1,4 +1,5 @@
 import io
+import pytest
 from pathlib import Path
 
 from rich.console import Console
@@ -265,3 +266,100 @@ def test_cprint_invokes_output_hook(capsys):
         set_output_hook(None)
     assert calls == [1]
     assert "banner" in capsys.readouterr().out
+
+
+# -------------------------------------------- tool-call block (dump_func_call)
+
+import src.common as common_mod  # noqa: E402
+
+
+def _plain():
+    """Neutralize the spinner output hook during block-print tests."""
+    common_mod.set_output_hook(None)
+
+
+def test_dump_func_call_success_green_multiline(capsys, monkeypatch):
+    monkeypatch.setattr(common_mod, "_call_lines_max", 8)
+    _plain()
+
+    @common_mod.dump_func_call
+    def search(query, n_results=5):
+        return "ok"
+
+    assert search("etf list") == "ok"
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line]
+    assert len(lines) == 4  # header + two parameters + status
+    assert "[CALL] search(" in lines[0]
+    assert "query = 'etf list'" in lines[1]
+    assert "n_results = 5" in lines[2]
+    assert "→ ok (" in lines[3]
+    # grey foreground on dark-green background (256-color 22), bold
+    assert all("\x1b[1;90;48;5;22m" in line for line in lines)
+
+
+def test_dump_func_call_failure_red_block(capsys, monkeypatch):
+    monkeypatch.setattr(common_mod, "_call_lines_max", 8)
+    _plain()
+
+    @common_mod.dump_func_call
+    def boom(path):
+        raise ValueError("bad path")
+
+    with pytest.raises(ValueError):
+        boom("/nope")
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line]
+    assert any("failed in" in line for line in lines)
+    assert any("bad path" in line for line in lines)
+    assert any("path = '/nope'" in line for line in lines)
+    # grey foreground on dark-red background (256-color 88)
+    assert all("\x1b[1;90;48;5;88m" in line for line in lines)
+
+
+def test_dump_func_call_caps_block_lines(capsys, monkeypatch):
+    monkeypatch.setattr(common_mod, "_call_lines_max", 5)
+    _plain()
+
+    @common_mod.dump_func_call
+    def many(a=1, b=2, c=3, d=4, e=5, f=6, g=7, h=8):
+        return "ok"
+
+    many()
+    out = capsys.readouterr().out
+    lines = [line for line in out.splitlines() if line]
+    assert len(lines) == 5  # header + 2 params + elision + status
+    assert any("… (+6 more parameters)" in line for line in lines)
+
+
+def test_dump_func_call_self_and_long_values(capsys, monkeypatch):
+    monkeypatch.setattr(common_mod, "_call_lines_max", 8)
+    _plain()
+
+    class Holder:
+        @common_mod.dump_func_call
+        def method(self, content, keep):
+            return "ok"
+
+    Holder().method("x" * 500, keep="y")
+    out = capsys.readouterr().out
+    assert "self" not in out
+    long_line = next(line for line in out.splitlines() if "content" in line)
+    assert len(long_line) < 200  # value truncated, block stays narrow
+    assert "…" in long_line
+
+
+def test_configure_ui_parses_call_lines_max(monkeypatch):
+    from types import SimpleNamespace as NS
+
+    monkeypatch.setattr(common_mod, "_call_lines_max", 8)
+    common_mod.configure_ui(NS(ui=NS(call_lines_max=3)))
+    assert common_mod._call_lines_max == 3
+    common_mod.configure_ui(NS(ui=NS(call_lines_max="12")))
+    assert common_mod._call_lines_max == 12
+    common_mod.configure_ui(NS(ui=NS(call_lines_max="bogus")))  # ignored
+    assert common_mod._call_lines_max == 12
+    common_mod.configure_ui(NS(ui=NS(call_lines_max=0)))  # unset -> keep
+    assert common_mod._call_lines_max == 12
+    common_mod.configure_ui(NS())  # no [ui] at all -> keep
+    assert common_mod._call_lines_max == 12

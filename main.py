@@ -23,6 +23,8 @@ def main(argv=None) -> int:
 
     from src.tools import configure as configure_tools  # inject config into tool modules
     configure_tools(config)
+    from src.common import configure_ui  # inject [ui] display settings
+    configure_ui(config)
 
     logging.basicConfig(
         level=config.logging.level if hasattr(config, "logging") and hasattr(config.logging, "level") else logging.WARNING,

@@ -386,7 +386,11 @@ def safe_filename(symbol: str) -> str:
 
 def dump_func_call(func):
     """
-    Decorator to print function call details with parameter names and shorted values.
+    Decorator to print the function call as a multi-line block: one
+    parameter per line (grey foreground). The block background is green on
+    success and red on failure, so the block is printed after the call
+    returns. ``[ui] call_lines_max`` caps the block height (parameters
+    beyond it are elided with a count).
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -394,9 +398,77 @@ def dump_func_call(func):
         bound_args = sig.bind_partial(*args, **kwargs)
         bound_args.apply_defaults()
         sel_args = [
-            (name, str(value)[:50]) for name, value in bound_args.arguments.items()
+            (name, value) for name, value in bound_args.arguments.items()
             if "self" not in str(name)
         ]
-        cprint(f"[CALL] {func.__name__}(" + ", ".join(f"{n}={v!r}" for n, v in sel_args) + ")", "grey", bold=True)
-        return func(*args, **kwargs)
+        started = time.monotonic()
+        try:
+            result = func(*args, **kwargs)
+        except Exception as exc:
+            _print_call_block(func.__name__, sel_args, failed=exc,
+                              elapsed=time.monotonic() - started)
+            raise
+        _print_call_block(func.__name__, sel_args, failed=None,
+                          elapsed=time.monotonic() - started)
+        return result
     return wrapper
+
+
+# Max lines of the [CALL] block ([ui] call_lines_max, see configure_ui).
+_call_lines_max: int = 8
+
+
+def configure_ui(config) -> None:
+    """Inject ``[ui]`` display settings for raw prints (tool-call blocks).
+
+    ``[ui] call_lines_max`` bounds the number of lines of the multi-line
+    ``[CALL]`` block (header + parameters + status line); unset/invalid
+    keeps the built-in default.
+    """
+    global _call_lines_max
+    try:
+        value = int(getattr(getattr(config, "ui", None), "call_lines_max", 0) or 0)
+    except (TypeError, ValueError):
+        value = 0
+    if value > 0:
+        _call_lines_max = value
+
+
+def _print_call_block(name: str, args: list[tuple[str, object]], *,
+                      failed: Exception | None, elapsed: float) -> None:
+    """Print one ``[CALL]`` block: grey foreground, dark green/red background.
+
+    One parameter per line (``repr`` keeps values single-line and escapes
+    embedded newlines), truncated per line; parameters beyond the
+    ``call_lines_max`` cap are elided with a count. The whole block is
+    padded to a uniform width so the background renders as a solid panel:
+    dark green (256-color 22) on success, dark red (256-color 88) on
+    failure; foreground is bold grey for readability on both.
+    """
+    if _output_hook is not None:
+        _output_hook()
+    value_width = 80
+    param_lines = [
+        f"  {param} = {repr(value)[:value_width]}{'…' if len(repr(value)) > value_width else ''}"
+        for param, value in args
+    ]
+    if failed is not None:
+        status = f") → failed in {elapsed:.1f}s: {str(failed)[:100]}"
+    else:
+        status = f") → ok ({elapsed:.1f}s)"
+    lines = [f"[CALL] {name}("] + param_lines + [status]
+    # Elide parameters beyond the configured block height: header + status
+    # + one elision line always stay visible (budget = cap - 3).
+    budget = max(_call_lines_max - 3, 1)
+    if len(param_lines) > budget:
+        hidden = len(param_lines) - budget
+        lines = ([f"[CALL] {name}("]
+                 + param_lines[:budget]
+                 + [f"  … (+{hidden} more parameters)"]
+                 + [status])
+    width = min(max(len(line) for line in lines), 120)
+    # Dark backgrounds (xterm-256): 22 = dark green, 88 = dark red.
+    background = "48;5;88" if failed is not None else "48;5;22"
+    for line in lines:
+        padded = line.ljust(width)
+        print(f"\033[1;90;{background}m{padded}\033[0m")
