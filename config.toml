@@ -34,6 +34,11 @@ models_file = "models.json"  # models: first entry boots, /model switches (JSON:
 max_response_tokens = 0.2                   # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
 temperature = 0.6
 
+# Chain-of-thought visualization: stream the model's reasoning while it thinks
+# Reasoning is display-only: it never enters the chat history or the spoken/returned answer.
+show_thinking = true
+max_thinking_tokens = 100                   # max tokens of thinking to visualize (0 = unlimited)
+
 [agent]
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
 max_act_rounds = 500                               # max tool-loop rounds per agent turn (default 100)

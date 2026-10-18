@@ -180,6 +180,23 @@ class StreamPrinter:
             return
         self._emit("\n" if started else line + "\n")
 
+    def feed_thinking(self, text: str) -> None:
+        """Stream chain-of-thought text in dim style ([brain] show_thinking).
+
+        Printed directly, without touching the fenced-code/plain-text state
+        of the main answer stream: reasoning always precedes the answer, and
+        the line state is reset between rounds (mark_line_clean). Marks the
+        line dirty so the spinner stays suppressed while thinking streams.
+        """
+        if not text:
+            return
+        with self._spin_lock:
+            self._erase_spinner_locked()
+            self.console.print(
+                text, end="", style="dim", highlight=False, soft_wrap=True
+            )
+            self._dirty_line = not text.endswith(chr(10))
+
     def _emit(self, text: str) -> None:
         with self._spin_lock:
             self._erase_spinner_locked()

@@ -561,13 +561,13 @@ def test_max_act_rounds_from_config(monkeypatch, tmp_path):
 
 def test_max_act_rounds_defaults_to_class_value_when_unset(monkeypatch, tmp_path):
     agent = _offline_agent(monkeypatch, tmp_path)  # no max_act_rounds key
-    assert agent.MAX_ACT_ROUNDS == 20
+    assert agent.MAX_ACT_ROUNDS == live_ai_mod.Agent.MAX_ACT_ROUNDS
 
 
 def test_max_act_rounds_zero_or_negative_falls_back(monkeypatch, tmp_path):
     agent = _offline_agent(monkeypatch, tmp_path,
                            agent_overrides={"max_act_rounds": 0})
-    assert agent.MAX_ACT_ROUNDS == 20
+    assert agent.MAX_ACT_ROUNDS == live_ai_mod.Agent.MAX_ACT_ROUNDS
 
 
 def test_max_act_rounds_load_config_round_trip(tmp_path):
@@ -581,3 +581,86 @@ def test_max_act_rounds_load_config_round_trip(tmp_path):
     assert config.agent.max_act_rounds == 100
     rounds = int(getattr(config.agent, "max_act_rounds", 0) or 0)
     assert (rounds if rounds > 0 else live_ai_mod.Agent.MAX_ACT_ROUNDS) == 100
+
+
+# ------------------------------- duplicate entries & same-agent parallelism
+
+
+def test_duplicate_model_entries_get_unique_keys(monkeypatch, tmp_path):
+    """Each agent_models entry owns its own isolated Agent instance.
+
+    Regression: duplicate names collapsed into one dict entry, so two
+    identical entries silently built a 1-agent pool.
+    """
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm", "glm"])
+
+    assert set(pool.agents) == {"glm", "glm#2"}
+    assert pool.agents["glm"] is not pool.agents["glm#2"]
+    assert pool.agents["glm"]._model_name == "glm-model"
+    assert pool.agents["glm#2"]._model_name == "glm-model"
+
+
+def test_ask_parallel_same_agent_runs_sequentially(monkeypatch, tmp_path):
+    """Tasks naming the same agent must never run act() concurrently.
+
+    Regression: two tasks on one agent interleaved the shared message
+    history, producing server-side "incomplete parallel tool-call group"
+    errors.
+    """
+    import threading
+    import time
+
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"])
+    agent = pool.agents["glm"]
+    agent._messages = [{"role": "system", "content": "s"}]
+
+    active = [0]
+    max_active = [0]
+
+    def tracking_act(prompt):
+        active[0] += 1
+        max_active[0] = max(max_active[0], active[0])
+        time.sleep(0.05)  # widen the window: concurrent act() would overlap
+        active[0] -= 1
+        agent._messages.append(
+            {"role": "assistant", "content": f"done: {prompt}"})
+
+    agent.act = tracking_act  # instance attr: ask() picks it up
+    results = pool.ask_parallel([("glm", "task a"), ("glm", "task b")])
+
+    assert results == ["done: task a", "done: task b"]  # task order kept
+    assert max_active[0] == 1  # strictly sequential on the shared agent
+
+
+def test_ask_parallel_distinct_agents_still_fan_out(monkeypatch, tmp_path):
+    """Distinct agents run concurrently (same-name tasks only serialize)."""
+    import threading
+
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+        "qwen": {"model": "qwen-model"},
+    }, models=["glm", "qwen"])
+    barrier = threading.Barrier(2, timeout=5)
+    started = []
+
+    def make_act(name):
+        def act(prompt):
+            started.append(name)
+            barrier.wait()  # both agents must be inside act() simultaneously
+            pool.agents[name]._messages.append(
+                {"role": "assistant", "content": f"{name}: {prompt}"})
+        return act
+
+    pool.agents["glm"].act = make_act("glm")
+    pool.agents["qwen"].act = make_act("qwen")
+    results = pool.ask_parallel([("glm", "a"), ("qwen", "b")])
+
+    assert results == ["glm: a", "qwen: b"]
+    assert sorted(started) == ["glm", "qwen"]

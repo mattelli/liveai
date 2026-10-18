@@ -586,6 +586,14 @@ available, `[brain]` overrides otherwise) and the per-generation token cap
 (unknown name, missing file, missing API key, ...) never touches the current
 model: the error is reported and the session continues with the previous one.
 
+### Chain-of-thought visualization
+
+Reasoning models expose their thinking while they generate (`reasoning_content`
+or `reasoning` stream fields, or inline istine tags). With `[brain] show_thinking = true`
+the thought chain is streamed live in dim text behind a `💭` marker, capped by
+`[brain] max_thinking_tokens` (0 = unlimited). Thinking is display-only: it never
+enters the chat history, the spoken reply or the returned answers.
+
 Notes:
 
 - The JSON file also accepts a list of entries (each carrying a `name`) and a

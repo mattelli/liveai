@@ -96,6 +96,23 @@ def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
     return max(1, int(context_window * ratio))
 
 
+def _thinking_token_cap(value) -> int:
+    """Resolve ``[brain] max_thinking_tokens`` into a visualization cap.
+
+    Bounds the number of chain-of-thought tokens that are streamed to the
+    console while the model is thinking (reasoning tokens are never part of
+    the answer, so this only limits what is shown, not what is generated).
+    Unset/0/negative disables the cap (show everything until the answer
+    starts); a non-integer value falls back to no cap instead of failing the
+    session - a broken display cap must not stop the agent.
+    """
+    try:
+        cap = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return cap if cap > 0 else 0
+
+
 def _default_tools(agent: "Brain") -> list[Callable]:
     """Tool set of the agent.
 
@@ -182,10 +199,14 @@ def _current_agent_name() -> str:
     return getattr(_TOOL_CONTEXT, "agent_name", "") or ""
 
 
+@dump_func_call
 def ask_agent(agent: str, prompt: str) -> str:
     """
     Delegate a task to a named sub-agent and return its final answer.
     The sub-agent runs its own tool loop to accomplish the task.
+    Valid agent names are the [agent] agent_models entry names from the
+    configuration (e.g. "ternary-bonsai"); the error message lists them
+    when a name is unknown.
     """
     if _POOL is None:
         return "Error: no agent pool configured (set [agent] parallel_agents)"
@@ -195,11 +216,15 @@ def ask_agent(agent: str, prompt: str) -> str:
         return f"Error: {exc}"
 
 
+@dump_func_call
 def run_parallel_agents(tasks: list[dict]) -> str:
     """
     Run several sub-agents concurrently. Each task is an object with
-    "agent" (name) and "prompt" (text) keys. Returns a JSON list of
-    {"agent", "prompt", "answer"} entries for aggregation.
+    "agent" (name) and "prompt" (text) keys. Valid agent names are the
+    [agent] agent_models entry names from the configuration (e.g.
+    "ternary-bonsai"); the error message lists them when a name is
+    unknown. Returns a JSON list of {"agent", "prompt", "answer"} entries
+    for aggregation.
     """
     if _POOL is None:
         return "Error: no agent pool configured (set [agent] parallel_agents)"
@@ -281,6 +306,11 @@ class OpenAICore:
             getattr(config.brain, "max_response_tokens", 0),
             self._context_window,
         )
+        # Chain-of-thought visualization ([brain] show_thinking/max_thinking_tokens).
+        self._show_thinking = bool(getattr(config.brain, "show_thinking", False))
+        self._max_thinking_tokens = _thinking_token_cap(
+            getattr(config.brain, "max_thinking_tokens", 0))
+        self._reset_thinking()
         self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
         ui = getattr(config, "ui", None)
         if getattr(self, "quiet", False):
@@ -964,6 +994,130 @@ class Brain(OpenAICore):
             kwargs["tools"] = tools
         return self._client.chat.completions.create(**kwargs)
 
+    ## chain-of-thought visualization ([brain] show_thinking) ##
+
+    _THINK_OPEN = "<think>"
+    _THINK_CLOSE = "</think>"
+
+    def _reset_thinking(self) -> None:
+        """Reset the per-turn chain-of-thought display state.
+
+        Called once per turn (``model_fragments``/``act``): the char counter
+        and truncation flag restart, and the ``ine``-tag machine begins
+        outside a thinking block with no held-back answer text.
+        """
+        self._thinking_chars = 0
+        self._thinking_truncated = False
+        self._thinking_header_shown = False
+        self._in_think_tag = False
+        self._pending_answer = ""
+
+    @staticmethod
+    def _reasoning_delta(delta: Any) -> str:
+        """Reasoning text of a stream chunk across the common delta fields.
+
+        OpenAI-compatible endpoints disagree on the field name: DeepSeek-style
+        servers (LM Studio, Together) use ``reasoning_content`` and
+        OpenRouter uses ``reasoning``. Empty string when the chunk carries no
+        reasoning.
+        """
+        for field in ("reasoning_content", "reasoning"):
+            text = getattr(delta, field, None)
+            if text:
+                return text
+        return ""
+
+    def _split_thinking(self, content: str) -> tuple[str, str]:
+        """Split a content chunk into (thinking, answer) around `istine` tags.
+
+        Some endpoints stream the chain of thought inline inside
+        `istine`...`ine` (raw Qwen3, LM Studio with reasoning parsing off)
+        instead of a dedicated reasoning delta field. Tags may split across
+        chunks: a trailing partial tag is held back in ``_pending_answer``
+        (prefixed to the next chunk) and :meth:`_flush_pending_answer` emits
+        it when the stream ends.
+        """
+        text = self._pending_answer + content
+        self._pending_answer = ""
+        thinking: list[str] = []
+        answer: list[str] = []
+        while text:
+            # Inside a think block we scan for the closing tag, outside for
+            # the opening one.
+            tag = self._THINK_CLOSE if self._in_think_tag else self._THINK_OPEN
+            idx = text.find(tag)
+            if idx == -1:
+                # Hold back a trailing partial tag (e.g. "<thi" outside or
+                # "</thi" inside a block) so a tag split across chunk
+                # boundaries cannot leak into the wrong stream.
+                held = ""
+                for k in range(len(tag) - 1, 0, -1):
+                    if text.endswith(tag[:k]):
+                        held = text[-k:]
+                        break
+                body = text[: len(text) - len(held)]
+                (thinking if self._in_think_tag else answer).append(body)
+                self._pending_answer = held
+                break
+            (thinking if self._in_think_tag else answer).append(text[:idx])
+            text = text[idx + len(tag):]
+            self._in_think_tag = not self._in_think_tag
+        return "".join(thinking), "".join(answer)
+
+    def _flush_pending_answer(self) -> str:
+        """Emit a held-back partial-tag tail when the stream ends."""
+        pending, self._pending_answer = self._pending_answer, ""
+        return pending
+
+    def _feed_thinking(self, text: str) -> None:
+        """Display one chain-of-thought chunk, honoring the token cap.
+
+        ``[brain] max_thinking_tokens`` bounds what is *visualized* per
+        generation round (the ~4 chars/token estimate matches
+        ``_context_usage``): once the cap is hit a truncation marker is shown
+        once and further thinking chunks of the round are dropped silently -
+        the model itself keeps thinking. The display state resets per round
+        (see ``_stream_round``), so every round gets a fresh budget.
+        """
+        if not text:
+            return
+        if not self._thinking_header_shown:
+            self._thinking_header_shown = True
+            self._stream.feed_thinking(chr(10) + "💭 ")
+        if self._thinking_truncated:
+            return  # cap already reached this round: drop further chunks
+        self._thinking_chars += len(text)
+        if self._max_thinking_tokens and self._thinking_chars > self._max_thinking_tokens * 4:
+            overflow = self._thinking_chars - self._max_thinking_tokens * 4
+            shown = text[: len(text) - overflow] if overflow < len(text) else ""
+            self._thinking_truncated = True
+            self._stream.feed_thinking(shown + " … (thinking truncated)")
+            return
+        self._stream.feed_thinking(text)
+
+    def _consume_delta(self, delta: Any) -> str:
+        """Route one stream delta to the thinking display / answer stream.
+
+        Reasoning (``reasoning_content``/``reasoning`` fields, or inline
+        ``ine`` tags inside ``content``) goes to the thinking display;
+        the return value is the answer text of the delta (may be empty).
+        With ``[brain] show_thinking`` off the answer passes through
+        unchanged - including any literal ``ine`` tags - exactly as before
+        the feature existed.
+        """
+        if not self._show_thinking:
+            return getattr(delta, "content", None) or ""
+        reasoning = self._reasoning_delta(delta)
+        if reasoning:
+            self._feed_thinking(reasoning)
+        content = getattr(delta, "content", None) or ""
+        if not content:
+            return ""
+        thinking, answer = self._split_thinking(content)
+        if thinking:
+            self._feed_thinking(thinking)
+        return answer
+
     def model_fragments(self, prompt: str):
         """
         Get response fragments as stream from the model for a given prompt.
@@ -972,6 +1126,7 @@ class Brain(OpenAICore):
         self.logger.info("Sending to Model [🤖: %s] ...", self._model_name)
         self._add_user_prompt(prompt)
         self._cancel_requested = False  # fresh turn
+        self._reset_thinking()
         self._stream.start_spinner("thinking")
         stream = self._stream_completion()
         self._active_stream = stream
@@ -981,9 +1136,16 @@ class Brain(OpenAICore):
                 if self._cancel_requested:
                     break
                 delta = self._stream_delta(chunk)
-                if delta is not None and delta.content:
-                    parts.append(delta.content)
-                    yield SimpleNamespace(content=delta.content)
+                if delta is None:
+                    continue
+                answer = self._consume_delta(delta)
+                if answer:
+                    parts.append(answer)
+                    yield SimpleNamespace(content=answer)
+            pending = self._flush_pending_answer()
+            if pending:  # trailing partial istine tag held back by _split_thinking
+                parts.append(pending)
+                yield SimpleNamespace(content=pending)
         finally:
             self._active_stream = None
             # Keep partial (or cancelled) output in the history.
@@ -1111,6 +1273,10 @@ class NullPrinter:
     def feed(self, content: str) -> None:
         self.buffer.append(content)
 
+    def feed_thinking(self, content: str) -> None:
+        """Chain-of-thought is display-only: quiet agents drop it."""
+        pass
+
     def flush(self) -> None:
         self.buffer.clear()
 
@@ -1215,6 +1381,9 @@ class Agent(Brain):
 
     def _stream_round(self, tools: list[dict]) -> tuple[str, list[dict]]:
         """Stream one completion round; return (text, accumulated tool calls)."""
+        # Fresh thinking-display budget per round: a multi-round act() turn
+        # would otherwise exhaust the cap in round 1 and show nothing later.
+        self._reset_thinking()
         stream = self._stream_completion(tools)
         self._active_stream = stream
         parts: list[str] = []
@@ -1226,9 +1395,10 @@ class Agent(Brain):
                 delta = self._stream_delta(chunk)
                 if delta is None:
                     continue
-                if delta.content:
-                    parts.append(delta.content)
-                    self._handle_fragment(delta.content)
+                answer = self._consume_delta(delta)
+                if answer:
+                    parts.append(answer)
+                    self._handle_fragment(answer)
                 for tc in getattr(delta, "tool_calls", None) or []:
                     slot = calls.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
                     if tc.id:
@@ -1236,6 +1406,10 @@ class Agent(Brain):
                     if tc.function:
                         slot["name"] += tc.function.name or ""
                         slot["arguments"] += tc.function.arguments or ""
+            pending = self._flush_pending_answer()
+            if pending:  # trailing partial istine tag held back by _split_thinking
+                parts.append(pending)
+                self._handle_fragment(pending)
         finally:
             self._active_stream = None
         return "".join(parts), [calls[i] for i in sorted(calls)]
@@ -1264,6 +1438,7 @@ class Agent(Brain):
         self.logger.info("Sending to Agent [🤖: %s] ...", self._model_name)
         self._add_user_prompt(prompt)
         self._cancel_requested = False  # fresh turn
+        self._reset_thinking()
         self._turn_started = time.monotonic()
         self._stream.start_spinner("thinking")
         try:
@@ -1325,6 +1500,16 @@ class AgentPool:
                 "Agent pool requires [brain] models_file: the agent_models "
                 "entries are models.json entry names")
         for index, name in enumerate(settings["models"]):
+            # Duplicate entry names get a unique key ("name#2", ...): each
+            # agent_models entry must own its own Agent instance, otherwise
+            # parallel tasks on the same key would run two act() loops on one
+            # shared history (message corruption -> server-side "incomplete
+            # parallel tool-call group" errors).
+            pool_name = name
+            suffix = 2
+            while pool_name in self.agents:
+                pool_name = f"{name}#{suffix}"
+                suffix += 1
             agent_config = copy.deepcopy(config)
             # Per-agent system prompt (optional, None keeps [brain] default).
             prompt = settings["system_prompts"][index]
@@ -1346,9 +1531,13 @@ class AgentPool:
                     f"Agent pool: cannot build agent {index + 1} from model entry "
                     f"{name!r}: {exc}"
                 ) from exc
-            self.agents[name] = agent
+            self.agents[pool_name] = agent
+            if pool_name != name:
+                self.logger.info(
+                    "ℹ️ Duplicate agent_models entry %r: pooled as %r "
+                    "(each entry is its own isolated agent)", name, pool_name)
             self.logger.info("✅ Pool agent %d/%d ready: %s (%s)",
-                             index + 1, len(settings["models"]), name,
+                             index + 1, len(settings["models"]), pool_name,
                              agent._model_name)
         if not self.agents:
             raise ValueError("Agent pool: no agents configured "
@@ -1381,7 +1570,11 @@ class AgentPool:
                      caller: str = "") -> list[str]:
         """Run (agent_name, prompt) tasks concurrently; results in task order.
 
-        See ``ask`` for the ``caller`` (nested-delegation) rule.
+        Tasks on *distinct* agents fan out on a thread pool; tasks naming the
+        *same* agent run sequentially on one worker: a single ``Agent`` must
+        never run ``act()`` concurrently (shared history/stream state would
+        corrupt tool-call groups -> server-side "incomplete parallel
+        tool-call group" errors). See ``ask`` for the ``caller`` rule.
         """
         if not tasks:
             return []
@@ -1389,5 +1582,20 @@ class AgentPool:
             raise ValueError(
                 f"Nested delegation refused: pooled agent {caller!r} cannot call "
                 "ask_agent/run_parallel_agents (would deadlock the pool)")
-        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-            return list(executor.map(lambda task: self.ask(*task), tasks))
+        # Group tasks by agent, preserving task order within each group.
+        by_agent: dict[str, list[tuple[int, str]]] = {}
+        for index, (name, prompt) in enumerate(tasks):
+            by_agent.setdefault(name, []).append((index, prompt))
+        results: list[str | None] = [None] * len(tasks)
+
+        def run_one_agent(name: str, items: list[tuple[int, str]]) -> None:
+            for index, prompt in items:
+                # caller is always "" here (nested delegation raised above).
+                results[index] = self.ask(name, prompt)
+
+        with ThreadPoolExecutor(max_workers=len(by_agent) or 1) as executor:
+            futures = [executor.submit(run_one_agent, name, items)
+                       for name, items in by_agent.items()]
+            for future in futures:
+                future.result()  # propagate the first task failure
+        return results

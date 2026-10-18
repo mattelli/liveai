@@ -1,3 +1,4 @@
+import io
 import pathlib
 from logging import getLogger
 from types import SimpleNamespace
@@ -1032,3 +1033,217 @@ def test_boot_without_models_file_requires_model_and_base_url(monkeypatch):
         live_ai_mod.Brain(_remote_config(base_url=""))
     with pytest.raises(ValueError, match="model"):
         live_ai_mod.Brain(_remote_config(model=""))
+
+
+## Chain-of-thought visualization ([brain] show_thinking / max_thinking_tokens) ##
+
+class _ThinkingRecorder:
+    """StreamPrinter stand-in that records thinking vs. answer text."""
+
+    def __init__(self):
+        self.thinking: list[str] = []
+        self.answer: list[str] = []
+
+    def feed_thinking(self, text):
+        self.thinking.append(text)
+
+    def feed(self, text):
+        self.answer.append(text)
+
+    def flush(self):
+        pass
+
+    def note(self, text):
+        pass
+
+    def start_spinner(self, note="working"):
+        pass
+
+    def stop_spinner(self):
+        pass
+
+    def mark_line_clean(self):
+        pass
+
+
+def _delta(delta_content=None, reasoning=None, reasoning_content=None):
+    """One OpenAI-style stream chunk with the given delta fields."""
+    return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
+        content=delta_content, reasoning=reasoning,
+        reasoning_content=reasoning_content, tool_calls=None))])
+
+
+def _thinking_agent(monkeypatch, chunks, **brain_overrides):
+    """Brain wired to a scripted completion stream (offline, via the stub)."""
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    agent = live_ai_mod.Brain(_remote_config(**brain_overrides))
+    agent._stream = _ThinkingRecorder()
+    client = agent._client
+    client.chat = SimpleNamespace(
+        completions=SimpleNamespace(create=lambda **kw: iter(chunks)))
+    return agent
+
+
+def _fragments(agent):
+    return [f.content for f in agent.model_fragments("hi")]
+
+
+def test_reasoning_content_streams_to_thinking_display(monkeypatch):
+    """DeepSeek-style reasoning_content deltas go to the display, not the answer."""
+    agent = _thinking_agent(monkeypatch, [
+        _delta(reasoning_content="let me "),
+        _delta(reasoning_content="think"),
+        _delta(delta_content="The answer"),
+        _delta(delta_content=" is 4"),
+    ], show_thinking=True)
+    assert _fragments(agent) == ["The answer", " is 4"]
+    assert "".join(agent._stream.thinking) == "\n💭 let me think"
+    # Reasoning never enters the chat history.
+    assert agent._messages[-1] == {"role": "assistant", "content": "The answer is 4"}
+
+
+def test_reasoning_field_openrouter_style(monkeypatch):
+    agent = _thinking_agent(monkeypatch, [
+        _delta(reasoning="pondering"),
+        _delta(delta_content="ok"),
+    ], show_thinking=True)
+    assert _fragments(agent) == ["ok"]
+    assert "".join(agent._stream.thinking) == "\n💭 pondering"
+
+
+def test_think_tags_split_across_chunks(monkeypatch):
+    """Raw istine-tagged content: tags may split at any chunk boundary."""
+    agent = _thinking_agent(monkeypatch, [
+        _delta(delta_content="<thi"),
+        _delta(delta_content="nk>deep "),
+        _delta(delta_content="thou"),
+        _delta(delta_content="ght</thi"),
+        _delta(delta_content="nk>final"),
+    ], show_thinking=True)
+    assert _fragments(agent) == ["final"]
+    assert "".join(agent._stream.thinking) == "\n💭 deep thought"
+    assert agent._messages[-1] == {"role": "assistant", "content": "final"}
+
+
+def test_show_thinking_off_keeps_tags_in_answer(monkeypatch):
+    """Feature off: content passes through unchanged (historical behavior)."""
+    agent = _thinking_agent(monkeypatch, [
+        _delta(delta_content="istinehiine"),
+    ])
+    assert _fragments(agent) == ["istinehiine"]
+    assert agent._stream.thinking == []
+
+
+def test_max_thinking_tokens_caps_display(monkeypatch):
+    """The cap bounds what is visualized; the marker is shown exactly once."""
+    agent = _thinking_agent(monkeypatch, [
+        _delta(reasoning_content="x" * 1000),
+        _delta(delta_content="answer"),
+    ], show_thinking=True, max_thinking_tokens=10)  # 10 tokens ~ 40 chars
+    assert _fragments(agent) == ["answer"]
+    shown = "".join(agent._stream.thinking)
+    assert shown.count("… (thinking truncated)") == 1
+    assert "x" * 1000 not in shown
+
+
+def test_thinking_token_cap_parsing():
+    cap = live_ai_mod._thinking_token_cap
+    assert cap(None) == 0      # unset -> unlimited
+    assert cap(0) == 0
+    assert cap(-5) == 0        # negative -> unlimited
+    assert cap(25) == 25
+    assert cap("40") == 40
+    assert cap("not-a-number") == 0  # bad value must not fail the session
+
+
+def test_thinking_state_resets_between_turns(monkeypatch):
+    """A second turn restarts the counter, tag state and header."""
+    agent = _thinking_agent(monkeypatch, [
+        _delta(reasoning_content="r1"), _delta(delta_content="a1"),
+    ], show_thinking=True)
+    assert _fragments(agent) == ["a1"]
+    first_turn_thinking = len(agent._stream.thinking)
+    assert agent._thinking_chars > 0
+    agent._client.chat.completions.create = lambda **kw: iter([
+        _delta(reasoning_content="r2"), _delta(delta_content="a2"),
+    ])
+    assert _fragments(agent) == ["a2"]
+    assert "".join(agent._stream.thinking[first_turn_thinking:]) == "\n💭 r2"
+    assert agent._thinking_chars == len("r2")
+
+
+def test_null_printer_drops_thinking():
+    """Quiet (pooled) agents never display reasoning."""
+    printer = live_ai_mod.NullPrinter()
+    printer.feed_thinking("secret thoughts")
+    assert printer.buffer == []
+
+
+def test_stream_printer_feed_thinking_prints_dim():
+    """feed_thinking prints without touching the answer-stream line state."""
+    from src.common import StreamPrinter
+    printer = StreamPrinter()
+    sink = io.StringIO()
+    printer.console.file = sink
+    printer.feed_thinking("thinking hard")
+    assert "thinking hard" in sink.getvalue()
+    # The answer state machinery is untouched: no fence pending, line empty.
+    assert printer._in_code is False
+    assert printer._line == ""
+
+
+def _tool_call_delta(name="model_info", arguments="{}"):
+    """One OpenAI-style stream chunk carrying a single tool call."""
+    return SimpleNamespace(choices=[SimpleNamespace(delta=SimpleNamespace(
+        content=None, reasoning=None, reasoning_content=None,
+        tool_calls=[SimpleNamespace(index=0, id="c1", type="function",
+                                    function=SimpleNamespace(name=name,
+                                                             arguments=arguments))]))])
+
+
+def _thinking_act_agent(monkeypatch, rounds, **brain_overrides):
+    """Agent (act loop) wired to scripted per-round completion streams."""
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    agent = live_ai_mod.Agent(_remote_config(**brain_overrides))
+    agent._stream = _ThinkingRecorder()
+    scripted = iter(rounds)
+    agent._client.chat = SimpleNamespace(
+        completions=SimpleNamespace(create=lambda **kw: iter(next(scripted))))
+    return agent
+
+
+def test_truncation_marker_printed_once(monkeypatch):
+    """After the cap, further reasoning chunks must be dropped silently."""
+    agent = _thinking_agent(monkeypatch, [
+        _delta(reasoning_content="a" * 100),
+        _delta(reasoning_content="b" * 100),
+        _delta(reasoning_content="c" * 100),
+        _delta(delta_content="answer"),
+    ], show_thinking=True, max_thinking_tokens=10)  # ~40 chars
+    assert _fragments(agent) == ["answer"]
+    shown = "".join(agent._stream.thinking)
+    assert shown.count("… (thinking truncated)") == 1
+    assert shown.count("💭") == 1
+
+
+def test_thinking_budget_resets_per_round(monkeypatch):
+    """Each act() round gets a fresh visualization budget (regression).
+
+    The per-turn budget made round 1 exhaust the cap so all later rounds of
+    a long tool-loop turn printed only truncation markers.
+    """
+    agent = _thinking_act_agent(monkeypatch, [
+        # Round 1: blows the cap, then requests a tool call.
+        [_delta(reasoning_content="x" * 1000), _tool_call_delta()],
+        # Round 2: fresh budget -> this reasoning must be visible again.
+        [_delta(reasoning_content="round two thinking"),
+         _delta(delta_content="final answer")],
+    ], show_thinking=True, max_thinking_tokens=10)
+    agent.act("hi")
+    shown = "".join(agent._stream.thinking)
+    assert shown.count("… (thinking truncated)") == 1  # once for round 1
+    assert "round two thinking" in shown               # round 2 budget fresh
+    assert shown.count("💭") == 2                      # header once per round
+    assert agent._messages[-1] == {"role": "assistant", "content": "final answer"}
