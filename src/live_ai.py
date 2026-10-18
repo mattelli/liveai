@@ -105,6 +105,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     """
     return [
         agent.model_info,
+        ask_agent, run_parallel_agents,
         recall_personal, store_personal, clear_chat,
         image_response, allow_speech,
         summarize_doc, query_document, image_search,
@@ -157,6 +158,67 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
         "system_prompts": (prompts + [None] * count)[:count],
         "quiet": bool(getattr(agent, "agent_quiet", True)),
     }
+
+
+## delegation tools (agent-as-tool) ##
+
+# The pool is injected by main.py via bind_agent_pool (same seam pattern as
+# src.tools.configure); the tools below are no-ops until it is bound.
+_POOL: "AgentPool | None" = None
+
+
+def bind_agent_pool(pool) -> None:
+    """Bind the AgentPool built in main.py so the delegation tools can use it."""
+    global _POOL
+    _POOL = pool
+
+
+# Per-thread name of the agent currently running a tool call ('' = main agent).
+# Thread-local because ask_parallel fans out on worker threads.
+_TOOL_CONTEXT = threading.local()
+
+
+def _current_agent_name() -> str:
+    """Name of the pooled agent currently executing a tool call ('' when main)."""
+    return getattr(_TOOL_CONTEXT, "agent_name", "") or ""
+
+
+def ask_agent(agent: str, prompt: str) -> str:
+    """
+    Delegate a task to a named sub-agent and return its final answer.
+    The sub-agent runs its own tool loop to accomplish the task.
+    """
+    if _POOL is None:
+        return "Error: no agent pool configured (set [agent] parallel_agents)"
+    try:
+        return _POOL.ask(agent, prompt, caller=_current_agent_name())
+    except (KeyError, ValueError) as exc:
+        return f"Error: {exc}"
+
+
+def run_parallel_agents(tasks: list[dict]) -> str:
+    """
+    Run several sub-agents concurrently. Each task is an object with
+    "agent" (name) and "prompt" (text) keys. Returns a JSON list of
+    {"agent", "prompt", "answer"} entries for aggregation.
+    """
+    if _POOL is None:
+        return "Error: no agent pool configured (set [agent] parallel_agents)"
+    if not isinstance(tasks, list) or not tasks:
+        return "Error: tasks must be a non-empty list of {agent, prompt} objects"
+    normalized: list[tuple[str, str]] = []
+    for index, task in enumerate(tasks):
+        if not isinstance(task, dict) or not task.get("agent") or not task.get("prompt"):
+            return f"Error: task[{index}] needs 'agent' and 'prompt' keys"
+        normalized.append((str(task["agent"]), str(task["prompt"])))
+    try:
+        results = _POOL.ask_parallel(normalized, caller=_current_agent_name())
+    except (KeyError, ValueError) as exc:
+        return f"Error: {exc}"
+    return json.dumps([
+        {"agent": agent, "prompt": prompt, "answer": answer}
+        for (agent, prompt), answer in zip(normalized, results)
+    ])
 
 
 def _load_env_file(dotenv_path: pathlib.Path | None = None) -> None:
@@ -1290,18 +1352,40 @@ class AgentPool:
             raise ValueError("Agent pool: no agents configured "
                              "([agent] parallel_agents/agent_models)")
 
-    def ask(self, agent_name: str, prompt: str) -> str:
-        """Delegate a prompt to one pooled agent; return its final answer."""
-        agent = self.agents.get(str(agent_name or "").strip())
+    def ask(self, agent_name: str, prompt: str, caller: str = "") -> str:
+        """Delegate a prompt to one pooled agent; return its final answer.
+
+        ``caller`` is the name of the agent currently running the tool call
+        ('' = the main agent). A pooled agent delegating to itself (or to any
+        pooled agent) is refused: nested delegation would deadlock the pool.
+        """
+        name = str(agent_name or "").strip()
+        agent = self.agents.get(name)
         if agent is None:
             raise KeyError(
-                f"Unknown agent {agent_name!r}. Available: " + ", ".join(self.agents))
-        agent.act(prompt)
+                f"Unknown agent {name!r}. Available: " + ", ".join(self.agents))
+        if caller:
+            raise ValueError(
+                f"Nested delegation refused: pooled agent {caller!r} cannot call "
+                "ask_agent/run_parallel_agents (would deadlock the pool)")
+        _TOOL_CONTEXT.agent_name = name  # visible to the sub-agent's tool calls
+        try:
+            agent.act(prompt)
+        finally:
+            _TOOL_CONTEXT.agent_name = ""
         return agent.messages[-1]["content"]
 
-    def ask_parallel(self, tasks: list[tuple[str, str]]) -> list[str]:
-        """Run (agent_name, prompt) tasks concurrently; results in task order."""
+    def ask_parallel(self, tasks: list[tuple[str, str]],
+                     caller: str = "") -> list[str]:
+        """Run (agent_name, prompt) tasks concurrently; results in task order.
+
+        See ``ask`` for the ``caller`` (nested-delegation) rule.
+        """
         if not tasks:
             return []
+        if caller:
+            raise ValueError(
+                f"Nested delegation refused: pooled agent {caller!r} cannot call "
+                "ask_agent/run_parallel_agents (would deadlock the pool)")
         with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
             return list(executor.map(lambda task: self.ask(*task), tasks))
