@@ -229,9 +229,13 @@ class OpenAICore:
         # src.tools.configure; the live state is bound here (getter first:
         # the messages list is re-read on every access, so clearing or
         # reassigning the session history stays visible to the tools).
+        # Isolated (pooled) agents skip the module-default binding: they get
+        # their own tool instances in Agent._build_tools, and binding here
+        # would hijack the main agent's module-default tools.
         from src.tools import memory as memory_tools, vision as vision_tools
-        memory_tools.bind_history(lambda: self._messages)
-        vision_tools.bind_session(self)
+        if not getattr(self, "isolated_tools", False):
+            memory_tools.bind_history(lambda: self._messages)
+            vision_tools.bind_session(self)
         self.logger.info("✅ Remote model '%s' connected.", self._model_name)
 
     ## models file: boot connection + /model switching ##
@@ -1037,9 +1041,34 @@ class Agent(Brain):
     MAX_ACT_ROUNDS = 20
 
     def _build_tools(self) -> list[Callable]:
-        return _default_tools(self)
+        """Tool set of this agent.
 
-    def __init__(self, config: SimpleNamespace):
+        Pooled agents (``isolated_tools``) get fresh per-agent instances of
+        the session-bound tools (memory, vision) so parallel agents never
+        share module-level state (PLAN.md task 2, accepted solution). The
+        main agent keeps the module-default instances bound by
+        ``Brain.__init__`` — existing behavior unchanged.
+        """
+        tools = _default_tools(self)
+        if not getattr(self, "isolated_tools", False):
+            return tools
+        from src.tools import memory as memory_mod, vision as vision_mod
+        memory = memory_mod.MemoryTools()
+        vision = vision_mod.VisionTools()
+        memory.bind_history(lambda: self._messages)
+        vision.bind_session(self)
+        per_agent = {
+            memory_mod.recall_personal: memory.recall_personal,
+            memory_mod.store_personal: memory.store_personal,
+            memory_mod.clear_chat: memory.clear_chat,
+            vision_mod.image_response: vision.image_response,
+        }
+        return [per_agent.get(tool, tool) for tool in tools]
+
+    def __init__(self, config: SimpleNamespace, isolated_tools: bool = False):
+        # Set before super().__init__: OpenAICore.__init__ skips the
+        # module-default tool binding for isolated (pooled) agents.
+        self.isolated_tools = isolated_tools
         super().__init__(config)
         self._fragments_buffer: list[str] = []
         self.logger.info(
