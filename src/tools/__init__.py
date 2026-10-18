@@ -50,7 +50,7 @@ from .summarize import summarize_doc
 from .docquery import query_document
 from .imgsearch import image_search
 from .corpora import list_corpora, query_corpus, store_corpus
-from .memory import clear_chat, recall_personal, store_personal
+from .memory import clear_chat, recall_memory, store_personal
 from .speech import allow_speech
 from .vision import image_response
 
@@ -61,7 +61,7 @@ __all__ = [
     "fetch_financial_data", "format_search_results", "generate_image",
     "get_working_directory", "image_response", "image_search",
     "list_corpora", "normalize_extensions", "query_corpus",
-    "query_document", "read_text_file", "recall_personal",
+    "query_document", "read_text_file", "recall_memory",
     "replace_string_in_file", "run_command", "safe_filename",
     "save_financial_chart", "search_in_file", "search_pattern_in_files",
     "select_financial_columns", "store_corpus", "store_personal",

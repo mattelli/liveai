@@ -1462,8 +1462,8 @@ def memory_seam(monkeypatch, tmp_path):
     return tools.memory
 
 
-def test_recall_personal_missing_file(memory_seam):
-    assert memory_seam.recall_personal() == "No personal data found!"
+def test_recall_memory_missing_file(memory_seam):
+    assert memory_seam.recall_memory() == "No personal data found!"
 
 
 def test_store_personal_appends_personal_messages(memory_seam, tmp_path):
@@ -1521,9 +1521,9 @@ def test_store_personal_without_user_message_returns_error(memory_seam, tmp_path
     assert not (tmp_path / "history.txt").exists()
 
 
-def test_recall_personal_returns_file_content(memory_seam, tmp_path):
+def test_recall_memory_returns_file_content(memory_seam, tmp_path):
     (tmp_path / "history.txt").write_text("At 01/01/2026 user wrote: personal", encoding="utf-8")
-    assert "personal" in memory_seam.recall_personal()
+    assert "personal" in memory_seam.recall_memory()
 
 
 def test_clear_chat_resets_history_in_place(memory_seam):

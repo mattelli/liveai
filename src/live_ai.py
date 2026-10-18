@@ -20,7 +20,7 @@ from src.tools import (
     generate_image, unload_image_generator,
     summarize_doc, query_document, image_search,
     list_corpora, store_corpus, query_corpus,
-    recall_personal, store_personal, clear_chat, allow_speech, image_response,
+    recall_memory, store_personal, clear_chat, allow_speech, image_response,
     download_file, extract_archive, zip_files,
     search_pattern_in_files, replace_string_in_file, search_in_file,
     fetch_financial_data, save_financial_chart,
@@ -123,7 +123,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     return [
         agent.model_info,
         ask_agent, run_parallel_agents,
-        recall_personal, store_personal, clear_chat,
+        recall_memory, store_personal, clear_chat,
         image_response, allow_speech,
         summarize_doc, query_document, image_search,
         list_corpora, store_corpus, query_corpus,
@@ -1322,7 +1322,7 @@ class Agent(Brain):
         memory.bind_history(lambda: self._messages)
         vision.bind_session(self)
         per_agent = {
-            memory_mod.recall_personal: memory.recall_personal,
+            memory_mod.recall_memory: memory.recall_memory,
             memory_mod.store_personal: memory.store_personal,
             memory_mod.clear_chat: memory.clear_chat,
             vision_mod.image_response: vision.image_response,
