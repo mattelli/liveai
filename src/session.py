@@ -581,7 +581,13 @@ class ConversationSession:
             if self._quit_on_prompt_interrupt
             else " Ctrl+C stops a response; Ctrl+D quits."
         )
-        plain = f"Agent ready. Tools are {tools}.{hint}"
+        multiline = self._multiline_enabled()
+        input_hint = (
+            "Esc+Enter accepts (multiline on)"
+            if multiline
+            else "Enter accepts (multiline off)"
+        )
+        plain = f"Agent ready. Tools are {tools}. Input: {input_hint}.{hint}"
         if ui is not None and not getattr(ui, "banner", True):
             cprint(plain, "green")
             return
@@ -598,6 +604,10 @@ class ConversationSession:
                 f"tools {tools} · /help commands · Ctrl+C stop"
                 + ("" if self._quit_on_prompt_interrupt else " · Ctrl+D quit")
             )
+            lines.append(
+                f"input multiline {'on' if multiline else 'off'} · "
+                + ("Esc+Enter accepts" if multiline else "Enter accepts")
+            )
             Console().print(
                 Panel(
                     "\n".join(lines),
@@ -609,3 +619,8 @@ class ConversationSession:
             )
         except ImportError:  # pragma: no cover - rich is a hard dependency
             cprint(plain, "green")
+
+    def _multiline_enabled(self) -> bool:
+        """``[input] multiline`` from config.toml (False when unset)."""
+        input_cfg = getattr(getattr(self.agent, "config", None), "input", None)
+        return bool(getattr(input_cfg, "multiline", False))
