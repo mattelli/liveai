@@ -197,3 +197,100 @@ def test_tool_names_unchanged_for_pooled_agent(monkeypatch, tmp_path):
     names = {t.__name__ for t in agent.tools}
     assert {"recall_personal", "store_personal", "clear_chat",
             "image_response"} <= names
+
+
+# ------------------------------------------------------ task 3: quiet mode
+
+
+class _SpeechRecorder:
+    def __init__(self):
+        self.spoken = []
+
+    def speak(self, text):
+        self.spoken.append(text)
+
+
+class _QuietRoundStream:
+    """Minimal stream interface for act() round-loop tests."""
+
+    def start_spinner(self, note):
+        pass
+
+    def stop_spinner(self):
+        pass
+
+    def flush(self):
+        pass
+
+    def mark_line_clean(self):
+        pass
+
+    def note(self, text):
+        pass
+
+
+def _quiet_act_agent(monkeypatch, tmp_path, rounds):
+    """A quiet agent whose completion rounds are scripted like _bare_act_agent."""
+    agent = _offline_agent(monkeypatch, tmp_path, isolated_tools=True, quiet=True)
+    agent._stream = _QuietRoundStream()
+    agent._context_window = 1024
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent.tool_definitions = []
+    agent._tool_impls = {}
+    scripted = iter(rounds)
+
+    def fake_round(tools):
+        return next(scripted)
+
+    agent._stream_round = fake_round
+    return agent
+
+
+def test_quiet_agent_never_speaks(monkeypatch, tmp_path):
+    import src.tools.speech as speech_mod
+
+    recorder = _SpeechRecorder()
+    monkeypatch.setattr(speech_mod, "_speech_generator", recorder)
+    agent = _quiet_act_agent(monkeypatch, tmp_path, [("hello there", [])])
+
+    agent.act("hi")
+
+    assert recorder.spoken == []  # quiet: no speech even on a normal turn
+
+
+def test_quiet_agent_writes_nothing_to_stdout(monkeypatch, tmp_path, capsys):
+    agent = _quiet_act_agent(monkeypatch, tmp_path, [("hello there", [])])
+
+    agent.act("hi")
+
+    assert capsys.readouterr().out == ""
+
+
+def test_quiet_agent_still_buffers_and_answers(monkeypatch, tmp_path):
+    agent = _quiet_act_agent(monkeypatch, tmp_path, [("hello there", [])])
+
+    agent.act("hi")
+
+    assert agent._messages[-1] == {"role": "assistant", "content": "hello there"}
+
+
+def test_non_quiet_agent_still_speaks(monkeypatch, tmp_path):
+    import src.tools.speech as speech_mod
+
+    recorder = _SpeechRecorder()
+    monkeypatch.setattr(speech_mod, "_speech_generator", recorder)
+    agent = _offline_agent(monkeypatch, tmp_path)  # quiet=False by default
+    agent._stream = _QuietRoundStream()
+    agent._context_window = 1024
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent.tool_definitions = []
+    agent._tool_impls = {}
+    # fragments accumulated by the streamed round (the scripted fake bypasses
+    # _handle_fragment, so pre-fill the buffer like a streamed round would)
+    agent._fragments_buffer = ["full"]
+    scripted = iter([("full", [])])
+    agent._stream_round = lambda tools: next(scripted)
+
+    agent.act("hi")
+
+    assert recorder.spoken == ["full"]

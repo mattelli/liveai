@@ -219,10 +219,15 @@ class OpenAICore:
         )
         self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
         ui = getattr(config, "ui", None)
-        self._stream = StreamPrinter(
-            text_color=_validated_style(getattr(ui, "assistant_color", None)),
-            code_theme=_validated_code_theme(getattr(ui, "code_theme", None)),
-        )
+        if getattr(self, "quiet", False):
+            # Quiet (pooled) agents buffer fragments instead of printing:
+            # parallel act() calls must not interleave on the console.
+            self._stream = NullPrinter()
+        else:
+            self._stream = StreamPrinter(
+                text_color=_validated_style(getattr(ui, "assistant_color", None)),
+                code_theme=_validated_code_theme(getattr(ui, "code_theme", None)),
+            )
         self._cancel_requested = False
         self._active_stream = None
         # Session-bound tool modules: their config comes from main.py via
@@ -1029,6 +1034,35 @@ class Brain(OpenAICore):
         return "\n".join(lines)
 
 
+class NullPrinter:
+    """StreamPrinter stand-in for quiet (pooled) agents: buffer only, no console.
+
+    Keeps the StreamPrinter interface (feed/flush/note/spinner/mark_line_clean)
+    so Agent code paths stay unchanged; nothing is written to stdout.
+    """
+
+    def __init__(self) -> None:
+        self.buffer: list[str] = []
+
+    def feed(self, content: str) -> None:
+        self.buffer.append(content)
+
+    def flush(self) -> None:
+        self.buffer.clear()
+
+    def note(self, text: str) -> None:
+        pass
+
+    def start_spinner(self, note: str = "working") -> None:
+        pass
+
+    def stop_spinner(self) -> None:
+        pass
+
+    def mark_line_clean(self) -> None:
+        pass
+
+
 class Agent(Brain):
     """
     Agent that extends the Brain with OpenAI function-calling tool usage.
@@ -1065,10 +1099,13 @@ class Agent(Brain):
         }
         return [per_agent.get(tool, tool) for tool in tools]
 
-    def __init__(self, config: SimpleNamespace, isolated_tools: bool = False):
+    def __init__(self, config: SimpleNamespace, isolated_tools: bool = False,
+                 quiet: bool = False):
         # Set before super().__init__: OpenAICore.__init__ skips the
-        # module-default tool binding for isolated (pooled) agents.
+        # module-default tool binding for isolated (pooled) agents, and
+        # OpenAICore.__init__ builds the stream printer (quiet -> NullPrinter).
         self.isolated_tools = isolated_tools
+        self.quiet = quiet
         super().__init__(config)
         self._fragments_buffer: list[str] = []
         self.logger.info(
@@ -1095,16 +1132,17 @@ class Agent(Brain):
     def _handle_round_end(self, round_index: int = 0) -> None:
         context_usage_percentage, context_window = self._context_usage()
         self._stream.flush()  # keep the spinner alive across rounds
-        cprint("")
-        stats = f"context {context_usage_percentage:.1f}% [{int(context_window / 1000)}k]"
-        started = getattr(self, "_turn_started", None)
-        if started is not None:
-            stats += f" · {time.monotonic() - started:.1f}s"
-        crule(stats)
+        if not getattr(self, "quiet", False):
+            cprint("")
+            stats = f"context {context_usage_percentage:.1f}% [{int(context_window / 1000)}k]"
+            started = getattr(self, "_turn_started", None)
+            if started is not None:
+                stats += f" · {time.monotonic() - started:.1f}s"
+            crule(stats)
         self._stream.mark_line_clean()  # spinner may resume for the next round
         self._stream.note("working")
         response = " ".join(self._fragments_buffer).strip()
-        if not self._cancel_requested:
+        if not getattr(self, "quiet", False) and not self._cancel_requested:
             speech_tools.speak_if_enabled(response)
         self._fragments_buffer.clear()
 
@@ -1154,7 +1192,8 @@ class Agent(Brain):
         Perform an action based on the input prompt.
         The response may involve using tools or just generating a text.
         """
-        cprint(f"\n🤖 [{self._model_name}]", "grey")
+        if not getattr(self, "quiet", False):
+            cprint(f"\n🤖 [{self._model_name}]", "grey")
         self.logger.info("Sending to Agent [🤖: %s] ...", self._model_name)
         self._add_user_prompt(prompt)
         self._cancel_requested = False  # fresh turn
