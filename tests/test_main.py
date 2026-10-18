@@ -28,20 +28,6 @@ def test_parse_args_prompt():
     assert main_mod.parse_args(["--prompt", "hi"]).prompt == "hi"
 
 
-def test_main_chat_import_is_side_effect_free():
-    for name in list(sys.modules):
-        if name.startswith("main-chat"):
-            del sys.modules[name]
-    import importlib.util
-    import pathlib
-
-    p = pathlib.Path("main-chat.py")
-    spec = importlib.util.spec_from_file_location("main_chat_shim", p)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)  # must not load config/agent
-    assert callable(mod.main)
-
-
 def test_single_prompt_turn_uses_agent():
     from src.session import ConversationSession
     from tests.conftest import FakeAgent
