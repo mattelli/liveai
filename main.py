@@ -33,6 +33,7 @@ def main(argv=None) -> int:
     from src.live_ai import Agent  # lazy import: keeps `import main` side-effect free
 
     agent = Agent(config=config)
+    _setup_agent_pool(config)  # no-op when [agent] parallel_agents = 0
     reader = None
 
     try:
@@ -72,6 +73,26 @@ def main(argv=None) -> int:
     finally:
         if reader is not None:
             reader.close()
+
+
+def _setup_agent_pool(config) -> None:
+    """Build the multi-agent pool from ``[agent]`` and bind it to the tools.
+
+    No-op when ``parallel_agents`` is 0/missing, so single-agent setups are
+    untouched. Failures raise: a misconfigured pool must not start silently.
+    """
+    from src.live_ai import AgentPool, bind_agent_pool
+
+    agent_cfg = getattr(config, "agent", None)
+    n = getattr(agent_cfg, "parallel_agents", 0) or 0
+    if not n:
+        return
+    models = list(getattr(agent_cfg, "agent_models", []) or [])
+    if len(models) < n:
+        raise ValueError(
+            f"[agent] parallel_agents={n} but agent_models has only {len(models)} "
+            "entries: add one models.json entry name per worker agent")
+    bind_agent_pool(AgentPool(config, models[:n]))
 
 
 def _chat_label(config) -> str:
