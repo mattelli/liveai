@@ -194,7 +194,7 @@ def test_main_agent_keeps_module_default_tools(monkeypatch, tmp_path):
 
     mem = [t for t in agent.tools if getattr(t, "__module__", "") == memory_mod.__name__]
     vis = [t for t in agent.tools if getattr(t, "__module__", "") == vision_mod.__name__]
-    assert mem == [memory_mod.recall_memory, memory_mod.store_personal,
+    assert mem == [memory_mod.recall_memory, memory_mod.store_memory,
                    memory_mod.clear_chat]
     assert vis == [vision_mod.image_response]
 
@@ -202,7 +202,7 @@ def test_main_agent_keeps_module_default_tools(monkeypatch, tmp_path):
 def test_tool_names_unchanged_for_pooled_agent(monkeypatch, tmp_path):
     agent = _offline_agent(monkeypatch, tmp_path, isolated_tools=True)
     names = {t.__name__ for t in agent.tools}
-    assert {"recall_memory", "store_personal", "clear_chat",
+    assert {"recall_memory", "store_memory", "clear_chat",
             "image_response"} <= names
 
 

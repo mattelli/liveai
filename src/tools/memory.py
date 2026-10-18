@@ -1,6 +1,6 @@
 """Personal-memory and conversation-history tools.
 
-``store_personal`` appends personal notes from the conversation to a history
+``store_memory`` appends personal notes from the conversation to a history
 file, ``recall_memory`` reads them back, and ``clear_chat`` resets the live
 conversation (re-seeded with the recalled personal data).
 
@@ -27,7 +27,7 @@ from src.common import dump_func_call
 
 __all__ = [
     "MemoryTools", "configure", "bind_history",
-    "recall_memory", "store_personal", "clear_chat",
+    "recall_memory", "store_memory", "clear_chat",
 ]
 
 _config_cache = None      # [brain] + [agent] sections injected via configure()
@@ -103,7 +103,7 @@ class MemoryTools:
             return history.read_text(encoding="utf-8")
 
     @dump_func_call
-    def store_personal(self, content: str = "") -> str:
+    def store_memory(self, content: str = "") -> str:
         """
         Store the user personal content to a text file for later recall with
         recall_memory. Useful when the users explicitly mention that the
@@ -196,9 +196,9 @@ def recall_memory() -> str:
     return _default.recall_memory()
 
 
-def store_personal(content: str = "") -> str:
+def store_memory(content: str = "") -> str:
     """Store the user personal content (module-default instance)."""
-    return _default.store_personal(content)
+    return _default.store_memory(content)
 
 
 def clear_chat() -> str:
