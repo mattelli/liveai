@@ -121,6 +121,7 @@ class StreamPrinter:
         self._spin_note = ""
         self._spin_t0 = 0.0
         self._dirty_line = False     # cursor is inside streamed text
+        self._thinking_pending = False  # 💭 shown, answer text not yet started
         self._spin_lock = threading.Lock()
         self._spin_stop = threading.Event()
         self._spin_thread = None
@@ -196,10 +197,14 @@ class StreamPrinter:
                 text, end="", style="dim", highlight=False, soft_wrap=True
             )
             self._dirty_line = not text.endswith(chr(10))
+            self._thinking_pending = True
 
     def _emit(self, text: str) -> None:
         with self._spin_lock:
             self._erase_spinner_locked()
+            if self._thinking_pending:  # first answer text after the 💭 dump
+                self._thinking_pending = False
+                self.console.print(end="\n\n")  # blank line: thinking | answer
             self.console.print(
                 text, end="", style=self.text_color, highlight=False, soft_wrap=True
             )
@@ -469,6 +474,7 @@ def _print_call_block(name: str, args: list[tuple[str, object]], *,
     width = min(max(len(line) for line in lines), 120)
     # Dark backgrounds (xterm-256): 22 = dark green, 88 = dark red.
     background = "48;5;88" if failed is not None else "48;5;22"
+    print()  # blank separator line, outside the colored block
     for line in lines:
         padded = line.ljust(width)
         print(f"\033[1;90;{background}m{padded}\033[0m")

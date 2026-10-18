@@ -288,14 +288,16 @@ def test_dump_func_call_success_green_multiline(capsys, monkeypatch):
 
     assert search("etf list") == "ok"
     out = capsys.readouterr().out
-    lines = [line for line in out.splitlines() if line]
-    assert len(lines) == 4  # header + two parameters + status
-    assert "[CALL] search(" in lines[0]
-    assert "query = 'etf list'" in lines[1]
-    assert "n_results = 5" in lines[2]
-    assert "→ ok (" in lines[3]
+    lines = out.splitlines()
+    assert lines[0] == ""  # blank separator line before the block
+    body = [line for line in lines if line]
+    assert len(body) == 4  # header + two parameters + status
+    assert "\x1b[1;90;48;5;22m[CALL] search(" in body[0]
+    assert "query = 'etf list'" in body[1]
+    assert "n_results = 5" in body[2]
+    assert "→ ok (" in body[3]
     # grey foreground on dark-green background (256-color 22), bold
-    assert all("\x1b[1;90;48;5;22m" in line for line in lines)
+    assert all("\x1b[1;90;48;5;22m" in line for line in body)
 
 
 def test_dump_func_call_failure_red_block(capsys, monkeypatch):
@@ -363,3 +365,22 @@ def test_configure_ui_parses_call_lines_max(monkeypatch):
     assert common_mod._call_lines_max == 12
     common_mod.configure_ui(NS())  # no [ui] at all -> keep
     assert common_mod._call_lines_max == 12
+
+
+def test_stream_printer_blank_line_between_thinking_and_answer(capsys):
+    """The first answer text after a 💭 dump starts on a fresh line."""
+    printer = StreamPrinter()
+    sink = io.StringIO()
+    printer.console.file = sink
+    printer.feed_thinking("pondering")
+    printer.feed("the answer")
+    out = sink.getvalue()
+    # thinking text, blank separator, then the answer
+    assert "pondering" in out
+    assert "\n\n" in out
+    assert out.index("pondering") < out.rindex("the answer")
+    # the separator fires only once: subsequent answer chunks are contiguous
+    printer.feed(" more")
+    out = sink.getvalue()
+    assert "the answer more" in out
+    assert out.count("\n\n") == 1
