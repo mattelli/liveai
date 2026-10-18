@@ -41,6 +41,7 @@ parallel_agents = 1                # extra agents beside the running one (0 = of
 agent_models = ["ollama-llama32"]                  # models.json entry names, one per agent
 # agent_system_prompts = []        # optional per-agent system prompts
 # agent_quiet = true               # workers don't print/speak (default true)
+max_act_rounds = 100               # max tool-loop rounds per agent turn (default 20)
 
 [speech_gen]
 model_path = ".res/voices/en_US-hfc_female-medium.onnx"

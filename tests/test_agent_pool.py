@@ -123,11 +123,13 @@ def test_load_config_round_trips_agent_pool_keys(tmp_path):
 # ------------------------------------------------- task 2: per-agent tools
 
 
-def _offline_agent(monkeypatch, tmp_path, **kwargs):
+def _offline_agent(monkeypatch, tmp_path, agent_overrides=None, **kwargs):
     """A real Agent built offline (stubbed openai client).
 
-    Also configures the memory/vision tool modules with a tmp history path,
-    since ``[brain] history_path`` lives in the module-level config cache.
+    ``agent_overrides`` are merged into the ``[agent]`` config section (e.g.
+    ``{"max_act_rounds": 100}``). Also configures the memory/vision tool
+    modules with a tmp history path, since ``[brain] history_path`` lives in
+    the module-level config cache.
     """
     from src.tools import memory as memory_mod, vision as vision_mod
     from tests.test_live_ai import _fake_openai, _remote_config
@@ -139,7 +141,11 @@ def _offline_agent(monkeypatch, tmp_path, **kwargs):
                               system_prompt="be helpful"),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
     ))
-    return live_ai_mod.Agent(_remote_config(), **kwargs)
+    config = _remote_config()
+    if agent_overrides:
+        config.agent = SimpleNamespace(
+            bootstrap_prompt="bootstrap", **agent_overrides)
+    return live_ai_mod.Agent(config, **kwargs)
 
 
 def test_pooled_agent_gets_own_memory_and_vision_instances(monkeypatch, tmp_path):
@@ -542,3 +548,36 @@ def test_pooled_agent_act_sets_thread_local_name(monkeypatch, tmp_path):
     pool.ask("glm", "hi")
     assert seen["name"] == "glm"
     assert live_ai_mod._current_agent_name() == ""  # cleared afterwards
+
+
+# ------------------------------------------- max_act_rounds from [agent] config
+
+
+def test_max_act_rounds_from_config(monkeypatch, tmp_path):
+    agent = _offline_agent(monkeypatch, tmp_path,
+                           agent_overrides={"max_act_rounds": 100})
+    assert agent.MAX_ACT_ROUNDS == 100
+
+
+def test_max_act_rounds_defaults_to_class_value_when_unset(monkeypatch, tmp_path):
+    agent = _offline_agent(monkeypatch, tmp_path)  # no max_act_rounds key
+    assert agent.MAX_ACT_ROUNDS == 20
+
+
+def test_max_act_rounds_zero_or_negative_falls_back(monkeypatch, tmp_path):
+    agent = _offline_agent(monkeypatch, tmp_path,
+                           agent_overrides={"max_act_rounds": 0})
+    assert agent.MAX_ACT_ROUNDS == 20
+
+
+def test_max_act_rounds_load_config_round_trip(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(textwrap.dedent("""
+        [agent]
+        bootstrap_prompt = "hello"
+        max_act_rounds = 100
+    """), encoding="utf-8")
+    config = load_config(config_file)
+    assert config.agent.max_act_rounds == 100
+    rounds = int(getattr(config.agent, "max_act_rounds", 0) or 0)
+    assert (rounds if rounds > 0 else live_ai_mod.Agent.MAX_ACT_ROUNDS) == 100

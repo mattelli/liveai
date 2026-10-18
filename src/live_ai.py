@@ -1137,7 +1137,7 @@ class Agent(Brain):
     answers without tool calls.
     """
 
-    MAX_ACT_ROUNDS = 20
+    MAX_ACT_ROUNDS = 20  # fallback when [agent] max_act_rounds is unset/0
 
     def _build_tools(self) -> list[Callable]:
         """Tool set of this agent.
@@ -1172,6 +1172,9 @@ class Agent(Brain):
         self.isolated_tools = isolated_tools
         self.quiet = quiet
         super().__init__(config)
+        # Per-agent round limit from [agent] max_act_rounds (0/unset -> class default).
+        rounds = int(getattr(getattr(config, "agent", None), "max_act_rounds", 0) or 0)
+        self.MAX_ACT_ROUNDS = rounds if rounds > 0 else type(self).MAX_ACT_ROUNDS
         self._fragments_buffer: list[str] = []
         self.logger.info(
             "✅ Agent with Model '%s' initialized. Setting up tools ...",
