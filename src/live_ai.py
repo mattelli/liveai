@@ -117,6 +117,45 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     ]
 
 
+def _split_list(value) -> list[str]:
+    """Normalize a pool setting: comma-separated string or list -> list."""
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def agent_pool_settings(config: SimpleNamespace) -> dict:
+    """Resolve the ``[agent]`` multi-agent pool settings (backward compatible).
+
+    Returns ``{"count", "models", "system_prompts", "quiet"}`` where ``count``
+    is the number of extra agents beside the running one, ``models`` the
+    models.json entry names (one per agent, truncated to ``count``),
+    ``system_prompts`` optional per-agent prompts (padded with ``None``) and
+    ``quiet`` whether workers must not print/speak (default ``True``).
+    Missing keys or a missing ``[agent]`` section keep the single-agent
+    behavior (``count = 0``).
+
+    ``agent_models``/``agent_system_prompts`` accept either a list or a
+    comma-separated string; the string form is preferred because
+    ``load_config`` path-resolves every string inside a TOML list.
+    """
+    agent = getattr(config, "agent", None)
+    try:
+        count = int(getattr(agent, "parallel_agents", 0) or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count < 0:
+        count = 0
+    models = _split_list(getattr(agent, "agent_models", []) or [])[:count]
+    prompts = _split_list(getattr(agent, "agent_system_prompts", []) or [])
+    return {
+        "count": count,
+        "models": models,
+        "system_prompts": (prompts + [None] * count)[:count],
+        "quiet": bool(getattr(agent, "agent_quiet", True)),
+    }
+
+
 def _load_env_file(dotenv_path: pathlib.Path | None = None) -> None:
     """Load ``.env`` from the project root (next to ``main.py``).
 

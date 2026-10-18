@@ -36,6 +36,11 @@ temperature = 0.6
 
 [agent]
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
+# --- multi-agent pool (see PLAN.md) ---
+parallel_agents = 0                # extra agents beside the running one (0 = off)
+agent_models = []                  # models.json entry names, one per agent
+# agent_system_prompts = []        # optional per-agent system prompts
+# agent_quiet = true               # workers don't print/speak (default true)
 
 [speech_gen]
 model_path = ".res/voices/en_US-hfc_female-medium.onnx"
