@@ -81,18 +81,19 @@ def _setup_agent_pool(config) -> None:
     No-op when ``parallel_agents`` is 0/missing, so single-agent setups are
     untouched. Failures raise: a misconfigured pool must not start silently.
     """
-    from src.live_ai import AgentPool, bind_agent_pool
+    from src.live_ai import AgentPool, agent_pool_settings, bind_agent_pool
 
     agent_cfg = getattr(config, "agent", None)
     n = getattr(agent_cfg, "parallel_agents", 0) or 0
     if not n:
         return
-    models = list(getattr(agent_cfg, "agent_models", []) or [])
-    if len(models) < n:
+    settings = agent_pool_settings(config)
+    if len(settings["models"]) < n:
         raise ValueError(
-            f"[agent] parallel_agents={n} but agent_models has only {len(models)} "
-            "entries: add one models.json entry name per worker agent")
-    bind_agent_pool(AgentPool(config, models[:n]))
+            f"[agent] parallel_agents={n} but agent_models has only "
+            f"{len(settings['models'])} entries: add one models.json entry "
+            "name per worker agent")
+    bind_agent_pool(AgentPool(config, settings))
 
 
 def _chat_label(config) -> str:
