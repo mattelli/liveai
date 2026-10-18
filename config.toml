@@ -62,7 +62,7 @@ prompt_toolkit = true            # false -> builtin input() fallback
 auto_suggest = true              # inline history suggestions
 completion = true                # complete /slash commands with Tab
 explicit_paste = true            # /paste ... . fallback for terminals without bracketed paste
-multiline = false                # true -> Esc+Enter to accept (advanced)
+multiline = true                # true -> Esc+Enter to accept (advanced)
 
 [summarization] # extractive text summarization (LexRank + sentence embeddings)
 model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to this config file
