@@ -599,6 +599,62 @@ Notes:
   invalid JSON or a non-resolvable API key aborts the launch with a clear
   message.
 
+## Multi-agent pool (delegation + parallel sub-agents)
+
+The assistant can run extra **worker agents** beside the main one (agent-1,
+the one the user talks to). The main agent delegates tasks to them through two
+tools, and each worker runs its own tool loop with its own model, history and
+tool instances (the agent-as-tool pattern):
+
+| Tool | Behavior |
+|---|---|
+| `ask_agent(agent, prompt)` | Delegates one task to a named sub-agent; the worker runs its own `act()` round loop (using its own tools, e.g. `web_search`) and its **final answer** is returned to the main agent as a normal tool result. |
+| `run_parallel_agents(tasks)` | Fans out several independent tasks concurrently (thread pool; LLM calls are I/O-bound). Each task is `{"agent": name, "prompt": text}`; returns a JSON list of `{"agent", "prompt", "answer"}` in task order for aggregation. |
+
+The pool is declared in `config.toml` under `[agent]`:
+
+```toml
+[agent]
+bootstrap_prompt = "..."            # unchanged
+parallel_agents = 1                 # extra agents beside the running one (0 = off)
+agent_models = ["ollama-llama32"]   # models.json entry names, one per worker
+# agent_system_prompts = []         # optional per-agent system prompts
+# agent_quiet = true                # workers don't print/speak (default true)
+```
+
+- `agent_models` entries are **models.json entry names** (see
+  [Model switching (`/model`)](#model-switching-model)); each worker boots from
+  its entry, so a worker can use a different provider or a local server than
+  the main agent. Missing keys default to `parallel_agents = 0` → the app
+  behaves exactly as the single-agent setup.
+- With `parallel_agents = 0` nothing is built at startup.
+- Workers are **quiet**: they never print to the console and never speak, so
+  only agent-1's output and voice reach the user.
+- Each worker owns **its own tool instances** (memory/vision state is
+  per-agent, never shared module state), so parallel workers cannot read or
+  clear each other's history.
+- **Nested delegation is refused**: a worker calling `ask_agent` /
+  `run_parallel_agents` gets an error instead of deadlocking the pool.
+- Unknown model entry names or a missing `models_file` fail fast at startup
+  with a clear message; `ask_agent` with an unknown agent name returns an
+  error string to the model (never raises).
+
+Example flow: the user asks about the weather; agent-1 calls
+`ask_agent(agent="ollama-llama32", prompt="Get current weather in Torino")`,
+the worker runs `web_search` on its own and returns its summary, and agent-1
+merges it into its reply. Several research questions can be answered at once
+with `run_parallel_agents`.
+
+Notes:
+
+- Only final answers cross the agent boundary (no partial streaming), which
+  keeps each agent's context small.
+- Ctrl+C cancels the main agent's turn; running workers finish their current
+  round.
+- On local servers (LM Studio/Ollama) workers share the server's capacity —
+  point workers at cloud endpoints in models.json for true parallelism, or
+  keep `parallel_agents = 1` on constrained machines.
+
 ## Setup (Python 3.12.10)
 
 OS Windows 11 (powershell)
