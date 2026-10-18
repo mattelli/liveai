@@ -312,13 +312,16 @@ def load_config(config_path: Path) -> SimpleNamespace:
         return value
 
     def namespace_from_dict(d: dict, base_dir: Path) -> SimpleNamespace:
-        """Recursively convert a dict to a SimpleNamespace, resolving paths."""
+        """Recursively convert a dict to a SimpleNamespace, resolving paths.
+
+        Only scalar string values are path-resolved; strings inside TOML
+        lists are kept verbatim (they are labels/prompts like agent_models
+        entry names, not paths).
+        """
         result = {}
         for k, v in d.items():
             if isinstance(v, dict):
                 result[k] = namespace_from_dict(v, base_dir)
-            elif isinstance(v, list):
-                result[k] = [resolve_path(item, base_dir) if isinstance(item, str) else item for item in v]
             elif k.endswith("_file") or k.endswith("_dir")  or k.endswith("_path"):
                 result[k] = resolve_path(v, base_dir)
             else:

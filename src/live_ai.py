@@ -140,8 +140,7 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
     behavior (``count = 0``).
 
     ``agent_models``/``agent_system_prompts`` accept either a list or a
-    comma-separated string; the string form is preferred because
-    ``load_config`` path-resolves every string inside a TOML list.
+    comma-separated string; both forms are equivalent.
     """
     agent = getattr(config, "agent", None)
     try:
@@ -1137,7 +1136,7 @@ class Agent(Brain):
     answers without tool calls.
     """
 
-    MAX_ACT_ROUNDS = 20  # fallback when [agent] max_act_rounds is unset/0
+    MAX_ACT_ROUNDS = 100  # fallback when [agent] max_act_rounds is unset/0
 
     def _build_tools(self) -> list[Callable]:
         """Tool set of this agent.

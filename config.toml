@@ -36,12 +36,11 @@ temperature = 0.6
 
 [agent]
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
-# --- multi-agent pool (see PLAN.md) ---
-parallel_agents = 1                # extra agents beside the running one (0 = off)
-agent_models = ["ollama-llama32"]                  # models.json entry names, one per agent
-# agent_system_prompts = []        # optional per-agent system prompts
-# agent_quiet = true               # workers don't print/speak (default true)
-max_act_rounds = 100               # max tool-loop rounds per agent turn (default 20)
+max_act_rounds = 500                               # max tool-loop rounds per agent turn (default 100)
+parallel_agents = 2                                # extra agents beside the running one (0 = off)
+agent_models = ["ternary-bonsai", "ternary-bonsai"]  # models.json entry names, one per agent
+# agent_system_prompts = []                        # optional per-agent system prompts
+# agent_quiet = false                              # workers don't print/speak (default true)
 
 [speech_gen]
 model_path = ".res/voices/en_US-hfc_female-medium.onnx"
@@ -68,7 +67,7 @@ prompt_toolkit = true            # false -> builtin input() fallback
 auto_suggest = true              # inline history suggestions
 completion = true                # complete /slash commands with Tab
 explicit_paste = true            # /paste ... . fallback for terminals without bracketed paste
-multiline = true                # true -> Esc+Enter to accept (advanced)
+multiline = true                 # true -> Esc+Enter to accept (advanced)
 
 [summarization] # extractive text summarization (LexRank + sentence embeddings)
 model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to this config file
