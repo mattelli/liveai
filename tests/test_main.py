@@ -78,7 +78,7 @@ def test_chat_builds_and_closes_reader(monkeypatch):
     monkeypatch.setattr(main_mod, "load_config", lambda p: types.SimpleNamespace())
 
     assert main_mod.main(["--chat"]) == 0
-    assert created["kw"]["history_path"] is None
+    assert created["kw"]["memory_path"] is None
     assert created["read"] == 1
     assert created["closed"] is True
 

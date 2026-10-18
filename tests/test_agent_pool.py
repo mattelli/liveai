@@ -128,7 +128,7 @@ def _offline_agent(monkeypatch, tmp_path, agent_overrides=None, **kwargs):
 
     ``agent_overrides`` are merged into the ``[agent]`` config section (e.g.
     ``{"max_act_rounds": 100}``). Also configures the memory/vision tool
-    modules with a tmp history path, since ``[brain] history_path`` lives in
+    modules with a tmp history path, since ``[brain] memory_path`` lives in
     the module-level config cache.
     """
     from src.tools import memory as memory_mod, vision as vision_mod
@@ -137,7 +137,7 @@ def _offline_agent(monkeypatch, tmp_path, agent_overrides=None, **kwargs):
     _fake_openai(monkeypatch)
     monkeypatch.setenv("TEST_API_KEY", "k")
     memory_mod.configure(SimpleNamespace(
-        brain=SimpleNamespace(history_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
                               system_prompt="be helpful"),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
     ))

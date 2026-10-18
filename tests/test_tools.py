@@ -1455,7 +1455,7 @@ def memory_seam(monkeypatch, tmp_path):
     monkeypatch.setattr(tools.memory, "_history_provider", None)
     monkeypatch.setattr(tools.memory, "_config_cache", None)
     tools.memory.configure(SimpleNamespace(
-        brain=SimpleNamespace(history_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
                               system_prompt="be helpful"),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
     ))

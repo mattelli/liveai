@@ -76,7 +76,7 @@ def test_file_history_persists_across_readers(pt_input, tmp_path):
 
 def test_history_path_creates_parent(tmp_path):
     nested = tmp_path / "a" / "b" / ".chat_history"
-    InputReader(history_path=nested)  # constructs FileHistory
+    InputReader(memory_path=nested)  # constructs FileHistory
     assert nested.parent.exists()
 
 

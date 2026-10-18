@@ -44,7 +44,7 @@ class InputReader:
 
     Parameters
     ----------
-    history_path:
+    memory_path:
         When set (and prompt_toolkit is available) a :class:`FileHistory` is
         used so Up/Down recall works across sessions. The parent directory is
         created if needed. When ``None`` an in-memory history is used.
@@ -75,7 +75,7 @@ class InputReader:
 
     def __init__(
         self,
-        history_path: Path | None = None,
+        memory_path: Path | None = None,
         auto_suggest: bool = True,
         completer=None,
         multiline: bool = False,
@@ -98,9 +98,9 @@ class InputReader:
         self._use_pt = session is not None or (
             fallback is None and _PROMPT_TOOLKIT
         )
-        self._history_path = history_path
-        if history_path is not None:
-            Path(history_path).parent.mkdir(parents=True, exist_ok=True)
+        self._history_path = memory_path
+        if memory_path is not None:
+            Path(memory_path).parent.mkdir(parents=True, exist_ok=True)
         self._auto_suggest = auto_suggest
         self._completer = completer
         self._multiline = multiline
@@ -109,7 +109,7 @@ class InputReader:
     def _ensure_session(self):
         if self._session is None:
             self._session = self._build_session(
-                history_path=self._history_path,
+                memory_path=self._history_path,
                 auto_suggest=self._auto_suggest,
                 completer=self._completer,
                 multiline=self._multiline,
@@ -117,10 +117,10 @@ class InputReader:
         return self._session
 
     @staticmethod
-    def _build_session(history_path, auto_suggest, completer, multiline):
+    def _build_session(memory_path, auto_suggest, completer, multiline):
         history = InMemoryHistory()
-        if history_path is not None:
-            history = FileHistory(str(history_path))
+        if memory_path is not None:
+            history = FileHistory(str(memory_path))
         return PromptSession(
             history=history,
             auto_suggest=AutoSuggestFromHistory() if auto_suggest else None,

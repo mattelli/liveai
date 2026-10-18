@@ -125,7 +125,7 @@ def _build_chat_reader(config, session_cls):
             completer = None
 
     return InputReader(
-        history_path=getattr(in_cfg, "history_file", None),
+        memory_path=getattr(in_cfg, "history_file", None),
         auto_suggest=getattr(in_cfg, "auto_suggest", True),
         completer=completer,
         multiline=getattr(in_cfg, "multiline", False),

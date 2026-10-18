@@ -37,7 +37,7 @@ _history_provider = None  # seam: callable returning the live messages list
 def configure(config) -> None:
     """
     Inject the application config into the tool (called by ``main.py`` after
-    ``load_config``). Keeps the ``[brain]`` section (``history_path``,
+    ``load_config``). Keeps the ``[brain]`` section (``memory_path``,
     ``system_prompt``) and the ``[agent]`` section (``bootstrap_prompt``).
     """
     global _config_cache
@@ -75,7 +75,7 @@ class MemoryTools:
         return getattr(section, attr, default) if section is not None else default
 
     def _history_file(self) -> pathlib.Path:
-        return pathlib.Path(self._config("brain", "history_path", "")).resolve()
+        return pathlib.Path(self._config("brain", "memory_path", "")).resolve()
 
     def _shaped_user_messages(self) -> list[str]:
         """User messages of the live history (text at ``content[0]["text"]``)."""
