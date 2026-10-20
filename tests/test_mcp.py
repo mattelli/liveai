@@ -70,7 +70,8 @@ def test_configure_skips_invalid_server_spec():
         broken=SimpleNamespace(description="neither command nor url"),
         good=SimpleNamespace(url="https://mcp.example/mcp"),
     )))
-    assert configured_servers() == {"good": {"url": "https://mcp.example/mcp"}}
+    assert configured_servers() == {
+        "good": {"url": "https://mcp.example/mcp", "env": {}, "headers": {}}}
 
 
 def test_configure_timeout_defaults_and_overrides():
@@ -461,26 +462,29 @@ def _install_fake_sdk(monkeypatch):
     fake_mcp = types.ModuleType("mcp")
     fake_mcp.ClientSession = _FakeSession
 
-    params_seen: list[tuple[str, list]] = []
+    params_seen: list[tuple[str, list, dict]] = []
 
     class FakeStdioServerParameters:
-        def __init__(self, command=None, args=None):
+        def __init__(self, command=None, args=None, env=None):
             self.command = command
             self.args = args
-            params_seen.append((command, list(args or [])))
+            self.env = env
+            params_seen.append((command, list(args or []), dict(env or {})))
 
     fake_mcp.StdioServerParameters = FakeStdioServerParameters
 
     def fake_stdio_client(params):
         return _FakeEnterable((SimpleNamespace(), SimpleNamespace()))
 
-    def fake_http_client(url):
+    def fake_http_client(url, http_client=None):
         return _FakeEnterable((SimpleNamespace(), SimpleNamespace(), {}))
 
     stdio_mod = types.ModuleType("mcp.client.stdio")
     stdio_mod.stdio_client = fake_stdio_client
     http_mod = types.ModuleType("mcp.client.streamable_http")
     http_mod.streamablehttp_client = fake_http_client
+    http_mod.create_mcp_http_client = lambda headers=None: SimpleNamespace(
+        headers=headers or {})
     client_pkg = types.ModuleType("mcp.client")
     client_pkg.stdio = stdio_mod
     client_pkg.streamable_http = http_mod
@@ -508,7 +512,7 @@ def test_connector_builds_stdio_parameters(monkeypatch):
     connector = mcp_mod.McpSdkConnector()
     client = asyncio.run(connector._connect("files", {
         "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"]}))
-    assert params_seen == [("npx", ["-y", "@modelcontextprotocol/server-filesystem"])]
+    assert params_seen == [("npx", ["-y", "@modelcontextprotocol/server-filesystem"], {})]
     assert isinstance(client, mcp_mod._SdkClient)
     session = _FakeSession.instances[-1]
     assert session.initialized == 1
@@ -539,9 +543,9 @@ def test_connector_http_and_stdio_transports_selected(monkeypatch):
     http_ctx = sys.modules["mcp.client.streamable_http"]
     original = http_ctx.streamablehttp_client
 
-    def spy_http(url):
+    def spy_http(url, http_client=None):
         entered.append(("http", url))
-        return original(url)
+        return original(url, http_client=http_client)
 
     http_ctx.streamablehttp_client = spy_http
     connector = mcp_mod.McpSdkConnector()
@@ -784,3 +788,139 @@ def test_bindings_wrapper_maps_mcperror_to_error_string(monkeypatch):
     monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
     _, impls = mcp_mod.mcp_tool_bindings()
     assert impls["mcp_srv_echo"]() == "Error: server 'srv' is not connected"
+
+
+# ------------------------------------------------ auth: env/headers/token_env
+
+
+def test_configure_resolves_env_and_headers_maps(monkeypatch):
+    configure(_mcp_config(servers=SimpleNamespace(
+        stdio=SimpleNamespace(command="python", args=["-m", "srv"],
+                              env=SimpleNamespace(TOKEN="abc")),
+        http=SimpleNamespace(url="https://mcp.example/mcp",
+                             headers=SimpleNamespace(X_API_KEY="k")),
+    )))
+    servers = configured_servers()
+    assert servers["stdio"]["env"] == {"TOKEN": "abc"}
+    assert servers["http"]["headers"] == {"X_API_KEY": "k"}
+
+
+def test_configure_expands_env_placeholders(monkeypatch):
+    monkeypatch.setenv("MY_SECRET_TOKEN", "s3cr3t")
+    configure(_mcp_config(servers=SimpleNamespace(
+        tg=SimpleNamespace(command="python", args=["-m", "tg"],
+                           env=SimpleNamespace(
+                               TELEGRAM_BOT_TOKEN="${MY_SECRET_TOKEN}")),
+    )))
+    assert configured_servers()["tg"]["env"]["TELEGRAM_BOT_TOKEN"] == "s3cr3t"
+
+
+def test_configure_unresolvable_placeholder_expands_empty(monkeypatch):
+    monkeypatch.delenv("MISSING_VAR_XYZ", raising=False)
+    configure(_mcp_config(servers=SimpleNamespace(
+        tg=SimpleNamespace(command="python", args=["-m", "tg"],
+                           env=SimpleNamespace(TOKEN="${MISSING_VAR_XYZ}")),
+    )))
+    assert configured_servers()["tg"]["env"]["TOKEN"] == ""
+
+
+def test_configure_token_env_bearer_header_for_http(monkeypatch):
+    monkeypatch.setenv("MY_API_TOKEN", "tok-123")
+    configure(_mcp_config(servers=SimpleNamespace(
+        remote=SimpleNamespace(url="https://mcp.example/mcp",
+                               token_env="MY_API_TOKEN"),
+    )))
+    spec = configured_servers()["remote"]
+    assert spec["headers"]["Authorization"] == "Bearer tok-123"
+
+
+def test_configure_token_env_variable_for_stdio(monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    configure(_mcp_config(servers=SimpleNamespace(
+        tg=SimpleNamespace(command="python", args=["-m", "tg"],
+                           token_env="TELEGRAM_BOT_TOKEN"),
+    )))
+    spec = configured_servers()["tg"]
+    assert spec["env"] == {"TELEGRAM_BOT_TOKEN": "123:abc"}
+
+
+def test_configure_explicit_headers_win_over_token_env(monkeypatch):
+    monkeypatch.setenv("MY_API_TOKEN", "tok-123")
+    configure(_mcp_config(servers=SimpleNamespace(
+        remote=SimpleNamespace(url="https://mcp.example/mcp",
+                               token_env="MY_API_TOKEN",
+                               headers=SimpleNamespace(
+                                   Authorization="Bearer explicit")),
+    )))
+    assert configured_servers()["remote"]["headers"][
+        "Authorization"] == "Bearer explicit"
+
+
+def test_configure_token_env_missing_variable_is_empty(monkeypatch):
+    monkeypatch.delenv("MISSING_TOKEN_XYZ", raising=False)
+    configure(_mcp_config(servers=SimpleNamespace(
+        tg=SimpleNamespace(command="python", args=["-m", "tg"],
+                           token_env="MISSING_TOKEN_XYZ"),
+    )))
+    assert configured_servers()["tg"]["env"]["MISSING_TOKEN_XYZ"] == ""
+
+
+def test_configure_drops_non_scalar_env_entries():
+    configure(_mcp_config(servers=SimpleNamespace(
+        bad=SimpleNamespace(command="python", args=[],
+                            env=SimpleNamespace(NESTED=SimpleNamespace(a=1))),
+    )))
+    assert configured_servers()["bad"]["env"] == {}
+
+
+def test_connector_passes_env_to_stdio_parameters(monkeypatch):
+    """The configured env map reaches StdioServerParameters."""
+    import asyncio
+    params_seen = _install_fake_sdk(monkeypatch)
+    connector = mcp_mod.McpSdkConnector()
+    asyncio.run(connector._connect("tg", {
+        "command": "python", "args": ["-m", "tg"],
+        "env": {"TELEGRAM_BOT_TOKEN": "123:abc"},
+    }))
+    assert params_seen == [("python", ["-m", "tg"],
+                            {"TELEGRAM_BOT_TOKEN": "123:abc"})]
+    assert _FakeSession.instances[-1].initialized == 1
+
+
+def test_connector_builds_http_client_with_headers(monkeypatch):
+    """headers -> create_mcp_http_client(headers=...), closed on teardown."""
+    import asyncio
+    _install_fake_sdk(monkeypatch)
+    created: list[dict] = []
+    closed: list[int] = []
+
+    import sys
+    http_mod = sys.modules["mcp.client.streamable_http"]
+
+    class FakeAsyncClient:
+        def __init__(self, headers=None):
+            self.headers = headers or {}
+            created.append(self.headers)
+
+        async def aclose(self):
+            closed.append(1)
+
+    original_factory = http_mod.create_mcp_http_client
+    http_mod.create_mcp_http_client = lambda headers=None: FakeAsyncClient(headers)
+
+    connector = mcp_mod.McpSdkConnector()
+
+    async def scenario():
+        client = await connector._connect("remote", {
+            "url": "https://mcp.example/mcp",
+            "headers": {"Authorization": "Bearer tok"},
+        })
+        assert created == [{"Authorization": "Bearer tok"}]
+        await client.close()  # serve task unwinds the stack (incl. aclose)
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        http_mod.create_mcp_http_client = original_factory
+    # The client we pass is ours to close: the stack owns it now.
+    assert closed == [1]

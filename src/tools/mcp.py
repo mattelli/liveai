@@ -45,6 +45,7 @@ import contextlib
 import inspect
 import json
 import logging
+import os
 import re
 import threading
 from contextlib import AsyncExitStack
@@ -135,6 +136,68 @@ def _spec_items(servers) -> list[tuple[str, dict]]:
     return normalized
 
 
+def _string_map(value, what: str) -> dict[str, str]:
+    """Normalize a ``{key: value}`` config entry (namespace or dict) to strings.
+
+    Used for the per-server ``env``/``headers`` maps; non-mapping values and
+    non-scalar entries are dropped with a warning.
+    """
+    if value is None:
+        return {}
+    data = value if isinstance(value, dict) else getattr(value, "__dict__", None)
+    if not isinstance(data, dict):
+        logger.warning("[mcp] %s must be a {key: value} table; got %r", what, value)
+        return {}
+    result: dict[str, str] = {}
+    for key, item in data.items():
+        if isinstance(item, (str, int, float, bool)):
+            result[str(key)] = str(item)
+        else:
+            logger.warning("[mcp] %s.%s must be a scalar; dropped", what, key)
+    return result
+
+
+def _resolve_placeholders(mapping: dict[str, str]) -> dict[str, str]:
+    """Expand ``${VAR}`` / ``$VAR`` references from the environment.
+
+    Lets a config value reference a secret stored in the environment or the
+    project ``.env`` file (e.g. ``env = { TELEGRAM_BOT_TOKEN = "${TELEGRAM_BOT_TOKEN}" }``)
+    without the secret ever landing in config.toml. Unresolvable references
+    expand to the empty string (the server then fails with its own message).
+    """
+    pattern = re.compile(r"\$\{(?P<name>[A-Za-z_][A-Za-z0-9_]*)\}|\$(?P<name2>[A-Za-z_][A-Za-z0-9_]*)")
+
+    def replace(match) -> str:
+        name = match.group("name") or match.group("name2")
+        return os.environ.get(name, "")
+
+    return {key: pattern.sub(replace, value) for key, value in mapping.items()}
+
+
+def _resolve_token_env(spec: dict) -> None:
+    """Resolve the per-server ``token_env`` convenience key in place.
+
+    ``token_env`` names an environment variable holding a bearer token: the
+    variable's value becomes the ``Authorization: Bearer <token>`` HTTP
+    header (``headers``) for a ``url`` server, or the ``env`` entry named by
+    the variable (``env = { <VAR> = <value> }``) for a ``command`` server -
+    matching how the common MCP servers consume tokens (static header vs.
+    environment variable). The token itself never lands in config.toml.
+    """
+    token_env = str(spec.get("token_env") or "").strip()
+    if not token_env:
+        return
+    token = os.environ.get(token_env, "")
+    if spec.get("url"):
+        headers = _string_map(spec.get("headers"), "headers")
+        headers.setdefault("Authorization", f"Bearer {token}")
+        spec["headers"] = headers
+    else:
+        env = _string_map(spec.get("env"), "env")
+        env.setdefault(token_env, token)
+        spec["env"] = env
+
+
 def _timeout(section, attr: str, default: float) -> float:
     """Positive float ``section.attr`` (``default`` when unset/invalid)."""
     raw = getattr(section, attr, default)
@@ -167,12 +230,18 @@ def configure(config) -> None:
         return
     parsed: dict[str, dict] = {}
     for name, spec in _spec_items(getattr(section, "servers", None)):
-        if spec.get("command") or spec.get("url"):
-            parsed[name] = spec
-        else:
+        if not (spec.get("command") or spec.get("url")):
             logger.warning(
                 "[mcp] server %r skipped: needs a 'command' (stdio) "
                 "or 'url' (http) key", name)
+            continue
+        # Auth extras (kept out of config.toml: secrets come from the env or
+        # the project .env file, resolved at configure time).
+        spec["env"] = _resolve_placeholders(_string_map(spec.get("env"), "env"))
+        spec["headers"] = _resolve_placeholders(
+            _string_map(spec.get("headers"), "headers"))
+        _resolve_token_env(spec)
+        parsed[name] = spec
     _SERVERS = parsed
     _CONNECT_TIMEOUT_S = _timeout(
         section, "connect_timeout_s", _DEFAULT_CONNECT_TIMEOUT_S)
@@ -527,12 +596,23 @@ class McpSdkConnector:
         async def serve() -> None:
             try:
                 if spec.get("url"):
+                    http_client = None
+                    headers = spec.get("headers") or {}
+                    if headers:
+                        # The SDK only closes a client it created itself: a
+                        # client passed here is owned (and closed) by us.
+                        from mcp.client.streamable_http import create_mcp_http_client
+                        http_client = create_mcp_http_client(headers=headers)
                     transport = await stack.enter_async_context(
-                        streamablehttp_client(str(spec["url"])))
+                        streamablehttp_client(str(spec["url"]),
+                                              http_client=http_client))
+                    if http_client is not None:
+                        stack.push_async_callback(http_client.aclose)
                 else:
                     params = StdioServerParameters(
                         command=str(spec["command"]),
                         args=[str(arg) for arg in spec.get("args", []) or []],
+                        env=spec.get("env") or None,
                     )
                     transport = await stack.enter_async_context(
                         stdio_client(params))

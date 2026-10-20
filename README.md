@@ -696,6 +696,39 @@ A server entry needs `command` (+ optional `args` list) **or** `url`; anything
 else is skipped with a warning. Windows note for stdio servers: if spawning
 `npx` directly fails, use `command = "cmd"`, `args = ["/c", "npx", "-y", ...]`.
 
+**Authentication (static tokens).** Per-server keys:
+
+- `env = { NAME = "value" }` — environment variables passed to a stdio server
+  process (merged over the SDK's safe whitelist: PATH, SYSTEMROOT, ...).
+- `headers = { Name = "value" }` — HTTP headers sent with every request to a
+  `url` server (e.g. `Authorization` or vendor-specific API-key headers).
+- `token_env = "VAR"` — convenience: reads the token from environment
+  variable `VAR` and applies it as `Authorization: Bearer <token>` for a
+  `url` server, or as the env entry `<VAR>=<token>` for a `command` server.
+- Any `env`/`headers` value may reference other variables with `${VAR}`
+  (expanded at load time; unknown variables expand to the empty string).
+
+Secrets are resolved from the environment or the project `.env` file at
+startup and never stored in config.toml. Example Telegram bot server:
+
+```toml
+[mcp.servers.telegram]
+command = "python"
+args = ["-m", "telegram_bot_mcp"]
+env = { TELEGRAM_BOT_TOKEN = "${TELEGRAM_BOT_TOKEN}" }
+```
+
+Example remote server with a bearer token:
+
+```toml
+[mcp.servers.github]
+url = "https://api.githubcopilot.com/mcp"
+token_env = "GITHUB_MCP_TOKEN"
+```
+
+Not supported: interactive OAuth flows (the SDK ships the machinery, but the
+browser-based authorization step does not fit the synchronous tool model yet).
+
 - `/mcp` lists the configured servers with transport, connection status and
   tool count; `/mcp refresh` reconnects all servers and rebuilds the injected
   tools.
