@@ -368,3 +368,183 @@ def test_configure_resets_manager_singleton(reset_singleton, monkeypatch):
     assert mcp_mod._MANAGER is None
     assert mcp_mod.get_manager() is None  # no servers -> stays None
     manager.shutdown()
+
+
+# ------------------------------------------------- _flatten_result (pure fn)
+
+
+def test_flatten_result_joins_text_content():
+    result = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="hello"),
+                 SimpleNamespace(type="text", text="world")],
+        structuredContent=None, isError=False)
+    assert mcp_mod._flatten_result(result) == "hello\nworld"
+
+
+def test_flatten_result_uses_structured_content():
+    result = SimpleNamespace(
+        content=[], structuredContent={"answer": 42}, isError=False)
+    assert mcp_mod._flatten_result(result) == '{"answer": 42}'
+
+
+def test_flatten_result_marks_is_error():
+    result = SimpleNamespace(
+        content=[SimpleNamespace(type="text", text="boom")],
+        structuredContent=None, isError=True)
+    assert mcp_mod._flatten_result(result) == "Error: boom"
+
+
+def test_flatten_result_empty_returns_placeholder():
+    result = SimpleNamespace(content=[], structuredContent=None, isError=False)
+    assert mcp_mod._flatten_result(result) == "(empty result)"
+
+
+# ------------------------------------------------- real connector (fake SDK)
+
+
+class _FakeEnterable:
+    """Async context manager returning a fixed value (transport stand-in)."""
+
+    def __init__(self, value):
+        self.value = value
+        self.entered = 0
+        self.exited = 0
+
+    async def __aenter__(self):
+        self.entered += 1
+        return self.value
+
+    async def __aexit__(self, *exc):
+        self.exited += 1
+        return False
+
+
+class _FakeSession:
+    """ClientSession stand-in: records initialize/list/call."""
+
+    instances: list["_FakeSession"] = []
+
+    def __init__(self, read, write):
+        self.read, self.write = read, write
+        self.initialized = 0
+        self.calls: list[tuple[str, dict]] = []
+        _FakeSession.instances.append(self)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def initialize(self):
+        self.initialized += 1
+
+    async def list_tools(self):
+        return SimpleNamespace(tools=[
+            SimpleNamespace(name="echo", description="Echo it",
+                            inputSchema={"type": "object"}),
+        ])
+
+    async def call_tool(self, tool, arguments):
+        self.calls.append((tool, arguments))
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=f"echo:{tool}")],
+            structuredContent=None, isError=False)
+
+
+def _install_fake_sdk(monkeypatch):
+    """Patch sys.modules with a fake ``mcp`` SDK (works with or without it)."""
+    import sys
+    import types
+
+    _FakeSession.instances = []
+    fake_mcp = types.ModuleType("mcp")
+    fake_mcp.ClientSession = _FakeSession
+
+    params_seen: list[tuple[str, list]] = []
+
+    class FakeStdioServerParameters:
+        def __init__(self, command=None, args=None):
+            self.command = command
+            self.args = args
+            params_seen.append((command, list(args or [])))
+
+    fake_mcp.StdioServerParameters = FakeStdioServerParameters
+
+    def fake_stdio_client(params):
+        return _FakeEnterable((SimpleNamespace(), SimpleNamespace()))
+
+    def fake_http_client(url):
+        return _FakeEnterable((SimpleNamespace(), SimpleNamespace(), {}))
+
+    stdio_mod = types.ModuleType("mcp.client.stdio")
+    stdio_mod.stdio_client = fake_stdio_client
+    http_mod = types.ModuleType("mcp.client.streamable_http")
+    http_mod.streamablehttp_client = fake_http_client
+    client_pkg = types.ModuleType("mcp.client")
+    client_pkg.stdio = stdio_mod
+    client_pkg.streamable_http = http_mod
+    fake_mcp.client = client_pkg
+
+    monkeypatch.setitem(sys.modules, "mcp", fake_mcp)
+    monkeypatch.setitem(sys.modules, "mcp.client", client_pkg)
+    monkeypatch.setitem(sys.modules, "mcp.client.stdio", stdio_mod)
+    monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", http_mod)
+    return params_seen
+
+
+def test_connector_missing_sdk_raises_mcperror(monkeypatch):
+    import sys
+    monkeypatch.setitem(sys.modules, "mcp", None)  # import fails even if installed
+    connector = mcp_mod.McpSdkConnector()
+    with pytest.raises(McpError, match="pip install mcp"):
+        import asyncio
+        asyncio.run(connector._connect("srv", {"url": "https://x/mcp"}))
+
+
+def test_connector_builds_stdio_parameters(monkeypatch):
+    import asyncio
+    params_seen = _install_fake_sdk(monkeypatch)
+    connector = mcp_mod.McpSdkConnector()
+    client = asyncio.run(connector._connect("files", {
+        "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem"]}))
+    assert params_seen == [("npx", ["-y", "@modelcontextprotocol/server-filesystem"])]
+    assert isinstance(client, mcp_mod._SdkClient)
+    session = _FakeSession.instances[-1]
+    assert session.initialized == 1
+
+
+def test_connector_sdk_client_end_to_end(monkeypatch, shutdown_managers):
+    """Fake SDK through the real Manager: connect, list, call, close."""
+    import asyncio
+    _install_fake_sdk(monkeypatch)
+    manager = Manager({"srv": {"url": "https://x/mcp"}},
+                      connect_timeout_s=5.0, call_timeout_s=5.0)
+    result = manager.connect_all()
+    assert result == {"srv": ["echo"]}
+    assert manager.call("srv", "echo", {"text": "hi"}) == "echo:echo"
+    session = _FakeSession.instances[-1]
+    assert session.calls == [("echo", {"text": "hi"})]
+    manager.shutdown()
+    assert _FakeSession.instances[-1].initialized == 1
+
+
+def test_connector_http_and_stdio_transports_selected(monkeypatch):
+    """url spec -> streamable HTTP context; command spec -> stdio context."""
+    import asyncio
+    entered = []
+    params_seen = _install_fake_sdk(monkeypatch)
+
+    import sys
+    http_ctx = sys.modules["mcp.client.streamable_http"]
+    original = http_ctx.streamablehttp_client
+
+    def spy_http(url):
+        entered.append(("http", url))
+        return original(url)
+
+    http_ctx.streamablehttp_client = spy_http
+    connector = mcp_mod.McpSdkConnector()
+    asyncio.run(connector._connect("web", {"url": "https://mcp.example/mcp"}))
+    assert entered == [("http", "https://mcp.example/mcp")]
+    assert params_seen == []  # stdio parameters never built for a url spec

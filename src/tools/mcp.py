@@ -41,9 +41,12 @@ servers) the module is a no-op: no manager, no injected tools, no I/O.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
+import json
 import logging
 import threading
+from contextlib import AsyncExitStack
 from typing import Any, Callable, Protocol
 
 from src.common import dump_func_call
@@ -101,8 +104,14 @@ class Connector(Protocol):
 
 
 # Test seam (module-level like ``_VIDEO_CAPTURE_FACTORY`` in src/tools/camera.py):
-# patched by tests to hand out fake connectors; the real one is Task 3.
+# patched by tests to hand out fake connectors; the default builds the real
+# SDK connector (Task 3).
 _CONNECTOR_FACTORY: Callable[[], Connector] | None = None
+
+
+def _default_connector() -> Connector:
+    """Factory used when no connector is injected (the real SDK connector)."""
+    return McpSdkConnector()
 
 
 def _spec_items(servers) -> list[tuple[str, dict]]:
@@ -189,7 +198,7 @@ def get_manager() -> "Manager | None":
     if not _SERVERS:
         return None
     if _MANAGER is None:
-        connector = _CONNECTOR_FACTORY() if _CONNECTOR_FACTORY else None
+        connector = _CONNECTOR_FACTORY() if _CONNECTOR_FACTORY else _default_connector()
         _MANAGER = Manager(
             dict(_SERVERS),
             connect_timeout_s=_CONNECT_TIMEOUT_S,
@@ -224,7 +233,8 @@ class Manager:
         self._servers = dict(servers)
         self._connect_timeout_s = connect_timeout_s
         self._call_timeout_s = call_timeout_s
-        self._connector = connector or _CONNECTOR_FACTORY()
+        self._connector = connector or (
+            _CONNECTOR_FACTORY() if _CONNECTOR_FACTORY else _default_connector())
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._clients: dict[str, Client] = {}
@@ -390,6 +400,161 @@ class Manager:
             pass  # loop already closed
         if thread is not None:
             thread.join(timeout=self._THREAD_JOIN_TIMEOUT_S)
+
+
+## real connector (official ``mcp`` SDK, imported lazily) ##
+
+
+def _flatten_result(result) -> str:
+    """Flatten an MCP ``CallToolResult`` into the string returned to the model.
+
+    Joins the ``text`` parts of ``result.content``; when there is none and
+    ``result.structuredContent`` exists, that object is JSON-encoded. An
+    ``isError`` result is prefixed with ``Error: `` (the agent tool-error
+    contract). Pure function: takes/returns plain values only, so tests can
+    use SimpleNamespace stand-ins without the SDK.
+    """
+    content = getattr(result, "content", None) or []
+    parts = [getattr(part, "text", None) for part in content
+             if getattr(part, "type", None) == "text" or hasattr(part, "text")]
+    text = "\n".join(str(part) for part in parts if part is not None)
+    if not text:
+        structured = getattr(result, "structuredContent", None)
+        if structured is not None:
+            text = json.dumps(structured)
+    if not text:
+        text = "(empty result)"
+    if getattr(result, "isError", False):
+        text = f"Error: {text}"
+    return text
+
+
+class _SdkClient:
+    """Client backed by an initialized MCP SDK ``ClientSession``.
+
+    The transports/session live on the connector's **serve task** (anyio
+    transports must be entered and exited by the same task), so ``close()``
+    only sets the close event and waits for that task to unwind its own
+    ``AsyncExitStack``. All methods are async and awaited by the Manager's
+    ``_invoke``.
+    """
+
+    _CLOSE_JOIN_TIMEOUT_S = 5.0
+
+    def __init__(self, session, serve_task: asyncio.Task,
+                 close_event: asyncio.Event, call_timeout_s: float):
+        self._session = session
+        self._serve_task = serve_task
+        self._close_event = close_event
+        self._call_timeout_s = call_timeout_s
+
+    async def list_tools(self) -> list[dict]:
+        """Normalize the ``tools/list`` result into plain dicts."""
+        result = await self._session.list_tools()
+        tools = []
+        for tool in getattr(result, "tools", []) or []:
+            tools.append({
+                "name": getattr(tool, "name", ""),
+                "description": getattr(tool, "description", "") or "",
+                "inputSchema": getattr(tool, "inputSchema", None),
+            })
+        return tools
+
+    async def call(self, tool: str, arguments: dict) -> str:
+        """Run one tool; flatten the result (``Error: ...`` when ``isError``)."""
+        result = await asyncio.wait_for(
+            self._session.call_tool(tool, arguments or {}), self._call_timeout_s)
+        return _flatten_result(result)
+
+    async def close(self) -> None:
+        """Signal the serve task to exit its stack (best effort, bounded wait)."""
+        self._close_event.set()
+        try:
+            await asyncio.wait_for(
+                asyncio.shield(self._serve_task), self._CLOSE_JOIN_TIMEOUT_S)
+        except Exception:
+            pass  # best effort: the daemon loop thread dies with the process
+
+
+class McpSdkConnector:
+    """Connector speaking the real MCP protocol through the official SDK.
+
+    For each server a **serve task** is spawned on the Manager's loop: it
+    enters the transport (stdio subprocess or streamable HTTP) plus a
+    ``ClientSession`` in its own ``AsyncExitStack``, runs ``initialize()``
+    and then waits on a close event. ``connect()`` resolves as soon as the
+    session is ready; ``close()`` sets the event so the serve task exits the
+    stack itself. An inner connect timeout (the configured
+    ``connect_timeout_s``) unblocks ``connect`` early and tears the partial
+    session down; the Manager's outer ``_submit`` timeout stays as the hard
+    net.
+    """
+
+    def connect(self, name: str, spec: dict):
+        """Coroutine: connect to one server and return an :class:`_SdkClient`."""
+        return self._connect(name, spec)
+
+    async def _connect(self, name: str, spec: dict) -> _SdkClient:
+        try:
+            from mcp import ClientSession, StdioServerParameters
+            from mcp.client.stdio import stdio_client
+            from mcp.client.streamable_http import streamablehttp_client
+        except ImportError as exc:
+            raise McpError(
+                "mcp package not installed (pip install mcp)") from exc
+
+        stack = AsyncExitStack()
+        ready = asyncio.Event()
+        close_event = asyncio.Event()
+        holder: dict[str, Any] = {}
+
+        async def serve() -> None:
+            try:
+                if spec.get("url"):
+                    transport = await stack.enter_async_context(
+                        streamablehttp_client(str(spec["url"])))
+                else:
+                    params = StdioServerParameters(
+                        command=str(spec["command"]),
+                        args=[str(arg) for arg in spec.get("args", []) or []],
+                    )
+                    transport = await stack.enter_async_context(
+                        stdio_client(params))
+                read, write = transport[0], transport[1]
+                session = await stack.enter_async_context(
+                    ClientSession(read, write))
+                await session.initialize()
+                holder["client"] = _SdkClient(
+                    session, serve_task, close_event, _CALL_TIMEOUT_S)
+            except Exception as exc:  # noqa: BLE001 - reported via holder
+                holder["error"] = exc
+            finally:
+                ready.set()
+            if "client" not in holder:
+                with contextlib.suppress(Exception):
+                    await stack.aclose()  # connect failed: unwind right here
+                return
+            await close_event.wait()  # session lifetime (until close())
+            with contextlib.suppress(Exception):
+                await stack.aclose()
+
+        serve_task = asyncio.create_task(serve(), name=f"mcp-serve-{name}")
+        try:
+            await asyncio.wait_for(ready.wait(), _CONNECT_TIMEOUT_S)
+        except asyncio.TimeoutError as exc:
+            close_event.set()  # unblock/tear down the serve task
+            with contextlib.suppress(Exception):
+                await serve_task
+            raise McpError(f"connecting {name!r} timed out") from exc
+        except asyncio.CancelledError:
+            close_event.set()
+            with contextlib.suppress(Exception):
+                await serve_task
+            raise
+        if "error" in holder:
+            await serve_task  # serve already unwound its stack
+            raise McpError(str(holder["error"]))
+        return holder["client"]
 
 
 @dump_func_call

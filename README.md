@@ -673,6 +673,9 @@ OS Windows 11 (powershell)
 
 ```
 
+Optional: MCP server support needs the official SDK in the same environment
+(`pip install mcp`).
+
 OS Linux / macOS (bash)
 
 ```
