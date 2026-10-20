@@ -608,3 +608,101 @@ def test_session_usage_on_bare_and_bad_subcommand(tmp_path, capsys):
     it = iter(["/session", "/session frobnicate", "/quit"])
     ConversationSession(agent, lambda: next(it)).run()
     assert capsys.readouterr().out.lower().count("usage") == 2
+
+
+# ------------------------------------------------------------- /mcp command
+
+
+class McpAgent(FakeAgent):
+    """FakeAgent with a refresh_mcp_tools method (real Agent has one)."""
+
+    def __init__(self):
+        super().__init__()
+        self.refresh_calls = 0
+        self.refresh_message = "MCP refreshed (srv): 1 tool(s) injected: mcp_srv_echo"
+
+    def refresh_mcp_tools(self):
+        self.refresh_calls += 1
+        return self.refresh_message
+
+
+def _mcp_manager(monkeypatch, servers=None):
+    import src.tools.mcp as mcp_mod
+
+    class FakeMcpManager:
+        def __init__(self):
+            self.refreshed = 0
+
+        def status(self):
+            return servers or {
+                "srv": {"transport": "stdio", "status": "connected",
+                        "tools": ["echo"]},
+                "down": {"transport": "http", "status": "error: unreachable",
+                         "tools": []},
+            }
+
+        def refresh(self):
+            self.refreshed += 1
+            return {"srv": ["echo"]}
+
+    manager = FakeMcpManager()
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    return manager
+
+
+def test_mcp_command_listed_in_commands():
+    assert "/mcp" in ConversationSession.COMMANDS
+
+
+def test_cmd_mcp_lists_servers(monkeypatch, capsys):
+    _mcp_manager(monkeypatch)
+    it = iter(["/mcp", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "srv" in out and "down" in out
+    assert "connected" in out and "error: unreachable" in out
+    assert "stdio" in out and "http" in out
+
+
+def test_cmd_mcp_refresh_calls_agent_refresh(monkeypatch, capsys):
+    _mcp_manager(monkeypatch)
+    agent = McpAgent()
+    it = iter(["/mcp refresh", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.refresh_calls == 1
+    assert "MCP refreshed" in capsys.readouterr().out
+
+
+def test_cmd_mcp_refresh_falls_back_to_manager(monkeypatch, capsys):
+    manager = _mcp_manager(monkeypatch)
+    it = iter(["/mcp refresh", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()  # no refresh method
+    assert manager.refreshed == 1
+    assert "MCP refreshed" in capsys.readouterr().out
+
+
+def test_cmd_mcp_refresh_without_manager(monkeypatch, capsys):
+    import src.tools.mcp as mcp_mod
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: None)
+    it = iter(["/mcp refresh", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert "not configured" in capsys.readouterr().out.lower()
+
+
+def test_cmd_mcp_without_manager_shows_not_configured(monkeypatch, capsys):
+    import src.tools.mcp as mcp_mod
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: None)
+    it = iter(["/mcp", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    out = capsys.readouterr().out.lower()
+    assert "not configured" in out
+    assert "usage" in out
+
+
+def test_cmd_mcp_unknown_subcommand_shows_usage(monkeypatch, capsys):
+    _mcp_manager(monkeypatch)
+    it = iter(["/mcp frobnicate", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    out = capsys.readouterr().out.lower()
+    assert "usage" in out
+    assert "srv" not in out  # listing skipped for a bad sub-command

@@ -53,7 +53,8 @@ class ConversationSession:
     shutdown. All collaborators are injected, so no heavy module is imported.
     """
 
-    COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info", "/model", "/session")
+    COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info",
+                "/model", "/session", "/mcp")
 
     def __init__(self, agent, read_prompt: Callable[[], str | None], use_tools: bool = True,
                  quit_on_prompt_interrupt: bool = False):
@@ -177,6 +178,9 @@ class ConversationSession:
         if cmd == "/session":
             self._cmd_session(arg)
             return True
+        if cmd == "/mcp":
+            self._cmd_mcp(arg)
+            return True
 
         cprint(f"Unknown command: {text}. Type /help.", "red")
         return True
@@ -191,6 +195,7 @@ class ConversationSession:
             ("/info", "show model/context info"),
             ("/model [name]", "switch to a model from the models JSON file"),
             ("/session store|list|load", "save/list/restore chat sessions (JSON)"),
+            ("/mcp [refresh]", "list the MCP servers/tools; refresh reconnects"),
             ("Ctrl+C", "stop the response being generated"),
             ("Ctrl+D", "exit the session"),
         ]
@@ -558,6 +563,70 @@ class ConversationSession:
         model = data.get("model") or "unknown model"
         cprint(f"Session loaded: {path.name} "
                f"({len(loaded)} messages, model {model})", "green")
+
+    # ------------------------------------------------- MCP servers (/mcp)
+
+    def _cmd_mcp(self, arg: str) -> None:
+        """Inspect the configured MCP servers; ``refresh`` reconnects them.
+
+        ``/mcp`` renders a table of servers (name, transport, status, tool
+        count); ``/mcp refresh`` asks the agent to reconnect and rebuild the
+        injected tools (falling back to the manager when the agent has no
+        ``refresh_mcp_tools``).
+        """
+        import src.tools.mcp as mcp_tools
+
+        arg = arg.strip().lower()
+        if arg == "refresh":
+            refresh = getattr(self.agent, "refresh_mcp_tools", None)
+            if callable(refresh):
+                cprint(str(refresh()), "green")
+                return
+            manager = mcp_tools.get_manager()
+            if manager is None:
+                cprint("MCP is not configured (no [mcp] servers)", "yellow")
+                return
+            try:
+                results = manager.refresh()
+            except Exception as exc:
+                cprint(f"Error refreshing MCP: {exc}", "red")
+                return
+            cprint(f"MCP refreshed: {', '.join(results) or 'no server connected'}",
+                   "green")
+            return
+        if arg:
+            cprint("Usage: /mcp [refresh]", "yellow")
+            return
+        manager = mcp_tools.get_manager()
+        if manager is None:
+            cprint("MCP is not configured (no [mcp] servers)", "grey")
+            cprint("Usage: /mcp [refresh]", "yellow")
+            return
+        try:
+            status = manager.status()
+        except Exception as exc:
+            cprint(f"Error reading MCP status: {exc}", "red")
+            return
+        rows = [(name, entry.get("transport", ""),
+                 entry.get("status", ""), str(len(entry.get("tools", []))))
+                for name, entry in status.items()]
+        try:
+            from rich.console import Console
+            from rich.markup import escape
+            from rich.table import Table
+
+            table = Table(show_header=True, box=None, padding=(0, 2, 0, 0), pad_edge=False)
+            table.add_column("server", style="cyan", no_wrap=True)
+            table.add_column("transport", style="cyan")
+            table.add_column("status", style="cyan")
+            table.add_column("tools", style="cyan", justify="right")
+            for row in rows:
+                table.add_row(*(escape(cell) for cell in row))
+            Console().print(table)
+        except ImportError:  # pragma: no cover - rich is a hard dependency
+            for name, transport, status_text, count in rows:
+                cprint(f"  {name:<20} {transport:<7} {status_text:<30} {count}", "cyan")
+        cprint("Usage: /mcp refresh", "yellow")
 
     # -------------------------------------------------------------- shutdown
 
