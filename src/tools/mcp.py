@@ -450,14 +450,22 @@ class _SdkClient:
         self._call_timeout_s = call_timeout_s
 
     async def list_tools(self) -> list[dict]:
-        """Normalize the ``tools/list`` result into plain dicts."""
+        """Normalize the ``tools/list`` result into plain dicts.
+
+        Field names differ across SDK generations: 1.x uses camelCase
+        (``inputSchema``), 2.x snake_case (``input_schema``) - both are
+        normalized to the camelCase key used by the rest of the module.
+        """
         result = await self._session.list_tools()
         tools = []
         for tool in getattr(result, "tools", []) or []:
+            schema = getattr(tool, "inputSchema", None)
+            if schema is None:
+                schema = getattr(tool, "input_schema", None)
             tools.append({
                 "name": getattr(tool, "name", ""),
                 "description": getattr(tool, "description", "") or "",
-                "inputSchema": getattr(tool, "inputSchema", None),
+                "inputSchema": schema,
             })
         return tools
 
@@ -499,7 +507,11 @@ class McpSdkConnector:
         try:
             from mcp import ClientSession, StdioServerParameters
             from mcp.client.stdio import stdio_client
-            from mcp.client.streamable_http import streamablehttp_client
+            try:  # SDK >= 2.x renamed the factory (snake_case)
+                from mcp.client.streamable_http import streamable_http_client \
+                    as streamablehttp_client
+            except ImportError:  # SDK 1.x
+                from mcp.client.streamable_http import streamablehttp_client
         except ImportError as exc:
             raise McpError(
                 "mcp package not installed (pip install mcp)") from exc
