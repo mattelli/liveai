@@ -1,17 +1,6 @@
 [logging]
 level = "WARNING"
 
-[speech_det]
-model_path= ".res/faster-whisper-medium"
-silence_timeout_s = 2.0
-language = "en" # ISO 639-1 code, e.g. "en", "fr", "de", "it", "es", "zh", etc.
-beam_size = 5
-show_levels = true
-device = "auto"
-compute_type = "int8"
-calibration_chunks = 20
-guard_factor = 1.0
-
 [brain] 
 # LLM configuration: the model connection (model, base_url, api_key_env) lives
 # in the models JSON file ([brain] models_file); its FIRST entry boots the
@@ -47,7 +36,35 @@ agent_models = ["ternary-bonsai", "ternary-bonsai"]  # models.json entry names, 
 # agent_system_prompts = []                        # optional per-agent system prompts
 # agent_quiet = false                              # workers don't print/speak (default true)
 
-[speech_gen]
+[ui] # chat appearance (all keys optional)
+prompt = "You (hint '/') ›"          # chat-mode input label
+prompt_color = "yellow"     # label color: black/red/green/yellow/blue/magenta/cyan/grey/white (prompt_toolkit path only)
+assistant_color = "cyan"  # streamed assistant text color (any rich style: bright_blue, #5fd7ff, ...)
+code_theme = "monokai"    # Pygments theme for fenced code blocks (ansi_dark, dracula, github-dark, ...)
+banner = true             # false -> single-line "Agent ready." startup banner
+call_lines_max = 5        # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
+line_width = 120          # max width of each parameter value line; max limit is 240
+
+[input] # Interactive chat input (prompt_toolkit). All keys optional.
+history_file = "input.log"       # resolved relative to this config file; "." or empty disables persistence
+prompt_toolkit = true            # false -> builtin input() fallback
+auto_suggest = true              # inline history suggestions
+completion = true                # complete /slash commands with Tab
+explicit_paste = true            # /paste ... . fallback for terminals without bracketed paste
+multiline = true                 # true -> Esc+Enter to accept (advanced)
+
+[speech_det] # speech detection and transcription (faster-whisper)
+model_path= ".res/faster-whisper-medium"
+silence_timeout_s = 2.0
+language = "en" # ISO 639-1 code, e.g. "en", "fr", "de", "it", "es", "zh", etc.
+beam_size = 5
+show_levels = true
+device = "auto"
+compute_type = "int8"
+calibration_chunks = 20
+guard_factor = 1.0
+
+[speech_gen] # speech synthesis (TTS)
 model_path = ".res/voices/en_US-hfc_female-medium.onnx"
 # model_path = ".res/voices/it_IT-serena-high.onnx"
 samplerate = 22050
@@ -58,24 +75,6 @@ noise_scale = 1.0
 noise_w_scale = 1.0
 normalize_audio = false
 
-[ui] # chat appearance (all keys optional)
-prompt = "You (hint '/') ›"          # chat-mode input label
-prompt_color = "yellow"     # label color: black/red/green/yellow/blue/magenta/cyan/grey/white (prompt_toolkit path only)
-assistant_color = "cyan"  # streamed assistant text color (any rich style: bright_blue, #5fd7ff, ...)
-code_theme = "monokai"    # Pygments theme for fenced code blocks (ansi_dark, dracula, github-dark, ...)
-banner = true             # false -> single-line "Agent ready." startup banner
-call_lines_max = 5        # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
-line_width = 120          # max width of each parameter value line; max limit is 240
-
-[input]
-# Interactive chat input (prompt_toolkit). All keys optional.
-history_file = "input.log"       # resolved relative to this config file; "." or empty disables persistence
-prompt_toolkit = true            # false -> builtin input() fallback
-auto_suggest = true              # inline history suggestions
-completion = true                # complete /slash commands with Tab
-explicit_paste = true            # /paste ... . fallback for terminals without bracketed paste
-multiline = true                 # true -> Esc+Enter to accept (advanced)
-
 [summarization] # extractive text summarization (LexRank + sentence embeddings)
 model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to this config file
 device = "cpu"            # "cpu" or "cuda"
@@ -83,18 +82,18 @@ ratio = 0.1               # fraction of sentences to keep (0 < ratio <= 1)
 threshold = 0.5           # LexRank similarity threshold in [0, 1)
 max_sentences = 0         # 0 -> derive from ratio; >0 -> hard cap
 
-[document_query] # in-document search with a CrossEncoder (cross-encoder/ms-marco-TinyBERT-L2)
+[document_query] # in-document search with a CrossEncoder
 model_path = ".res/crossencoder/ms-marco-TinyBERT-L2"  # resolved relative to this config file
 device = "cpu"            # "cpu" or "cuda"
 chunk_size = 3            # consecutive sentences per passage
 top_k = 5                 # default number of results returned by query_document
 
-[image_search] # search images in a folder with a CLIP model (sentence-transformers/clip-ViT-B-32)
+[image_search] # search images in a folder with a CLIP model
 model_path = ".res/embedding/clip-ViT-B-32"  # same CLIP model as the multimodal embedding mode
 device = "cpu"            # "cpu" or "cuda"
 top_k = 3                 # default number of results returned by image_search
 
-[image_gen] # local image generation with Stable Diffusion (src/image_generator.py, diffusers)
+[image_gen] # local image generation with Stable Diffusion
 t2i_model = "UnfilteredAI/NSFW-GEN-ANIME"     # text-to-image model (HuggingFace id or local path)
 i2i_model = "runwayml/stable-diffusion-v1-5"  # image-to-image / inpaint model
 device = "auto"         # "auto" (cuda when available), "cpu" or "cuda"
