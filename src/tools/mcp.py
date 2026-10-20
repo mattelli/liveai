@@ -564,7 +564,38 @@ def mcp_list_tools(server: str = "") -> str:
     description each. Without ``server`` all servers are listed. Use this
     first to discover tool names and argument schemas before mcp_call_tool.
     """
-    return _NOT_CONFIGURED
+    manager = get_manager()
+    if manager is None:
+        return _NOT_CONFIGURED
+    try:
+        manager.connect_all()  # cheap when already connected
+    except Exception as exc:  # pragma: no cover - connect_all never raises
+        return f"Error: {exc}"
+    status = manager.status()
+    names = [server] if server else list(status)
+    if server and server not in status:
+        return (f"Error: unknown MCP server {server!r}. Configured: "
+                + (", ".join(status) or "(none)"))
+    lines = []
+    for name in names:
+        entry = status[name]
+        lines.append(f"{name} [{entry['transport']}] {entry['status']}")
+        if not entry["tools"]:
+            lines.append("  (no tools)")
+            continue
+        descriptions: dict[str, str] = {}
+        try:
+            for tool in manager.list_tools(name):
+                descriptions[tool.get("name", "")] = str(
+                    tool.get("description") or "").splitlines()[0] if (
+                    tool.get("description") or "").strip() else ""
+        except Exception as exc:
+            descriptions = {}
+            lines[-1] += f" (tool details unavailable: {exc})"
+        for tool_name in entry["tools"]:
+            description = descriptions.get(tool_name, "")
+            lines.append(f"  - {tool_name}" + (f": {description}" if description else ""))
+    return "\n".join(lines) if lines else "No MCP servers configured."
 
 
 @dump_func_call
@@ -574,4 +605,17 @@ def mcp_call_tool(server: str, tool: str, arguments: dict) -> str:
     argument schemas with mcp_list_tools first). ``arguments`` is the tool's
     input object; a JSON string is accepted as well.
     """
-    return _NOT_CONFIGURED
+    manager = get_manager()
+    if manager is None:
+        return _NOT_CONFIGURED
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments or "{}")
+        except json.JSONDecodeError as exc:
+            return f"Error: arguments is not valid JSON: {exc}"
+    if not isinstance(arguments, dict):
+        return f"Error: arguments must be a JSON object, got {type(arguments).__name__}"
+    try:
+        return str(manager.call(server, tool, arguments))
+    except McpError as exc:
+        return f"Error: {exc}"

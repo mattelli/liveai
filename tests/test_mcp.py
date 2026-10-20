@@ -548,3 +548,102 @@ def test_connector_http_and_stdio_transports_selected(monkeypatch):
     asyncio.run(connector._connect("web", {"url": "https://mcp.example/mcp"}))
     assert entered == [("http", "https://mcp.example/mcp")]
     assert params_seen == []  # stdio parameters never built for a url spec
+
+
+# ------------------------------------------------------------- bridge tools
+
+
+class FakeManager:
+    """Manager double for the bridge tools (records calls, fixed status)."""
+
+    def __init__(self, servers=None, results=None):
+        self.status_value = servers or {
+            "srv": {"transport": "stdio", "status": "connected",
+                    "tools": ["echo"]},
+            "down": {"transport": "http", "status": "error: cannot reach down",
+                     "tools": []},
+        }
+        self.results = results or {}
+        self.calls: list[tuple[str, str, dict]] = []
+        self.connect_calls = 0
+
+    def connect_all(self):
+        self.connect_calls += 1
+        return {}
+
+    def status(self):
+        return self.status_value
+
+    def list_tools(self, server):
+        return [{"name": "echo", "description": "Echo it\nlong line",
+                 "inputSchema": {"type": "object"}}]
+
+    def call(self, server, tool, arguments):
+        self.calls.append((server, tool, arguments))
+        return self.results.get((server, tool), f"ran {tool}")
+
+
+def test_mcp_list_tools_without_manager_returns_error(monkeypatch):
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: None)
+    assert mcp_mod.mcp_list_tools() == mcp_mod._NOT_CONFIGURED
+
+
+def test_mcp_call_tool_without_manager_returns_error(monkeypatch):
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: None)
+    assert mcp_mod.mcp_call_tool("srv", "echo", {}) == mcp_mod._NOT_CONFIGURED
+
+
+def test_mcp_call_tool_delegates_to_manager(monkeypatch):
+    fake = FakeManager(results={("srv", "echo"): "echoed!"})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: fake)
+    assert mcp_mod.mcp_call_tool("srv", "echo", {"text": "hi"}) == "echoed!"
+    assert fake.calls == [("srv", "echo", {"text": "hi"})]
+
+
+def test_mcp_call_tool_accepts_json_string_arguments(monkeypatch):
+    fake = FakeManager()
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: fake)
+    mcp_mod.mcp_call_tool("srv", "echo", '{"text": "hi"}')
+    assert fake.calls == [("srv", "echo", {"text": "hi"})]
+
+
+def test_mcp_call_tool_rejects_invalid_json_arguments(monkeypatch):
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: FakeManager())
+    result = mcp_mod.mcp_call_tool("srv", "echo", "{not json")
+    assert result.startswith("Error: arguments is not valid JSON")
+
+
+def test_mcp_call_tool_maps_mcperror_to_error_string(monkeypatch):
+    class Failing(FakeManager):
+        def call(self, server, tool, arguments):
+            raise McpError("server 'srv' has no tool 'missing'")
+
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: Failing())
+    result = mcp_mod.mcp_call_tool("srv", "missing", {})
+    assert result == "Error: server 'srv' has no tool 'missing'"
+
+
+def test_mcp_list_tools_renders_all_servers(monkeypatch):
+    fake = FakeManager()
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: fake)
+    out = mcp_mod.mcp_list_tools()
+    assert "srv [stdio] connected" in out
+    assert "down [http] error: cannot reach down" in out
+    assert "- echo: Echo it" in out  # one-line description only
+    assert "long line" not in out
+    assert fake.connect_calls == 1  # connect_all called for discovery
+
+
+def test_mcp_list_tools_single_server(monkeypatch):
+    fake = FakeManager()
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: fake)
+    out = mcp_mod.mcp_list_tools("srv")
+    assert "srv [stdio] connected" in out
+    assert "down" not in out
+
+
+def test_mcp_list_tools_unknown_server(monkeypatch):
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: FakeManager())
+    result = mcp_mod.mcp_list_tools("nope")
+    assert result.startswith("Error: unknown MCP server 'nope'")
+    assert "srv" in result  # lists the configured names
