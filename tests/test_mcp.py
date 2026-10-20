@@ -647,3 +647,140 @@ def test_mcp_list_tools_unknown_server(monkeypatch):
     result = mcp_mod.mcp_list_tools("nope")
     assert result.startswith("Error: unknown MCP server 'nope'")
     assert "srv" in result  # lists the configured names
+
+
+# --------------------------------------------------- mcp_tool_bindings (G1)
+
+
+class BindingManager:
+    """Manager double for the injection tests (status + list_tools)."""
+
+    def __init__(self, status, tools_by_server=None, results=None):
+        self.status_value = status
+        self.tools_by_server = tools_by_server or {}
+        self.results = results or {}
+        self.calls: list[tuple[str, str, dict]] = []
+
+    def connect_all(self):
+        return {name: [] for name, entry in self.status_value.items()
+                if entry.get("status") == "connected"}
+
+    def refresh(self):
+        return self.connect_all()
+
+    def status(self):
+        return self.status_value
+
+    def list_tools(self, server):
+        return list(self.tools_by_server.get(server, []))
+
+    def call(self, server, tool, arguments):
+        self.calls.append((server, tool, arguments))
+        return self.results.get((server, tool), f"ran {tool}")
+
+
+def test_bindings_empty_without_manager(monkeypatch):
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: None)
+    assert mcp_mod.mcp_tool_bindings() == ([], {})
+
+
+def test_bindings_build_definitions_from_input_schema(monkeypatch):
+    schema = {"type": "object", "properties": {"path": {"type": "string"}},
+              "required": ["path"]}
+    manager = BindingManager(
+        {"srv": {"transport": "http", "status": "connected", "tools": ["read"]}},
+        tools_by_server={"srv": [{"name": "read", "description": "Read a file",
+                                  "inputSchema": schema}]})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    definitions, impls = mcp_mod.mcp_tool_bindings()
+    assert len(definitions) == 1
+    function = definitions[0]["function"]
+    assert definitions[0]["type"] == "function"
+    assert function["name"] == "mcp_srv_read"
+    assert function["description"] == "Read a file"
+    assert function["parameters"] == schema  # inputSchema passes through verbatim
+    assert set(impls) == {"mcp_srv_read"}
+
+
+def test_bindings_prefix_and_sanitize_names(monkeypatch):
+    manager = BindingManager(
+        {"web.data": {"transport": "http", "status": "connected", "tools": []}},
+        tools_by_server={"web.data": [
+            {"name": "read file!", "description": "", "inputSchema": {}}]})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    _, impls = mcp_mod.mcp_tool_bindings()
+    assert list(impls) == ["mcp_web_data_read_file_"]  # '!' -> '_', ' ' -> '_'
+
+
+def test_bindings_truncate_long_names_to_64_chars(monkeypatch):
+    manager = BindingManager(
+        {"srv": {"transport": "http", "status": "connected", "tools": []}},
+        tools_by_server={"srv": [
+            {"name": "t" * 100, "description": "", "inputSchema": {}}]})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    _, impls = mcp_mod.mcp_tool_bindings()
+    name = next(iter(impls))
+    assert len(name) == 64 and name.startswith("mcp_srv_tttt")
+
+
+def test_bindings_resolve_name_collisions(monkeypatch):
+    """Same tool name on two servers, plus a collision with a built-in."""
+    tool = {"name": "search", "description": "", "inputSchema": {}}
+    manager = BindingManager(
+        {"a": {"transport": "http", "status": "connected", "tools": ["search"]},
+         "b": {"transport": "http", "status": "connected", "tools": ["search"]}},
+        tools_by_server={"a": [tool], "b": [dict(tool)]})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    _, impls = mcp_mod.mcp_tool_bindings(existing_names={"web_search", "mcp_a_search"})
+    # 'mcp_a_search' already taken by a built-in -> suffixed; then 'mcp_b_search'
+    assert set(impls) == {"mcp_a_search_2", "mcp_b_search"}
+
+
+def test_bindings_skip_tools_with_invalid_schema(monkeypatch):
+    manager = BindingManager(
+        {"srv": {"transport": "http", "status": "connected", "tools": []}},
+        tools_by_server={"srv": [
+            {"name": "no_schema", "description": "", "inputSchema": None},
+            {"name": "ok", "description": "", "inputSchema": {"type": "object"}},
+        ]})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    definitions, impls = mcp_mod.mcp_tool_bindings()
+    assert list(impls) == ["mcp_srv_ok"]
+    assert [d["function"]["name"] for d in definitions] == ["mcp_srv_ok"]
+
+
+def test_bindings_skip_failed_servers(monkeypatch):
+    manager = BindingManager(
+        {"down": {"transport": "http", "status": "error: unreachable",
+                  "tools": []}})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    assert mcp_mod.mcp_tool_bindings() == ([], {})
+
+
+def test_bindings_wrapper_calls_manager(monkeypatch):
+    manager = BindingManager(
+        {"srv": {"transport": "http", "status": "connected", "tools": ["echo"]}},
+        tools_by_server={"srv": [{"name": "echo", "description": "Echo it",
+                                  "inputSchema": {"type": "object"}}]},
+        results={("srv", "echo"): "echoed!"})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    _, impls = mcp_mod.mcp_tool_bindings()
+    wrapper = impls["mcp_srv_echo"]
+    assert wrapper.__name__ == "mcp_srv_echo"
+    assert "Echo it" in wrapper.__doc__
+    assert wrapper(text="hi") == "echoed!"
+    assert manager.calls == [("srv", "echo", {"text": "hi"})]
+
+
+def test_bindings_wrapper_maps_mcperror_to_error_string(monkeypatch):
+    class Failing(BindingManager):
+        def call(self, server, tool, arguments):
+            raise McpError("server 'srv' is not connected")
+
+    manager = Failing(
+        {"srv": {"transport": "http", "status": "connected", "tools": ["echo"]}},
+        tools_by_server={"srv": [{"name": "echo", "description": "",
+                                  "inputSchema": {}}]})
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    _, impls = mcp_mod.mcp_tool_bindings()
+    assert impls["mcp_srv_echo"]() == "Error: server 'srv' is not connected"

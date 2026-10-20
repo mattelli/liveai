@@ -1350,10 +1350,62 @@ class Agent(Brain):
         self.tools: list[Callable] = self._build_tools()
         self.tool_definitions: list[dict] = [self._openai_tool_definition(tool) for tool in self.tools]
         self._tool_impls = {tool.__name__: tool for tool in self.tools}
+        # MCP server tools (PLAN.md task 5): injected after the built-in tool
+        # setup, for the main agent and pooled agents alike (the manager is
+        # process-wide; isolated memory/vision tools are unaffected).
+        from src.tools import mcp as mcp_tools
+        extra_defs, extra_impls = mcp_tools.mcp_tool_bindings(
+            existing_names=set(self._tool_impls))
+        self._mcp_tool_names: list[str] = []
+        if extra_defs:
+            self.tools.extend(extra_impls.values())
+            self.tool_definitions.extend(extra_defs)
+            self._tool_impls.update(extra_impls)
+            self._mcp_tool_names = list(extra_impls)
+            self.logger.info(
+                "✅ Injected %d MCP tool(s): %s",
+                len(extra_impls), ", ".join(extra_impls))
         self.logger.info(
             "✅ Agent with Model '%s' is ready with [%d] tools.",
             self._model_name, len(self.tools)
         )
+
+    def refresh_mcp_tools(self) -> str:
+        """Reconnect the MCP servers and rebuild the injected tools in place.
+
+        Drops every previously injected MCP tool from ``tools`` /
+        ``tool_definitions`` / ``_tool_impls``, asks the manager to refresh
+        its connections and re-runs the injection. No-op with a log line when
+        no MCP manager is configured. Returns a short human-readable summary
+        (used by ``/mcp refresh``).
+        """
+        from src.tools import mcp as mcp_tools
+        manager = mcp_tools.get_manager()
+        if manager is None:
+            self.logger.debug("MCP refresh requested without a manager; ignored")
+            return "MCP is not configured (no [mcp] servers)"
+        for name in self._mcp_tool_names:
+            self._tool_impls.pop(name, None)
+        self.tools = [
+            tool for tool in self.tools
+            if tool.__name__ not in self._mcp_tool_names
+        ]
+        self.tool_definitions = [
+            definition for definition in self.tool_definitions
+            if definition.get("function", {}).get("name") not in self._mcp_tool_names
+        ]
+        results = manager.refresh()
+        extra_defs, extra_impls = mcp_tools.mcp_tool_bindings(
+            existing_names=set(self._tool_impls))
+        self._mcp_tool_names = list(extra_impls)
+        if extra_defs:
+            self.tools.extend(extra_impls.values())
+            self.tool_definitions.extend(extra_defs)
+            self._tool_impls.update(extra_impls)
+        connected = ", ".join(results) if results else "none"
+        tools = ", ".join(extra_impls) if extra_impls else "none"
+        return (f"MCP refreshed ({connected}): "
+                f"{len(extra_impls)} tool(s) injected: {tools}")
 
     def bootstrap(self) -> None:
         """Run the configured bootstrap prompt (called by the session, not on init)."""

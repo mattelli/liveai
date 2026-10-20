@@ -45,6 +45,7 @@ import contextlib
 import inspect
 import json
 import logging
+import re
 import threading
 from contextlib import AsyncExitStack
 from typing import Any, Callable, Protocol
@@ -53,7 +54,7 @@ from src.common import dump_func_call
 
 __all__ = [
     "Manager", "McpError", "configure", "configured_servers", "get_manager",
-    "mcp_call_tool", "mcp_list_tools",
+    "mcp_call_tool", "mcp_list_tools", "mcp_tool_bindings",
 ]
 
 logger = logging.getLogger(__name__)
@@ -619,3 +620,106 @@ def mcp_call_tool(server: str, tool: str, arguments: dict) -> str:
         return str(manager.call(server, tool, arguments))
     except McpError as exc:
         return f"Error: {exc}"
+
+
+## dynamic tool injection (native OpenAI function-calling tools) ##
+
+
+def _sanitize_tool_name(server: str, tool: str) -> str:
+    """``mcp_<server>_<tool>`` shaped for OpenAI: ``^[a-zA-Z0-9_-]{1,64}$``."""
+    raw = f"mcp_{server}_{tool}"
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "_", raw)[:64]
+    return sanitized if sanitized else "mcp_tool"
+
+
+def _resolve_name_collision(tool_name: str, taken: set[str]) -> str:
+    """First free variant of ``tool_name`` (``_2``, ``_3`` ... on collision).
+
+    Never silently shadows a built-in tool such as ``web_search``: the first
+    collision gets ``<name>_2``, the second ``<name>_3``, and so on.
+    """
+    if tool_name not in taken:
+        return tool_name
+    suffix = 2
+    while f"{tool_name}_{suffix}" in taken:
+        suffix += 1
+    return f"{tool_name}_{suffix}"
+
+
+def mcp_tool_bindings(existing_names: "set[str] | None" = None,
+                      manager=None) -> tuple[list[dict], dict[str, Callable]]:
+    """Build OpenAI tool definitions + wrapper callables for every MCP tool.
+
+    Returns ``([], {})`` when no manager exists (cheap: no connection
+    attempt). Otherwise ``connect_all()`` runs first (already-connected
+    servers are reused), then every server tool becomes:
+
+    - a definition ``{"type": "function", "function": {...}}`` whose
+      ``parameters`` is the MCP ``inputSchema`` **verbatim** (the schema
+      comes from the server, so ``_openai_tool_definition`` is bypassed);
+      tools with a missing/invalid ``inputSchema`` are skipped with a warning,
+    - a wrapper callable ``manager.call(server, tool, kwargs)`` named
+      ``mcp_<server>_<tool>`` (sanitized, truncated to 64 chars; collisions
+      with ``existing_names`` or other MCP tools get a ``_2``, ``_3`` ...
+      suffix).
+
+    ``existing_names`` are the tool names already registered by the agent,
+    so MCP tools never silently shadow a built-in.
+    """
+    if manager is None:
+        manager = get_manager()
+    if manager is None:
+        return [], {}
+    try:
+        manager.connect_all()  # cheap when already connected
+    except Exception as exc:  # pragma: no cover - connect_all never raises
+        logger.warning("[mcp] connect_all failed during bindings: %s", exc)
+    definitions: list[dict] = []
+    impls: dict[str, Callable] = {}
+    taken: set[str] = set(existing_names or ())
+    for server, entry in manager.status().items():
+        if entry.get("status") != "connected":
+            continue  # failed servers contribute no tools (G4)
+        try:
+            tools = manager.list_tools(server)
+        except Exception as exc:
+            logger.warning("[mcp] listing tools of %r failed: %s", server, exc)
+            continue
+        for tool in tools:
+            name = str(tool.get("name") or "").strip()
+            if not name:
+                continue
+            schema = tool.get("inputSchema")
+            if not isinstance(schema, dict):
+                logger.warning(
+                    "[mcp] tool %r of server %r skipped: no usable inputSchema",
+                    name, server)
+                continue
+            tool_name = _resolve_name_collision(
+                _sanitize_tool_name(server, name), taken)
+            taken.add(tool_name)
+            description = str(tool.get("description") or "").strip()
+            definitions.append({
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "description": description,
+                    "parameters": schema,
+                },
+            })
+
+            def make_wrapper(server: str = server, tool: str = name,
+                             tool_name: str = tool_name) -> Callable:
+                def wrapper(**kwargs) -> str:
+                    try:
+                        return str(manager.call(server, tool, kwargs))
+                    except McpError as exc:
+                        return f"Error: {exc}"
+                wrapper.__name__ = tool_name
+                wrapper.__doc__ = (
+                    f"MCP tool '{name}' of server '{server}'."
+                    + (f" {description}" if description else ""))
+                return wrapper
+
+            impls[tool_name] = make_wrapper()
+    return definitions, impls

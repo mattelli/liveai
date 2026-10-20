@@ -1247,3 +1247,119 @@ def test_thinking_budget_resets_per_round(monkeypatch):
     assert "round two thinking" in shown               # round 2 budget fresh
     assert shown.count("💭") == 2                      # header once per round
     assert agent._messages[-1] == {"role": "assistant", "content": "final answer"}
+
+
+# ------------------------------------------------ MCP tool injection (PLAN 5)
+
+
+def _mcp_manager(monkeypatch, results=None):
+    """Bind a fake MCP manager to src.tools.mcp.get_manager for an Agent."""
+    import src.tools.mcp as mcp_mod
+
+    class FakeMcpManager:
+        status_value = {
+            "test": {"transport": "http", "status": "connected",
+                     "tools": ["echo"]},
+        }
+        tools = [{"name": "echo", "description": "Echo a payload",
+                  "inputSchema": {"type": "object",
+                                  "properties": {"text": {"type": "string"}},
+                                  "required": ["text"]}}]
+        calls: list[tuple[str, str, dict]] = []
+        refreshed = 0
+
+        def connect_all(self):
+            return {"test": ["echo"]}
+
+        def refresh(self):
+            FakeMcpManager.refreshed += 1
+            return {"test": ["echo"]}
+
+        def status(self):
+            return self.status_value
+
+        def list_tools(self, server):
+            return list(self.tools)
+
+        def call(self, server, tool, arguments):
+            FakeMcpManager.calls.append((server, tool, arguments))
+            return (results or {}).get((server, tool), f"ran {tool}")
+
+    manager = FakeMcpManager()
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    return manager
+
+
+def test_agent_init_appends_mcp_tools(monkeypatch):
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    _mcp_manager(monkeypatch)
+    agent = live_ai_mod.Agent(_remote_config())
+    names = [tool.__name__ for tool in agent.tools]
+    assert "mcp_test_echo" in names
+    assert agent._mcp_tool_names == ["mcp_test_echo"]
+    assert "mcp_test_echo" in agent._tool_impls
+    definition = next(d for d in agent.tool_definitions
+                      if d["function"]["name"] == "mcp_test_echo")
+    assert definition["function"]["description"] == "Echo a payload"
+    assert definition["function"]["parameters"]["required"] == ["text"]
+
+
+def test_agent_without_mcp_manager_unchanged(monkeypatch):
+    """G3 regression guard: no manager -> identical tool set as before."""
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    import src.tools.mcp as mcp_mod
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: None)
+    agent = live_ai_mod.Agent(_remote_config())
+    names = [tool.__name__ for tool in agent.tools]
+    assert "mcp_test_echo" not in names
+    assert agent._mcp_tool_names == []
+    # The two always-present bridge tools are the only MCP-related additions.
+    assert "mcp_list_tools" in names and "mcp_call_tool" in names
+
+
+def test_act_loop_calls_mcp_tool(monkeypatch):
+    """Round 1 requests the MCP tool, round 2 answers from its result."""
+    manager = _mcp_manager(monkeypatch, results={("test", "echo"): "pong"})
+    agent = _thinking_act_agent(monkeypatch, [
+        [_tool_call_delta(name="mcp_test_echo",
+                          arguments='{"text": "ping"}')],
+        [_delta(delta_content="the echo said pong")],
+    ])
+    agent.act("use the echo tool")
+    assert manager.calls == [("test", "echo", {"text": "ping"})]
+    assert agent._messages[3] == {"role": "tool", "tool_call_id": "c1",
+                                  "content": "pong"}
+    assert agent._messages[-1] == {"role": "assistant",
+                                   "content": "the echo said pong"}
+
+
+def test_refresh_mcp_tools_replaces_entries(monkeypatch):
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    manager = _mcp_manager(monkeypatch)
+    agent = live_ai_mod.Agent(_remote_config())
+    before_tools = list(agent.tools)
+    before_definitions = list(agent.tool_definitions)
+
+    message = agent.refresh_mcp_tools()
+
+    assert "refreshed" in message and "mcp_test_echo" in message
+    assert manager.refreshed == 1
+    # The MCP tool is a fresh wrapper object at the same name.
+    names = [tool.__name__ for tool in agent.tools]
+    assert names.count("mcp_test_echo") == 1
+    assert len(agent.tools) == len(before_tools)
+    assert len(agent.tool_definitions) == len(before_definitions)
+    assert agent._tool_impls["mcp_test_echo"].__name__ == "mcp_test_echo"
+
+
+def test_refresh_mcp_tools_without_manager(monkeypatch):
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    import src.tools.mcp as mcp_mod
+    monkeypatch.setattr(mcp_mod, "get_manager", lambda: None)
+    agent = live_ai_mod.Agent(_remote_config())
+    message = agent.refresh_mcp_tools()
+    assert "not configured" in message
