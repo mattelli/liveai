@@ -24,6 +24,7 @@ from src.tools import (
     download_file, extract_archive, zip_files,
     search_pattern_in_files, replace_string_in_file, search_in_file,
     fetch_financial_data, save_financial_chart,
+    mcp_list_tools, mcp_call_tool,
 )
 from src.tools import speech as speech_tools
 
@@ -134,6 +135,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
         extract_webpage, download_file, extract_archive, zip_files,
         fetch_financial_data, save_financial_chart,
         generate_image, unload_image_generator,
+        mcp_list_tools, mcp_call_tool,
         exit_gracefully
     ]
 

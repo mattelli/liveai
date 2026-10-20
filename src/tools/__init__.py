@@ -14,6 +14,7 @@
 - ``memory``    : personal memory + conversation history (recall/store/clear)
 - ``speech``    : Piper text-to-speech toggle
 - ``vision``    : image description through the multimodal chat model
+- ``mcp``       : MCP (Model Context Protocol) servers as agent tools
 
 Every public tool is re-exported here, so ``from src.tools import <tool>``
 keeps working for callers (``src/live_ai.py``) and tests. Mutable test seams
@@ -53,6 +54,7 @@ from .corpora import list_corpora, query_corpus, store_corpus
 from .memory import clear_chat, recall_memory, store_memory
 from .speech import allow_speech
 from .vision import image_response
+from .mcp import mcp_call_tool, mcp_list_tools
 
 __all__ = [
     "CAPTURED_IMAGE", "GENERATED_IMAGE", "ValidYF", "allow_speech",
@@ -60,7 +62,8 @@ __all__ = [
     "exit_gracefully", "extract_archive", "extract_webpage",
     "fetch_financial_data", "format_search_results", "generate_image",
     "get_working_directory", "image_response", "image_search",
-    "list_corpora", "normalize_extensions", "query_corpus",
+    "list_corpora", "mcp_call_tool", "mcp_list_tools",
+    "normalize_extensions", "query_corpus",
     "query_document", "read_text_file", "recall_memory",
     "replace_string_in_file", "run_command", "safe_filename",
     "save_financial_chart", "search_in_file", "search_pattern_in_files",
@@ -78,8 +81,11 @@ def configure(config) -> None:
     section it needs and ignores the rest. ``vision`` is not in the list
     because it is purely session-bound (see ``bind_session``).
     """
-    from . import corpora, docquery, image_gen, imgsearch, memory, speech, summarize
-    for module in (corpora, docquery, image_gen, imgsearch, memory, speech, summarize):
+    from . import (
+        corpora, docquery, image_gen, imgsearch, mcp, memory, speech, summarize,
+    )
+    for module in (corpora, docquery, image_gen, imgsearch, mcp, memory,
+                   speech, summarize):
         module.configure(config)
 
 
