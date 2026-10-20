@@ -271,16 +271,19 @@ class Manager:
         (the caller decides whether to raise or degrade to an error string).
         """
         self.start()
+        effective = timeout if timeout is not None else self._connect_timeout_s
         try:
             coro = self._invoke(fn, *args)
             future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-            return future.result(
-                timeout if timeout is not None else self._connect_timeout_s)
+            return future.result(effective)
         except McpError:
             raise
         except Exception as exc:
             if isinstance(exc, asyncio.TimeoutError) or "timeout" in str(exc).lower():
-                raise McpError(f"timed out after {timeout}s: {exc}") from exc
+                detail = str(exc)
+                raise McpError(
+                    f"timed out after {effective}s" + (f": {detail}" if detail else "")
+                ) from exc
             raise McpError(str(exc)) from exc
 
     async def _invoke(self, fn: Callable, *args) -> Any:
