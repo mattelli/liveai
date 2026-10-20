@@ -116,3 +116,19 @@ extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx,
 image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
 chunk_size = 5             # sentences per indexed passage
 top_k = 5                  # default number of results returned by query_corpus
+
+# [mcp] # MCP (Model Context Protocol) servers as agent tools (optional; pip install mcp)
+# Every server tool becomes a native agent tool (mcp_<server>_<tool>); the
+# mcp_list_tools/mcp_call_tool bridge tools always exist for runtime discovery.
+# A server entry needs 'command' (+ optional 'args' list) or 'url'.
+# Windows note: if spawning npx directly fails, use command = "cmd",
+# args = ["/c", "npx", "-y", ...]. Inspect with /mcp, reconnect with /mcp refresh.
+# connect_timeout_s = 10.0   # per-server connect + tools/list budget
+# call_timeout_s    = 120.0  # per-tool-call budget
+#
+# [mcp.servers.filesystem]      # stdio server: local process
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/Max/data"]
+#
+# [mcp.servers.deepwiki]        # HTTP server: streamable HTTP endpoint
+# url = "https://mcp.deepwiki.com/mcp"

@@ -663,6 +663,54 @@ Notes:
   point workers at cloud endpoints in models.json for true parallelism, or
   keep `parallel_agents = 1` on constrained machines.
 
+## MCP servers (optional)
+
+The assistant can use tools exposed by [MCP (Model Context Protocol)](https://modelcontextprotocol.io)
+servers. Every server tool becomes a **native agent tool** (`mcp_<server>_<tool>`,
+built from the server's `inputSchema`), callable in the normal tool loop; two
+extra bridge tools (`mcp_list_tools`, `mcp_call_tool`) cover runtime discovery
+and servers that are offline at startup. Requires the official SDK in the same
+environment:
+
+```
+pip install mcp
+```
+
+Servers are configured in `config.toml` (the block ships commented out, so the
+feature stays off by default):
+
+```toml
+[mcp]
+connect_timeout_s = 10.0   # per-server connect + tools/list budget
+call_timeout_s    = 120.0  # per-tool-call budget
+
+[mcp.servers.filesystem]      # stdio server: local process
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/Max/data"]
+
+[mcp.servers.deepwiki]        # HTTP server: streamable HTTP endpoint
+url = "https://mcp.deepwiki.com/mcp"
+```
+
+A server entry needs `command` (+ optional `args` list) **or** `url`; anything
+else is skipped with a warning. Windows note for stdio servers: if spawning
+`npx` directly fails, use `command = "cmd"`, `args = ["/c", "npx", "-y", ...]`.
+
+- `/mcp` lists the configured servers with transport, connection status and
+  tool count; `/mcp refresh` reconnects all servers and rebuilds the injected
+  tools.
+- A failing/unreachable server never prevents startup: it degrades to an
+  error string (the agent keeps answering) and can be retried with
+  `/mcp refresh`.
+- Without an `[mcp]` section (or without the `mcp` package) behavior is
+  unchanged: no new tools beyond the two bridge tools, no startup cost.
+
+**Security note:** MCP servers execute code with your user privileges (a stdio
+server is a local process; a URL server is a remote service). Only configure
+servers you trust — the same class of trust as the built-in `run_command`
+tool.
+
+
 ## Setup (Python 3.12.10)
 
 OS Windows 11 (powershell)
