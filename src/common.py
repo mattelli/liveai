@@ -395,7 +395,7 @@ def dump_func_call(func):
     parameter per line (grey foreground). The block background is green on
     success and red on failure, so the block is printed after the call
     returns. ``[ui] call_lines_max`` caps the block height (parameters
-    beyond it are elided with a count).
+    beyond it are elided with a count); ``0`` skips the dump entirely.
     """
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -419,24 +419,34 @@ def dump_func_call(func):
     return wrapper
 
 
-# Max lines of the [CALL] block ([ui] call_lines_max, see configure_ui).
-_call_lines_max: int = 8
+# Max lines of the [CALL] block ([ui] call_lines_max, see configure_ui);
+_call_lines_max: int = 3 # 0 disables the dump entirely.
+_line_width = 80
+_max_width = 240  # max width of the [CALL] block (truncates long lines)
 
 
 def configure_ui(config) -> None:
     """Inject ``[ui]`` display settings for raw prints (tool-call blocks).
 
     ``[ui] call_lines_max`` bounds the number of lines of the multi-line
-    ``[CALL]`` block (header + parameters + status line); unset/invalid
-    keeps the built-in default.
+    ``[CALL]`` block (header + parameters + status line); an explicit ``0``
+    disables the dump entirely (no block is printed at all). A missing
+    ``[ui]`` section/key or an invalid value keeps the built-in default.
     """
-    global _call_lines_max
+    global _call_lines_max, _line_width
+    ui = getattr(config, "ui", None)
+    if ui is None:
+        return  # no [ui] block / key unset: keep the built-in default
     try:
-        value = int(getattr(getattr(config, "ui", None), "call_lines_max", 0) or 0)
+        value = int(ui.call_lines_max if hasattr(ui, "call_lines_max") else _call_lines_max)
     except (TypeError, ValueError):
-        value = 0
-    if value > 0:
-        _call_lines_max = value
+        return  # invalid value: keep the built-in default
+    _call_lines_max = max(value, 0)  # 0 (or negative) disables the dump
+    try:
+        value = int(ui.line_width if hasattr(ui, "line_width") else _line_width)
+    except (TypeError, ValueError):
+        return  # invalid value: keep the built-in default
+    _line_width = max(value, 0)  # 0 disables value truncation
 
 
 def _print_call_block(name: str, args: list[tuple[str, object]], *,
@@ -448,13 +458,16 @@ def _print_call_block(name: str, args: list[tuple[str, object]], *,
     ``call_lines_max`` cap are elided with a count. The whole block is
     padded to a uniform width so the background renders as a solid panel:
     dark green (256-color 22) on success, dark red (256-color 88) on
-    failure; foreground is bold grey for readability on both.
+    failure; foreground is bold grey for readability on both. Skipped
+    entirely when ``call_lines_max`` is 0 (dump disabled).
     """
+    if _call_lines_max <= 0:
+        return  # [ui] call_lines_max = 0: the [CALL] dump is skipped
     if _output_hook is not None:
         _output_hook()
-    value_width = 80
+    line_width = _line_width
     param_lines = [
-        f"  {param} = {repr(value)[:value_width]}{'…' if len(repr(value)) > value_width else ''}"
+        f"  {param} = {repr(value)[:line_width]}{'…' if len(repr(value)) > line_width else ''}"
         for param, value in args
     ]
     if failed is not None:
@@ -471,7 +484,7 @@ def _print_call_block(name: str, args: list[tuple[str, object]], *,
                  + param_lines[:budget]
                  + [f"  … (+{hidden} more parameters)"]
                  + [status])
-    width = min(max(len(line) for line in lines), 120)
+    width = min(max(len(line) for line in lines), _max_width)
     # Dark backgrounds (xterm-256): 22 = dark green, 88 = dark red.
     background = "48;5;88" if failed is not None else "48;5;22"
     print()  # blank separator line, outside the colored block

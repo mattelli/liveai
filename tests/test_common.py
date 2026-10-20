@@ -334,6 +334,27 @@ def test_dump_func_call_caps_block_lines(capsys, monkeypatch):
     assert any("… (+6 more parameters)" in line for line in lines)
 
 
+def test_dump_func_call_skipped_when_call_lines_max_zero(capsys, monkeypatch):
+    """[ui] call_lines_max = 0 disables the [CALL] dump entirely."""
+    monkeypatch.setattr(common_mod, "_call_lines_max", 0)
+    _plain()
+
+    @common_mod.dump_func_call
+    def silent(x, y=2):
+        return "ok"
+
+    assert silent(1) == "ok"
+    assert capsys.readouterr().out == ""  # nothing printed, no separator either
+
+    @common_mod.dump_func_call
+    def silent_boom(x):
+        raise ValueError("bad")
+
+    with pytest.raises(ValueError):
+        silent_boom(1)
+    assert capsys.readouterr().out == ""  # failures stay silent too
+
+
 def test_dump_func_call_self_and_long_values(capsys, monkeypatch):
     monkeypatch.setattr(common_mod, "_call_lines_max", 8)
     _plain()
@@ -361,10 +382,10 @@ def test_configure_ui_parses_call_lines_max(monkeypatch):
     assert common_mod._call_lines_max == 12
     common_mod.configure_ui(NS(ui=NS(call_lines_max="bogus")))  # ignored
     assert common_mod._call_lines_max == 12
-    common_mod.configure_ui(NS(ui=NS(call_lines_max=0)))  # unset -> keep
-    assert common_mod._call_lines_max == 12
     common_mod.configure_ui(NS())  # no [ui] at all -> keep
     assert common_mod._call_lines_max == 12
+    common_mod.configure_ui(NS(ui=NS(call_lines_max=0)))  # explicit 0 -> dump off
+    assert common_mod._call_lines_max == 0
 
 
 def test_stream_printer_blank_line_between_thinking_and_answer(capsys):

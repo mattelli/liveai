@@ -64,7 +64,8 @@ prompt_color = "yellow"     # label color: black/red/green/yellow/blue/magenta/c
 assistant_color = "cyan"  # streamed assistant text color (any rich style: bright_blue, #5fd7ff, ...)
 code_theme = "monokai"    # Pygments theme for fenced code blocks (ansi_dark, dracula, github-dark, ...)
 banner = true             # false -> single-line "Agent ready." startup banner
-call_lines_max = 3        # max lines of the [CALL] tool-call block; extra params elided (grey foreground, dark green/dark red background on success/failure)
+call_lines_max = 5        # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
+line_width = 120          # max width of each parameter value line; max limit is 240
 
 [input]
 # Interactive chat input (prompt_toolkit). All keys optional.
