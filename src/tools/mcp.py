@@ -40,13 +40,16 @@ servers) the module is a no-op: no manager, no injected tools, no I/O.
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import logging
-from typing import Any, Callable
+import threading
+from typing import Any, Callable, Protocol
 
 from src.common import dump_func_call
 
 __all__ = [
-    "configure", "configured_servers", "get_manager",
+    "Manager", "McpError", "configure", "configured_servers", "get_manager",
     "mcp_call_tool", "mcp_list_tools",
 ]
 
@@ -60,8 +63,46 @@ _DEFAULT_CALL_TIMEOUT_S = 120.0
 _SERVERS: dict[str, dict] = {}
 _CONNECT_TIMEOUT_S: float = _DEFAULT_CONNECT_TIMEOUT_S
 _CALL_TIMEOUT_S: float = _DEFAULT_CALL_TIMEOUT_S
+_MANAGER: "Manager | None" = None
 
 _NOT_CONFIGURED = "Error: MCP is not configured (no [mcp] servers)"
+
+
+class McpError(Exception):
+    """Raised for MCP manager failures (unknown server/tool, timeout, ...)."""
+
+
+class Client(Protocol):
+    """Transport-level client for one connected MCP server (see Connector)."""
+
+    def list_tools(self) -> list[dict]:
+        """``[{"name", "description", "inputSchema"}]`` of the server tools."""
+        ...
+
+    def call(self, tool: str, arguments: dict) -> str:
+        """Run one tool and return its result as a string."""
+        ...
+
+    def close(self) -> None:
+        """Release the connection (idempotent, best effort)."""
+        ...
+
+
+class Connector(Protocol):
+    """Seam between the Manager and the transport layer (Task 3 SDK connector).
+
+    ``connect`` may be a plain function or a coroutine function: the Manager
+    awaits awaitables and uses plain results directly (uniform sync/async
+    invocation), so unit tests inject sync fakes while the real connector is
+    async.
+    """
+
+    def connect(self, name: str, spec: dict) -> Client: ...
+
+
+# Test seam (module-level like ``_VIDEO_CAPTURE_FACTORY`` in src/tools/camera.py):
+# patched by tests to hand out fake connectors; the real one is Task 3.
+_CONNECTOR_FACTORY: Callable[[], Connector] | None = None
 
 
 def _spec_items(servers) -> list[tuple[str, dict]]:
@@ -106,8 +147,9 @@ def configure(config) -> None:
     happen lazily on first use). A missing/empty section clears the state,
     so the module stays a no-op.
     """
-    global _SERVERS, _CONNECT_TIMEOUT_S, _CALL_TIMEOUT_S
+    global _SERVERS, _CONNECT_TIMEOUT_S, _CALL_TIMEOUT_S, _MANAGER
     _SERVERS = {}
+    _MANAGER = None  # a config change invalidates the manager singleton
     _CONNECT_TIMEOUT_S = _DEFAULT_CONNECT_TIMEOUT_S
     _CALL_TIMEOUT_S = _DEFAULT_CALL_TIMEOUT_S
     section = getattr(config, "mcp", None)
@@ -137,9 +179,217 @@ def configured_servers() -> dict[str, dict]:
     return dict(_SERVERS)
 
 
-def get_manager():
-    """Process-wide :class:`Manager` singleton (``None`` when unconfigured)."""
-    return None  # the real singleton arrives with the Manager implementation
+def get_manager() -> "Manager | None":
+    """Process-wide :class:`Manager` singleton (``None`` when unconfigured).
+
+    Built lazily on the first call, **only when servers are configured**;
+    ``configure()`` itself never connects or spawns threads.
+    """
+    global _MANAGER
+    if not _SERVERS:
+        return None
+    if _MANAGER is None:
+        connector = _CONNECTOR_FACTORY() if _CONNECTOR_FACTORY else None
+        _MANAGER = Manager(
+            dict(_SERVERS),
+            connect_timeout_s=_CONNECT_TIMEOUT_S,
+            call_timeout_s=_CALL_TIMEOUT_S,
+            connector=connector,
+        )
+    return _MANAGER
+
+
+class Manager:
+    """Owns the MCP connections and a dedicated event-loop thread.
+
+    All MCP I/O happens on that loop; the public API is synchronous and
+    callable from any agent thread (``ask_parallel`` fans out on threads).
+    Every call runs to completion on the loop before the next one starts, so
+    per-server operations are naturally serialized - callers blocking on
+    ``fut.result()`` from several threads are safe without extra locking.
+
+    Transport work is delegated to a :class:`Connector` (injected via the
+    module-level ``_CONNECTOR_FACTORY`` seam): ``connect`` may be sync or
+    async, and client methods may be sync or async - :meth:`_invoke` awaits
+    awaitables and returns plain results either way.
+    """
+
+    _THREAD_JOIN_TIMEOUT_S = 5.0
+
+    def __init__(self, servers: dict[str, dict],
+                 connect_timeout_s: float = _DEFAULT_CONNECT_TIMEOUT_S,
+                 call_timeout_s: float = _DEFAULT_CALL_TIMEOUT_S,
+                 connector: Connector | None = None):
+        self.logger = logger
+        self._servers = dict(servers)
+        self._connect_timeout_s = connect_timeout_s
+        self._call_timeout_s = call_timeout_s
+        self._connector = connector or _CONNECTOR_FACTORY()
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._clients: dict[str, Client] = {}
+        self._tool_lists: dict[str, list[dict]] = {}
+        self._errors: dict[str, str] = {}
+        self._lock = threading.Lock()  # guards the state dicts only
+
+    ## event-loop thread ##
+
+    def start(self) -> None:
+        """Spawn the daemon thread running the event loop (idempotent)."""
+        with self._lock:
+            if self._thread is not None and self._thread.is_alive():
+                return
+            self._loop = asyncio.new_event_loop()
+            self._thread = threading.Thread(
+                target=self._run_loop, name="mcp-manager-loop", daemon=True)
+            self._thread.start()
+
+    def _run_loop(self) -> None:
+        loop = self._loop
+        try:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+        finally:
+            asyncio.set_event_loop(None)
+            loop.close()
+
+    def _submit(self, fn: Callable, *args, timeout: float | None = None) -> Any:
+        """Run ``fn`` on the loop thread and wait for its result.
+
+        Converts timeouts and any failure into a raised :class:`McpError`
+        (the caller decides whether to raise or degrade to an error string).
+        """
+        self.start()
+        try:
+            coro = self._invoke(fn, *args)
+            future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            return future.result(
+                timeout if timeout is not None else self._connect_timeout_s)
+        except McpError:
+            raise
+        except Exception as exc:
+            if isinstance(exc, asyncio.TimeoutError) or "timeout" in str(exc).lower():
+                raise McpError(f"timed out after {timeout}s: {exc}") from exc
+            raise McpError(str(exc)) from exc
+
+    async def _invoke(self, fn: Callable, *args) -> Any:
+        """Await ``fn(*args)`` when it returns an awaitable (sync/async seam)."""
+        result = fn(*args)
+        if inspect.isawaitable(result):
+            result = await result
+        return result
+
+    ## connections ##
+
+    def connect_all(self) -> dict[str, list[str]]:
+        """Connect every configured server; return ``{server: [tool names]}``.
+
+        A failing server is captured as an error string (never raised) and
+        simply misses from the result; it can be retried via :meth:`refresh`.
+        Already-connected servers are reused.
+        """
+        results: dict[str, list[str]] = {}
+        for name, spec in self._servers.items():
+            if name in self._clients:
+                results[name] = [tool.get("name", "")
+                                 for tool in self._tool_lists.get(name, [])]
+                continue
+            try:
+                client = self._submit(self._connector.connect, name, spec)
+                tools = self._submit(client.list_tools)
+            except Exception as exc:
+                self._errors[name] = str(exc)
+                self.logger.warning("[mcp] server %r failed to connect: %s",
+                                    name, exc)
+                continue
+            self._clients[name] = client
+            self._tool_lists[name] = list(tools or [])
+            self._errors.pop(name, None)
+            results[name] = [tool.get("name", "") for tool in self._tool_lists[name]]
+            self.logger.info("[mcp] server %r connected with %d tool(s)",
+                             name, len(results[name]))
+        return results
+
+    def _require_client(self, server: str) -> Client:
+        """Connected client of ``server`` (:class:`McpError` otherwise)."""
+        if server not in self._servers:
+            raise McpError(f"unknown server {server!r}. Configured: "
+                           + (", ".join(self._servers) or "(none)"))
+        client = self._clients.get(server)
+        if client is None:
+            error = self._errors.get(server)
+            raise McpError(
+                f"server {server!r} is not connected"
+                + (f" ({error})" if error else ""))
+        return client
+
+    def list_tools(self, server: str) -> list[dict]:
+        """Tool records (``{"name", "description", "inputSchema"}``) of a server."""
+        client = self._require_client(server)
+        return self._submit(client.list_tools)
+
+    def call(self, server: str, tool: str, arguments: dict) -> str:
+        """Run one tool on ``server``; returns the result string.
+
+        Raises :class:`McpError` on unknown server/tool, unconnected server
+        or timeout (``call_timeout_s`` budget).
+        """
+        client = self._require_client(server)
+        tools = {t.get("name") for t in self._tool_lists.get(server, [])}
+        if tool not in tools:
+            raise McpError(f"server {server!r} has no tool {tool!r}")
+        return self._submit(client.call, tool, arguments,
+                            timeout=self._call_timeout_s)
+
+    def status(self) -> dict[str, dict]:
+        """Per-server view for ``/mcp``: transport, tools, error state."""
+        view: dict[str, dict] = {}
+        for name, spec in self._servers.items():
+            entry: dict[str, Any] = {
+                "transport": "http" if spec.get("url") else "stdio",
+            }
+            if name in self._clients:
+                entry["status"] = "connected"
+                entry["tools"] = [t.get("name", "")
+                                  for t in self._tool_lists.get(name, [])]
+            elif name in self._errors:
+                entry["status"] = f"error: {self._errors[name]}"
+                entry["tools"] = []
+            else:
+                entry["status"] = "not connected"
+                entry["tools"] = []
+            view[name] = entry
+        return view
+
+    def refresh(self) -> dict[str, list[str]]:
+        """Close every client and reconnect from scratch (same shape as
+        :meth:`connect_all`)."""
+        self._close_clients()
+        return self.connect_all()
+
+    def _close_clients(self) -> None:
+        for name, client in list(self._clients.items()):
+            try:
+                self._submit(client.close)
+            except Exception as exc:
+                self.logger.debug("[mcp] closing %r failed: %s", name, exc)
+        self._clients.clear()
+        self._tool_lists.clear()
+
+    def shutdown(self) -> None:
+        """Close clients, stop the loop thread and drop the singleton state."""
+        with self._lock:
+            if self._loop is None:
+                return
+        self._close_clients()
+        loop, self._loop = self._loop, None
+        thread, self._thread = self._thread, None
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except RuntimeError:
+            pass  # loop already closed
+        if thread is not None:
+            thread.join(timeout=self._THREAD_JOIN_TIMEOUT_S)
 
 
 @dump_func_call
