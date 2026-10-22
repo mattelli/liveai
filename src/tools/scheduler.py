@@ -64,14 +64,16 @@ def _default_scheduler_factory() -> "Scheduler":
     return Scheduler(
         persist_file=_CONFIG.get("persist_file"),
         on_missed=_CONFIG.get("on_missed", "skip"),
+        _execute=_agent_executor,
     )
 
 
 def configure(config) -> None:
     """
     Inject the application config into the tool (called by ``main.py`` after
-    ``load_config``). Keeps the ``[scheduler]`` section; a missing section
-    keeps the scheduler disabled (tools return the disabled-error string).
+    ``load_config``). Keeps the ``[scheduler]`` section (plus the full config
+    for the execution-agent factory); a missing section keeps the scheduler
+    disabled (tools return the disabled-error string).
     """
     global _CONFIG
     section = getattr(config, "scheduler", None)
@@ -79,6 +81,7 @@ def configure(config) -> None:
         "enabled": bool(getattr(section, "enabled", False)),
         "persist_file": getattr(section, "persist_file", None),
         "on_missed": getattr(section, "on_missed", "skip"),
+        "config": config,  # full config: the execution agent needs [brain]
     }
 
 
@@ -370,7 +373,7 @@ class Scheduler:
                               task.id, exc)
 
     def _default_execute(self, task: ScheduledTask) -> None:
-        """Default executor: log only (Task 3 wires the real agent in)."""
+        """Default executor: log only (used when no agent executor is bound)."""
         self.logger.info("Executing scheduled task %s: %s", task.id, task.prompt)
 
     ## persistence ##
@@ -432,6 +435,60 @@ class Scheduler:
         except Exception as exc:
             self.logger.warning("Cannot write schedule file %s: %s",
                                 self._persist_file, exc)
+
+
+## execution agent (Task 3: run scheduled prompts on a dedicated agent) ##
+
+# Test seam: patched by tests to hand out a fake execution agent (no LLM).
+_AGENT_FACTORY = None
+
+
+def _default_agent_factory():
+    """Build the dedicated isolated execution agent (AgentPool recipe).
+
+    Same pattern as pooled agents: quiet, tool-isolated, built from the app
+    config kept by ``configure()``. Returns ``None`` when the config is
+    missing or agent construction fails (the executor then only logs).
+    """
+    config = _CONFIG.get("config")
+    if config is None:
+        return None
+    try:
+        from src.live_ai import Agent
+        return Agent(config, isolated_tools=True, quiet=True)
+    except Exception as exc:
+        logger.warning("Cannot build the scheduler execution agent: %s", exc)
+        return None
+
+
+def _agent_executor(task: ScheduledTask) -> None:
+    """
+    Run a due task's prompt on the dedicated scheduler agent.
+
+    The agent is built lazily on first execution and owned exclusively by the
+    scheduler thread (only one ``act()`` at a time — ``Agent.act()`` is not
+    thread-safe). Agent failures are logged, never raised: the scheduler
+    thread must survive a broken model endpoint.
+    """
+    global _EXECUTOR_AGENT
+    agent = _EXECUTOR_AGENT
+    if agent is None:
+        factory = _AGENT_FACTORY or _default_agent_factory
+        agent = factory()
+        if agent is None:
+            logger.warning("No execution agent available: task %s prompt "
+                           "logged only: %s", task.id, task.prompt)
+            return
+        _EXECUTOR_AGENT = agent
+    logger.info("Scheduled task %s -> execution agent", task.id)
+    try:
+        agent.act(task.prompt)
+    except Exception as exc:
+        logger.error("Scheduled task %s execution failed: %s", task.id, exc)
+
+
+# Lazily built dedicated execution agent (owned by the scheduler thread).
+_EXECUTOR_AGENT = None
 
 
 ## agent tools (module-default instance, memory.py pattern) ##
@@ -561,3 +618,9 @@ def list_scheduled_tasks() -> str:
 def cancel_scheduled_task(task_id: str) -> str:
     """Cancel a scheduled task by id (module-default instance)."""
     return _default.cancel_scheduled_task(task_id)
+
+
+def reset_executor_agent() -> None:
+    """Drop the lazily built execution agent (test helper / model switch)."""
+    global _EXECUTOR_AGENT
+    _EXECUTOR_AGENT = None

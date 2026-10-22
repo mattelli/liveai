@@ -36,6 +36,7 @@ def main(argv=None) -> int:
 
     agent = Agent(config=config)
     _setup_agent_pool(config)  # no-op when [agent] parallel_agents = 0
+    _setup_scheduler(config)   # no-op when [scheduler] enabled is false/missing
     reader = None
 
     try:
@@ -75,6 +76,38 @@ def main(argv=None) -> int:
     finally:
         if reader is not None:
             reader.close()
+        _stop_scheduler()  # no-op when the scheduler never started
+
+
+def _setup_scheduler(config) -> None:
+    """Start the task scheduler from the ``[scheduler]`` config section.
+
+    No-op when the section is missing or ``enabled`` is false, so single-agent
+    setups are untouched. Failures are logged, never raised: a broken
+    scheduler must not prevent the session from starting.
+    """
+    from src.tools import scheduler as scheduler_module
+
+    if not scheduler_module._enabled():
+        return
+    try:
+        scheduler_module.bind_scheduler(scheduler_module._default_scheduler_factory())
+        scheduler_module._SCHEDULER.start()
+        cprint("⏰ Task scheduler started.", "grey")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Scheduler startup failed: %s", exc)
+
+
+def _stop_scheduler() -> None:
+    """Stop the scheduler thread if it was started (main.py finally block)."""
+    from src.tools import scheduler as scheduler_module
+
+    scheduler = scheduler_module._SCHEDULER
+    if scheduler is not None:
+        try:
+            scheduler.stop()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Scheduler stop failed: %s", exc)
 
 
 def _setup_agent_pool(config) -> None:
