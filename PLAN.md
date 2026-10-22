@@ -195,12 +195,12 @@ one is committed and its tests pass.
 
 ## 6. Verification checklist (definition of done)
 
-- [ ] `python -m pytest tests/` passes with the new tests from all tasks.
-- [ ] `schedule_task` / `list_scheduled_tasks` / `cancel_scheduled_task`
+- [x] `python -m pytest tests/` passes with the new tests from all tasks.
+- [x] `schedule_task` / `list_scheduled_tasks` / `cancel_scheduled_task`
       appear in the agent's tool list and are callable by the model.
-- [ ] A scheduled one-shot prompt runs at the requested time on the isolated
+- [x] A scheduled one-shot prompt runs at the requested time on the isolated
       agent; recurring tasks reschedule themselves.
-- [ ] Tasks persist across a restart; missed one-shots follow `on_missed`.
-- [ ] With no `[scheduler]` section, behavior is unchanged (tools return the
+- [x] Tasks persist across a restart; missed one-shots follow `on_missed`.
+- [x] With no `[scheduler]` section, behavior is unchanged (tools return the
       disabled error; existing tests untouched and green).
-- [ ] One commit per task, in order, with the messages above.
+- [x] One commit per task, in order, with the messages above.
