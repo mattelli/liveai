@@ -268,5 +268,7 @@ def test_configure_reads_section():
     from types import SimpleNamespace
     scheduler_module.configure(SimpleNamespace(scheduler=SimpleNamespace(
         enabled=True, persist_file="data/schedule.json", on_missed="run")))
-    assert scheduler_module._CONFIG == {
-        "enabled": True, "persist_file": "data/schedule.json", "on_missed": "run"}
+    assert scheduler_module._CONFIG["enabled"] is True
+    assert scheduler_module._CONFIG["persist_file"] == "data/schedule.json"
+    assert scheduler_module._CONFIG["on_missed"] == "run"
+    assert "config" in scheduler_module._CONFIG  # full config for the agent factory
