@@ -369,29 +369,61 @@ class Manager:
 
         A failing server is captured as an error string (never raised) and
         simply misses from the result; it can be retried via :meth:`refresh`.
-        Already-connected servers are reused.
+        Already-connected servers are reused. Servers are connected
+        **concurrently** on the loop thread (each with its own
+        ``connect_timeout_s`` budget), so startup cost is the slowest
+        server, not the sum of all of them.
         """
         results: dict[str, list[str]] = {}
+        pending: dict[str, dict] = {}
         for name, spec in self._servers.items():
             if name in self._clients:
                 results[name] = [tool.get("name", "")
                                  for tool in self._tool_lists.get(name, [])]
-                continue
-            try:
-                client = self._submit(self._connector.connect, name, spec)
-                tools = self._submit(client.list_tools)
-            except Exception as exc:
-                self._errors[name] = str(exc)
-                self.logger.warning("[mcp] server %r failed to connect: %s",
-                                    name, exc)
-                continue
-            self._clients[name] = client
-            self._tool_lists[name] = list(tools or [])
-            self._errors.pop(name, None)
-            results[name] = [tool.get("name", "") for tool in self._tool_lists[name]]
-            self.logger.info("[mcp] server %r connected with %d tool(s)",
-                             name, len(results[name]))
+            else:
+                pending[name] = spec
+        if pending:
+            # Per-server budget: connect + list_tools, each bounded by
+            # connect_timeout_s (matching the previous sequential behavior);
+            # the gather budget is their worst-case sum.
+            outcomes = self._submit(lambda: self._connect_many(pending),
+                                    timeout=2.0 * self._connect_timeout_s)
+            for name, client, tools, error in outcomes:
+                if error is not None:
+                    self._errors[name] = str(error)
+                    self.logger.warning("[mcp] server %r failed to connect: %s",
+                                        name, error)
+                    continue
+                self._clients[name] = client
+                self._tool_lists[name] = tools
+                self._errors.pop(name, None)
+                results[name] = [tool.get("name", "") for tool in tools]
+                self.logger.info("[mcp] server %r connected with %d tool(s)",
+                                 name, len(results[name]))
         return results
+
+    async def _connect_many(self, pending: dict[str, dict]):
+        """Connect several servers concurrently on the loop (see connect_all).
+
+        Each server gets its own ``connect_timeout_s`` budget for the
+        connect step and for ``list_tools``; a failing server is reported
+        per-server (``(name, None, [], error)``) instead of failing the
+        whole batch.
+        """
+
+        async def one(name: str, spec: dict):
+            try:
+                client = await asyncio.wait_for(
+                    self._invoke(self._connector.connect, name, spec),
+                    self._connect_timeout_s)
+                tools = await asyncio.wait_for(
+                    self._invoke(client.list_tools), self._connect_timeout_s)
+                return name, client, list(tools or []), None
+            except Exception as exc:  # noqa: BLE001 - reported per server
+                return name, None, [], exc
+
+        return await asyncio.gather(*(one(name, spec)
+                                      for name, spec in pending.items()))
 
     def _require_client(self, server: str) -> Client:
         """Connected client of ``server`` (:class:`McpError` otherwise)."""
