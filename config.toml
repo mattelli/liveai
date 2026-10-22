@@ -117,6 +117,12 @@ image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
 chunk_size = 5             # sentences per indexed passage
 top_k = 5                  # default number of results returned by query_corpus
 
+[scheduler] # schedule agent prompts for a future time (all keys optional)
+# enabled = true                # false (or missing section) -> tools are no-ops
+# persist_file = "data/schedule.json"  # task persistence (survives restarts)
+# on_missed = "skip"            # one-shot tasks missed while the app was off:
+#                               # "run" -> execute immediately, "skip" -> drop
+
 [mcp] # MCP (Model Context Protocol) servers as agent tools (optional; pip install mcp)
 # Every server tool becomes a native agent tool (mcp_<server>_<tool>); the
 # mcp_list_tools/mcp_call_tool bridge tools always exist for runtime discovery.

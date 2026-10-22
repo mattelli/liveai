@@ -744,6 +744,31 @@ servers you trust — the same class of trust as the built-in `run_command`
 tool.
 
 
+## Task scheduler (optional)
+
+The assistant can run prompts at a future time: one-shot reminders or
+recurring jobs. Three tools are exposed to the model:
+
+- `schedule_task(prompt, at, repeat="")` — run `prompt` at `at` (ISO 8601 or
+  `YYYY-MM-DD HH:MM`, local time); `repeat` makes it recurring: `daily`,
+  `hourly`, `every 30m`, or a 5-field cron expression like `0 9 * * MON`.
+- `list_scheduled_tasks()` — pending tasks with ids and next run times.
+- `cancel_scheduled_task(task_id)` — cancel a task by id.
+
+Scheduled prompts run on a **dedicated isolated agent** (quiet, own tool
+state), never on the main session agent, so the live conversation is never
+disturbed. Tasks persist to a JSON file and survive restarts.
+
+The feature ships off by default; enable it in `config.toml`:
+
+```
+[scheduler]
+enabled = true                       # false/missing -> tools are no-ops
+persist_file = "data/schedule.json"  # task persistence (survives restarts)
+on_missed = "skip"                   # missed one-shots after a restart:
+                                     # "run" executes them, "skip" drops them
+```
+
 ## Setup (Python 3.12.10)
 
 OS Windows 11 (powershell)
