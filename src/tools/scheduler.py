@@ -482,6 +482,8 @@ class SchedulerTools:
             task = scheduler.add(prompt, at, repeat)
         except ValueError as exc:
             return f"Error: {exc}"
+        except Exception as exc:  # tools never raise (scheduler failures too)
+            return f"Error: scheduling failed: {exc}"
         label = task.repeat if task.repeat else "one-shot"
         return f"Scheduled task {task.id} at {task.next_run} ({label}): {task.prompt}"
 

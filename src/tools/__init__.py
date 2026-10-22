@@ -12,6 +12,7 @@
 - ``imgsearch`` : folder image search with a CLIP model
 - ``corpora``   : named FAISS corpora (store + semantic text/image search)
 - ``memory``    : personal memory + conversation history (recall/store/clear)
+- ``scheduler`` : schedule agent prompts for a future time (one-shot/recurring)
 - ``speech``    : Piper text-to-speech toggle
 - ``vision``    : image description through the multimodal chat model
 - ``mcp``       : MCP (Model Context Protocol) servers as agent tools
@@ -52,25 +53,29 @@ from .docquery import query_document
 from .imgsearch import image_search
 from .corpora import list_corpora, query_corpus, store_corpus
 from .memory import clear_chat, recall_memory, store_memory
+from .scheduler import (
+    cancel_scheduled_task, list_scheduled_tasks, schedule_task,
+)
 from .speech import allow_speech
 from .vision import image_response
 from .mcp import mcp_call_tool, mcp_list_tools
 
 __all__ = [
     "CAPTURED_IMAGE", "GENERATED_IMAGE", "ValidYF", "allow_speech",
-    "capture_image", "clear_chat", "current_date_time", "download_file",
+    "cancel_scheduled_task", "capture_image", "clear_chat",
+    "current_date_time", "download_file",
     "exit_gracefully", "extract_archive", "extract_webpage",
     "fetch_financial_data", "format_search_results", "generate_image",
     "get_working_directory", "image_response", "image_search",
-    "list_corpora", "mcp_call_tool", "mcp_list_tools",
+    "list_corpora", "list_scheduled_tasks", "mcp_call_tool", "mcp_list_tools",
     "normalize_extensions", "query_corpus",
     "query_document", "read_text_file", "recall_memory",
     "replace_string_in_file", "run_command", "safe_filename",
-    "save_financial_chart", "search_in_file", "search_pattern_in_files",
-    "select_financial_columns", "store_corpus", "store_memory",
-    "summarize_doc", "system_info", "unload_image_generator", "web_books",
-    "web_images", "web_news", "web_search", "web_videos", "write_text_file",
-    "zip_files",
+    "save_financial_chart", "schedule_task", "search_in_file",
+    "search_pattern_in_files", "select_financial_columns", "store_corpus",
+    "store_memory", "summarize_doc", "system_info", "unload_image_generator",
+    "web_books", "web_images", "web_news", "web_search", "web_videos",
+    "write_text_file", "zip_files",
 ]
 
 
@@ -82,10 +87,11 @@ def configure(config) -> None:
     because it is purely session-bound (see ``bind_session``).
     """
     from . import (
-        corpora, docquery, image_gen, imgsearch, mcp, memory, speech, summarize,
+        corpora, docquery, image_gen, imgsearch, mcp, memory, scheduler, speech,
+        summarize,
     )
     for module in (corpora, docquery, image_gen, imgsearch, mcp, memory,
-                   speech, summarize):
+                   scheduler, speech, summarize):
         module.configure(config)
 
 
