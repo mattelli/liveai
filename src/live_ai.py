@@ -151,7 +151,7 @@ def _split_list(value) -> list[str]:
 
 # Known [agent] monitor flags; unknown tokens are ignored, "none" clears all.
 _MONITOR_FLAGS = frozenset({"calls", "log"})
-_DEFAULT_MONITOR_LOG_FILE = "./agents.jsonl"
+_DEFAULT_MONITOR_LOG_FILE = "agents.jsonl"
 _DEFAULT_MONITOR_BUFFER = 100
 
 
@@ -1738,14 +1738,18 @@ class AgentPool:
     def __init__(self, config: SimpleNamespace, settings: dict):
         self.agents: dict[str, Agent] = {}
         self.logger = getLogger("AgentPool")
-        # Monitoring (task 3): events flow into the process-wide monitor when
-        # "calls" is enabled; the JSONL file sink lives on the monitor itself.
+        # Monitoring (task 3): the monitor (ring buffer + JSONL sink) is only
+        # created and bound when [agent] monitor is enabled; with monitoring
+        # off nothing is recorded and no log file is ever written.
         self.monitor_flags = settings.get("monitor") or set()
-        self.monitor = get_monitor()
-        if not isinstance(self.monitor, AgentMonitor):
+        self.monitor = get_monitor() if self.monitor_flags else None
+        if self.monitor_flags and not isinstance(self.monitor, AgentMonitor):
+            # The JSONL sink only exists when "log" is among the flags; the
+            # ring buffer is always populated when monitoring is enabled.
             self.monitor = AgentMonitor(
                 maxlen=settings.get("monitor_buffer") or MONITOR_BUFFER_DEFAULT,
-                log_file=settings.get("monitor_log_file") or None,
+                log_file=(settings.get("monitor_log_file") or None)
+                if "log" in self.monitor_flags else None,
             )
             bind_monitor(self.monitor)
         if not getattr(config.brain, "models_file", None):

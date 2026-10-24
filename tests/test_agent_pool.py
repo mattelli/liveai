@@ -332,7 +332,8 @@ def _pool_config(tmp_path, models_data, **brain_overrides):
     return _remote_config(**brain_overrides)
 
 
-def _make_pool(monkeypatch, tmp_path, models_data, models, **brain_overrides):
+def _make_pool(monkeypatch, tmp_path, models_data, models, monitor=None,
+               **brain_overrides):
     from tests.test_live_ai import _fake_openai
 
     _fake_openai(monkeypatch)
@@ -340,7 +341,8 @@ def _make_pool(monkeypatch, tmp_path, models_data, models, **brain_overrides):
     config = _pool_config(tmp_path, models_data, **brain_overrides)
     settings = live_ai_mod.agent_pool_settings(SimpleNamespace(
         agent=SimpleNamespace(parallel_agents=len(models),
-                              agent_models=", ".join(models)),
+                              agent_models=", ".join(models),
+                              monitor=monitor),
     ))
     return live_ai_mod.AgentPool(config, settings)
 

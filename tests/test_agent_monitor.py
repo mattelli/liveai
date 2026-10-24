@@ -179,8 +179,7 @@ def test_pool_ask_records_start_and_answer(monkeypatch, tmp_path):
     pool = _make_pool(monkeypatch, tmp_path, {
         "boot": {"model": "boot-model"},
         "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    pool.monitor_flags = {"calls"}
+    }, models=["glm"], monitor={"calls"})
     agent = pool.agents["glm"]
     agent._stream = _QuietRoundStream()
     agent._context_window = 1024
@@ -213,15 +212,16 @@ def test_pool_without_calls_flag_records_nothing(monkeypatch, tmp_path):
 
     pool.ask("glm", "do a thing")
 
-    assert pool.monitor.snapshot() == []
+    # Monitoring disabled: no monitor is created at all (no buffer, no log).
+    assert pool.monitor is None
+    assert live_ai_mod.get_monitor() is None
 
 
 def test_pool_ask_failure_still_records_start(monkeypatch, tmp_path):
     pool = _make_pool(monkeypatch, tmp_path, {
         "boot": {"model": "boot-model"},
         "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    pool.monitor_flags = {"calls"}
+    }, models=["glm"], monitor={"calls"})
     agent = pool.agents["glm"]
     agent.act = lambda prompt: (_ for _ in ()).throw(RuntimeError("boom"))
 
@@ -236,8 +236,7 @@ def test_subagent_tool_calls_reported_to_monitor(monkeypatch, tmp_path):
     pool = _make_pool(monkeypatch, tmp_path, {
         "boot": {"model": "boot-model"},
         "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    pool.monitor_flags = {"calls"}
+    }, models=["glm"], monitor={"calls"})
     agent = pool.agents["glm"]
     agent._stream = _QuietRoundStream()
     agent._context_window = 1024
@@ -267,8 +266,7 @@ def test_main_agent_tool_calls_not_reported(monkeypatch, tmp_path):
     pool = _make_pool(monkeypatch, tmp_path, {
         "boot": {"model": "boot-model"},
         "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    pool.monitor_flags = {"calls"}
+    }, models=["glm"], monitor={"calls"})
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     agent._tool_impls = {"echo": lambda **kw: "ok"}
     agent._stream = _QuietRoundStream()
@@ -284,13 +282,11 @@ def test_monitor_survives_pool_rebuild(monkeypatch, tmp_path):
     pool_a = _make_pool(monkeypatch, tmp_path, {
         "boot": {"model": "boot-model"},
         "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    pool_a.monitor_flags = {"calls"}
+    }, models=["glm"], monitor={"calls"})
     pool_b = _make_pool(monkeypatch, tmp_path, {
         "boot": {"model": "boot-model"},
         "qwen": {"model": "qwen-model"},
-    }, models=["qwen"])
-    pool_b.monitor_flags = {"calls"}
+    }, models=["qwen"], monitor={"calls"})
     assert pool_b.monitor is pool_a.monitor
 
 
