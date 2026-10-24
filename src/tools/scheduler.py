@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.common import dump_func_call
+from src.common import dump_func_call, set_subagent_dump
 
 __all__ = [
     "ScheduledTask", "Scheduler", "SchedulerTools", "configure",
@@ -490,11 +490,14 @@ def _agent_executor(task: ScheduledTask) -> None:
             return
         _EXECUTOR_AGENT = agent
     logger.info("Scheduled task %s -> execution agent", task.id)
+    set_subagent_dump(False)
     try:
         agent.act(task.prompt)
     except Exception as exc:
         logger.error("Scheduled task %s execution failed: %s", task.id, exc)
         return
+    finally:
+        set_subagent_dump(True)
     # Deliver the answer to the user: the executor agent is quiet, so without
     # this the result would only live in the agent's own message history.
     answer = ""

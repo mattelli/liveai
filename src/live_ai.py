@@ -11,7 +11,7 @@ from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type
 from logging import getLogger
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
-from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter
+from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter, set_subagent_dump
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command,
@@ -1616,10 +1616,12 @@ class AgentPool:
                 f"Nested delegation refused: pooled agent {caller!r} cannot call "
                 "ask_agent/run_parallel_agents (would deadlock the pool)")
         _TOOL_CONTEXT.agent_name = name  # visible to the sub-agent's tool calls
+        set_subagent_dump(False)           # suppress inner tool-call dumps
         try:
             agent.act(prompt)
         finally:
             _TOOL_CONTEXT.agent_name = ""
+            set_subagent_dump(True)
         return agent.messages[-1]["content"]
 
     def ask_parallel(self, tasks: list[tuple[str, str]],

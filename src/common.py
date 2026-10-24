@@ -24,6 +24,17 @@ _SPIN_CLEAR = chr(13) + chr(27) + '[K'  # CR + erase to end of line
 # prints that bypass StreamPrinter, e.g. tool-call banners or round separators).
 _output_hook: Callable[[], None] | None = None
 
+# Thread-local flag to suppress [CALL] dumps when a sub-agent is running.
+_call_context = threading.local()
+
+def set_subagent_dump(enabled: bool) -> None:
+    """Enable/disable [CALL] block dumps for the current thread.
+
+    Pass ``enabled=False`` when a sub-agent starts working so its inner
+    tool-call banners are suppressed; reset to ``True`` when it finishes.
+    """
+    _call_context.show_dump = enabled
+
 
 def set_output_hook(hook: Callable[[], None] | None) -> None:
     """Register/unregister a callback invoked before every ``cprint``."""
@@ -463,6 +474,8 @@ def _print_call_block(name: str, args: list[tuple[str, object]], *,
     """
     if _call_lines_max <= 0:
         return  # [ui] call_lines_max = 0: the [CALL] dump is skipped
+    if not getattr(_call_context, "show_dump", True):
+        return  # inside a sub-agent tool call: skip the dump
     if _output_hook is not None:
         _output_hook()
     line_width = _line_width
@@ -471,9 +484,9 @@ def _print_call_block(name: str, args: list[tuple[str, object]], *,
         for param, value in args
     ]
     if failed is not None:
-        status = f") → failed in {elapsed:.1f}s: {str(failed)[:100]}"
+        status = f") -> failed in {elapsed:.1f}s: {str(failed)[:100]}"
     else:
-        status = f") → ok ({elapsed:.1f}s)"
+        status = f") -> ok ({elapsed:.1f}s)"
     lines = [f"[CALL] {name}("] + param_lines + [status]
     # Elide parameters beyond the configured block height: header + status
     # + one elision line always stay visible (budget = cap - 3).
