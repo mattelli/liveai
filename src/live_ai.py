@@ -1619,7 +1619,17 @@ class Agent(Brain):
             result = tool(**args)
         except Exception as exc:
             result = f"Error: {exc}"
-        return result if isinstance(result, str) else str(result)
+        result = result if isinstance(result, str) else str(result)
+        # Sub-agent tool activity (task 3): pooled agents report their tool
+        # calls/results to the process-wide monitor (agent name comes from
+        # the thread-local set by AgentPool.ask).
+        monitor = get_monitor()
+        if monitor is not None and _current_agent_name():
+            monitor.record(_current_agent_name(), "tool_call",
+                           tool=call["name"], args=call["arguments"] or "{}")
+            monitor.record(_current_agent_name(), "tool_result",
+                           tool=call["name"], result=result[:200])
+        return result
 
     def act(self, prompt: str):
         """
@@ -1688,6 +1698,16 @@ class AgentPool:
     def __init__(self, config: SimpleNamespace, settings: dict):
         self.agents: dict[str, Agent] = {}
         self.logger = getLogger("AgentPool")
+        # Monitoring (task 3): events flow into the process-wide monitor when
+        # "calls" is enabled; the JSONL file sink lives on the monitor itself.
+        self.monitor_flags = settings.get("monitor") or set()
+        self.monitor = get_monitor()
+        if not isinstance(self.monitor, AgentMonitor):
+            self.monitor = AgentMonitor(
+                maxlen=settings.get("monitor_buffer") or MONITOR_BUFFER_DEFAULT,
+                log_file=settings.get("monitor_log_file") or None,
+            )
+            bind_monitor(self.monitor)
         if not getattr(config.brain, "models_file", None):
             raise ValueError(
                 "Agent pool requires [brain] models_file: the agent_models "
@@ -1736,6 +1756,11 @@ class AgentPool:
             raise ValueError("Agent pool: no agents configured "
                              "([agent] parallel_agents/agent_models)")
 
+    def _monitor_record(self, agent: str, event: str, **fields) -> None:
+        """Emit one activity event when 'calls' monitoring is enabled."""
+        if self.monitor is not None and "calls" in self.monitor_flags:
+            self.monitor.record(agent, event, **fields)
+
     def ask(self, agent_name: str, prompt: str, caller: str = "") -> str:
         """Delegate a prompt to one pooled agent; return its final answer.
 
@@ -1754,8 +1779,10 @@ class AgentPool:
                 "ask_agent/run_parallel_agents (would deadlock the pool)")
         _TOOL_CONTEXT.agent_name = name  # visible to the sub-agent's tool calls
         set_subagent_dump(False)           # suppress inner tool-call dumps
+        self._monitor_record(name, "start", prompt=prompt)
         try:
             agent.act(prompt)
+            self._monitor_record(name, "answer", answer=agent.messages[-1]["content"])
         finally:
             _TOOL_CONTEXT.agent_name = ""
             set_subagent_dump(True)

@@ -9,6 +9,18 @@ import src.live_ai as live_ai_mod
 from src.live_ai import AgentMonitor
 
 
+from tests.test_agent_pool import _make_pool, _QuietRoundStream  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _reset_process_monitor():
+    """Keep the module-level monitor from leaking between tests."""
+    previous = live_ai_mod.get_monitor()
+    live_ai_mod.bind_monitor(None)
+    yield
+    live_ai_mod.bind_monitor(previous)
+
+
 # ------------------------------------------------------------- ring buffer
 
 
@@ -158,3 +170,125 @@ def test_bind_monitor_and_get_monitor():
 def test_monitor_maxlen_never_zero():
     assert AgentMonitor(maxlen=0).maxlen >= 1
     assert AgentMonitor(maxlen=-3).maxlen >= 1
+
+
+# ------------------------------------------------ task 3: pool emits events
+
+
+def test_pool_ask_records_start_and_answer(monkeypatch, tmp_path):
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"])
+    pool.monitor_flags = {"calls"}
+    agent = pool.agents["glm"]
+    agent._stream = _QuietRoundStream()
+    agent._context_window = 1024
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent.tool_definitions = []
+    agent._tool_impls = {}
+    agent._stream_round = lambda tools: ("the answer", [])
+
+    pool.ask("glm", "do a thing")
+
+    events = pool.monitor.snapshot()
+    assert [(e["event"], e["agent"]) for e in events] == [
+        ("start", "glm"), ("answer", "glm")]
+    assert events[0]["prompt"] == "do a thing"
+    assert events[1]["answer"] == "the answer"
+
+
+def test_pool_without_calls_flag_records_nothing(monkeypatch, tmp_path):
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"], monitor=set())
+    agent = pool.agents["glm"]
+    agent._stream = _QuietRoundStream()
+    agent._context_window = 1024
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent.tool_definitions = []
+    agent._tool_impls = {}
+    agent._stream_round = lambda tools: ("the answer", [])
+
+    pool.ask("glm", "do a thing")
+
+    assert pool.monitor.snapshot() == []
+
+
+def test_pool_ask_failure_still_records_start(monkeypatch, tmp_path):
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"])
+    pool.monitor_flags = {"calls"}
+    agent = pool.agents["glm"]
+    agent.act = lambda prompt: (_ for _ in ()).throw(RuntimeError("boom"))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        pool.ask("glm", "do a thing")
+
+    events = pool.monitor.snapshot()
+    assert [e["event"] for e in events] == ["start"]  # no "answer" on failure
+
+
+def test_subagent_tool_calls_reported_to_monitor(monkeypatch, tmp_path):
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"])
+    pool.monitor_flags = {"calls"}
+    agent = pool.agents["glm"]
+    agent._stream = _QuietRoundStream()
+    agent._context_window = 1024
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent.tool_definitions = []
+    agent._tool_impls = {"echo": lambda **kw: f"echo:{kw.get('text', '')}"}
+    scripted = iter([
+        ("", [{"id": "c1", "name": "echo", "arguments": '{"text": "hi"}'}]),
+        ("done", []),  # second round: no tool calls -> act() ends
+    ])
+    agent._stream_round = lambda tools: next(scripted)
+
+    live_ai_mod._TOOL_CONTEXT.agent_name = "glm"
+    try:
+        agent.act("run the tool")
+    finally:
+        live_ai_mod._TOOL_CONTEXT.agent_name = ""
+
+    events = pool.monitor.snapshot()
+    assert [e["event"] for e in events] == ["tool_call", "tool_result"]
+    assert events[0]["tool"] == "echo" and events[0]["args"] == '{"text": "hi"}'
+    assert events[1]["result"] == "echo:hi"
+
+
+def test_main_agent_tool_calls_not_reported(monkeypatch, tmp_path):
+    """Main-agent tool activity stays out of the sub-agent monitor."""
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"])
+    pool.monitor_flags = {"calls"}
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    agent._tool_impls = {"echo": lambda **kw: "ok"}
+    agent._stream = _QuietRoundStream()
+
+    # no thread-local agent name: main agent context
+    agent._execute_tool({"name": "echo", "arguments": "{}"})
+
+    assert pool.monitor.snapshot() == []
+
+
+def test_monitor_survives_pool_rebuild(monkeypatch, tmp_path):
+    """Two pools built in one process share the process-wide monitor."""
+    pool_a = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"])
+    pool_a.monitor_flags = {"calls"}
+    pool_b = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "qwen": {"model": "qwen-model"},
+    }, models=["qwen"])
+    pool_b.monitor_flags = {"calls"}
+    assert pool_b.monitor is pool_a.monitor
