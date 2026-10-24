@@ -34,7 +34,7 @@ agent_models = ["ternary-bonsai", "ternary-bonsai"]  # models.json entry names, 
 # agent_system_prompts = []                        # optional per-agent system prompts
 # agent_quiet = false                              # workers don't print/speak (default true)
 # monitor = ""                                     # sub-agent monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
-# monitor_log_file = "data/agents.jsonl"           # JSONL event log path (monitor = "log")
+# monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
 # monitor_buffer = 100                             # in-memory events kept for the agent_activity tool
 
 [ui] # chat appearance (all keys optional)

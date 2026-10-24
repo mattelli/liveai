@@ -151,7 +151,7 @@ def _split_list(value) -> list[str]:
 
 # Known [agent] monitor flags; unknown tokens are ignored, "none" clears all.
 _MONITOR_FLAGS = frozenset({"calls", "log"})
-_DEFAULT_MONITOR_LOG_FILE = "data/agents.jsonl"
+_DEFAULT_MONITOR_LOG_FILE = "./agents.jsonl"
 _DEFAULT_MONITOR_BUFFER = 100
 
 

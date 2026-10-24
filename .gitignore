@@ -9,7 +9,6 @@ __pycache__/
 
 # Logs
 *.log
-data/
 
 # ENV
 .env

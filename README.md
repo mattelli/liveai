@@ -671,9 +671,9 @@ setting makes their activity visible through independent, combinable flags
 
 ```toml
 [agent]
-monitor = "calls,log"               # "calls" and/or "log"; empty = quiet
-# monitor_log_file = "data/agents.jsonl"  # JSONL event log path (monitor = "log")
-# monitor_buffer = 100              # in-memory events kept for the agent_activity tool
+monitor = "calls,log"                 # "calls" and/or "log"; empty = quiet
+# monitor_log_file = "/agents.jsonl"  # JSONL event log path (monitor = "log")
+# monitor_buffer = 100                # in-memory events kept for the agent_activity tool
 ```
 
 - `calls` — while a worker runs, its tool executions print the usual `[CALL]`
@@ -681,7 +681,7 @@ monitor = "calls,log"               # "calls" and/or "log"; empty = quiet
   (e.g. `[CALL] web_search (ollama-llama32)(...`). The main agent's own
   `[CALL]` blocks are unchanged.
 - `log` — every sub-agent event is appended as one JSON object per line to
-  `monitor_log_file` (default `data/agents.jsonl`): delegation `start`/`done`
+  `monitor_log_file` (default `agents.jsonl`): delegation `start`/`done`
   (with prompt/answer and duration) and per-tool-call `tool_call`/`tool_result`
   events. Lines are written atomically under a lock, so parallel workers never
   interleave half-lines; the file is created lazily and a write failure
