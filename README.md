@@ -663,6 +663,40 @@ Notes:
   point workers at cloud endpoints in models.json for true parallelism, or
   keep `parallel_agents = 1` on constrained machines.
 
+## Sub-agent activity monitoring
+
+Workers are quiet by default, so their work is invisible. The `[agent] monitor`
+setting makes their activity visible through independent, combinable flags
+(comma-separated; unset/empty/`"none"` = fully quiet, as always):
+
+```toml
+[agent]
+monitor = "calls,log"               # "calls" and/or "log"; empty = quiet
+# monitor_log_file = "data/agents.jsonl"  # JSONL event log path (monitor = "log")
+# monitor_buffer = 100              # in-memory events kept for the agent_activity tool
+```
+
+- `calls` — while a worker runs, its tool executions print the usual `[CALL]`
+  blocks live on the console, each labeled with the worker name
+  (e.g. `[CALL] web_search (ollama-llama32)(...`). The main agent's own
+  `[CALL]` blocks are unchanged.
+- `log` — every sub-agent event is appended as one JSON object per line to
+  `monitor_log_file` (default `data/agents.jsonl`): delegation `start`/`done`
+  (with prompt/answer and duration) and per-tool-call `tool_call`/`tool_result`
+  events. Lines are written atomically under a lock, so parallel workers never
+  interleave half-lines; the file is created lazily and a write failure
+  disables the file sink without breaking the agents.
+- Both channels feed a bounded **in-memory ring buffer** (`monitor_buffer`,
+  default 100 events) that is always populated when monitoring is enabled.
+
+The main agent can consult this buffer through the **`agent_activity(last=20)`**
+tool: it returns the recent events as human-readable one-liners (or
+`No sub-agent activity recorded.` when the buffer is empty), so you can simply
+ask *"what did the sub-agents do?"*.
+
+In the console you can also type **`/monitor [N|clear]`** to print the last N
+events (default 20), or empty the buffer (the JSONL file is not touched).
+
 ## MCP servers (optional)
 
 The assistant can use tools exposed by [MCP (Model Context Protocol)](https://modelcontextprotocol.io)
