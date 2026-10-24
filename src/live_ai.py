@@ -250,17 +250,21 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
     """Resolve the ``[agent]`` multi-agent pool settings (backward compatible).
 
     Returns ``{"count", "models", "system_prompts", "monitor",
-    "monitor_log_file", "monitor_buffer"}`` where ``count`` is the number of
-    extra agents beside the running one, ``models`` the models.json entry
-    names (one per agent, truncated to ``count``), ``system_prompts``
-    optional per-agent prompts (padded with ``None``), ``monitor`` the set of
-    monitoring flags (``"calls"``: labeled [CALL] blocks for sub-agent tool
-    calls; ``"log"``: JSONL event log), ``monitor_log_file`` the JSONL log
-    path and ``monitor_buffer`` the in-memory event ring size.
+    "monitor_log_file", "monitor_buffer", "async_delegation"}`` where
+    ``count`` is the number of extra agents beside the running one,
+    ``models`` the models.json entry names (one per agent, truncated to
+    ``count``), ``system_prompts`` optional per-agent prompts (padded with
+    ``None``), ``monitor`` the set of monitoring flags (``"calls"``: labeled
+    [CALL] blocks for sub-agent tool calls; ``"log"``: JSONL event log),
+    ``monitor_log_file`` the JSONL log path, ``monitor_buffer`` the
+    in-memory event ring size and ``async_delegation`` whether
+    ``ask_agent``/``run_parallel_agents`` return receipts immediately and
+    deliver worker answers on a later turn (default False: synchronous
+    delegation, the historical behavior).
     Missing keys or a missing ``[agent]`` section keep the single-agent,
-    unmonitored behavior (``count = 0``, ``monitor = set()``). Pooled agents
-    are always quiet (they never print or speak): there is no user-facing
-    flag for it.
+    unmonitored, synchronous behavior (``count = 0``, ``monitor = set()``).
+    Pooled agents are always quiet (they never print or speak): there is no
+    user-facing flag for it.
 
     ``agent_models``/``agent_system_prompts`` accept either a list or a
     comma-separated string; both forms are equivalent.
@@ -285,6 +289,7 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
         "monitor": _monitor_flags(getattr(agent, "monitor", None)),
         "monitor_log_file": str(log_file) if log_file else _DEFAULT_MONITOR_LOG_FILE,
         "monitor_buffer": _monitor_buffer(getattr(agent, "monitor_buffer", None)),
+        "async_delegation": bool(getattr(agent, "async_delegation", False)),
     }
 
 
@@ -1828,6 +1833,12 @@ class Agent(Brain):
             self._active_stream = None
 
 
+# Monotonic delegation receipt counter (async mode): process-wide so ids stay
+# unique across pool rebuilds, like the monitor.
+_DELEGATION_COUNTER = 0
+_DELEGATION_LOCK = threading.Lock()
+
+
 class AgentPool:
     """Named sub-agents beside the running one (PLAN.md task 4).
 
@@ -1842,6 +1853,15 @@ class AgentPool:
     def __init__(self, config: SimpleNamespace, settings: dict):
         self.agents: dict[str, Agent] = {}
         self.logger = getLogger("AgentPool")
+        # Async delegation (task 2): receipts + background delivery when
+        # [agent] async_delegation is enabled; synchronous otherwise.
+        self.async_delegation = bool(settings.get("async_delegation", False))
+        self._executor = ThreadPoolExecutor(
+            max_workers=max(1, len(settings.get("models") or [1])),
+            thread_name_prefix="delegate")
+        self._agent_locks: dict[str, threading.Lock] = {}
+        self._delegations: dict[str, dict] = {}  # receipt id -> {agent, prompt}
+        self._stopped = False
         # Monitoring (task 3): the monitor (ring buffer + JSONL sink) is only
         # created and bound when [agent] monitor is enabled; with monitoring
         # off nothing is recorded and no log file is ever written.
@@ -1969,3 +1989,30 @@ class AgentPool:
             for future in futures:
                 future.result()  # propagate the first task failure
         return results
+
+    ## async delegation (task 2/3) ##
+
+    def stop(self) -> None:
+        """Shut the delegation executor down without waiting (idempotent).
+
+        Called from main.py's finally block; running delegations finish their
+        current round (the executor only refuses *new* submissions).
+        """
+        if self._stopped:
+            return
+        self._stopped = True
+        self._executor.shutdown(wait=False)
+
+    def _next_delegation_id(self) -> str:
+        """Monotonic receipt id (``d-1``, ``d-2``, ...), process-wide."""
+        global _DELEGATION_COUNTER
+        with _DELEGATION_LOCK:
+            _DELEGATION_COUNTER += 1
+            return f"d-{_DELEGATION_COUNTER}"
+
+    def _agent_lock(self, name: str) -> threading.Lock:
+        """The per-agent lock serializing ``act()`` on one pooled agent."""
+        lock = self._agent_locks.get(name)
+        if lock is None:
+            lock = self._agent_locks.setdefault(name, threading.Lock())
+        return lock

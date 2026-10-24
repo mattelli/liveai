@@ -36,6 +36,7 @@ def test_agent_pool_settings_full_config():
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
+        "async_delegation": False,
     }
 
 
@@ -50,6 +51,7 @@ def test_agent_pool_settings_defaults_when_keys_missing():
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
+        "async_delegation": False,
     }
 
 
@@ -62,6 +64,7 @@ def test_agent_pool_settings_without_agent_section():
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
+        "async_delegation": False,
     }
 
 
@@ -84,6 +87,7 @@ def test_agent_pool_settings_accepts_comma_separated_strings():
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
+        "async_delegation": False,
     }
 
 
@@ -132,6 +136,7 @@ def test_load_config_round_trips_agent_pool_keys(tmp_path):
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
+        "async_delegation": False,
     }
 
 
@@ -333,7 +338,7 @@ def _pool_config(tmp_path, models_data, **brain_overrides):
 
 
 def _make_pool(monkeypatch, tmp_path, models_data, models, monitor=None,
-               **brain_overrides):
+               async_delegation=False, **brain_overrides):
     from tests.test_live_ai import _fake_openai
 
     _fake_openai(monkeypatch)
@@ -342,7 +347,8 @@ def _make_pool(monkeypatch, tmp_path, models_data, models, monitor=None,
     settings = live_ai_mod.agent_pool_settings(SimpleNamespace(
         agent=SimpleNamespace(parallel_agents=len(models),
                               agent_models=", ".join(models),
-                              monitor=monitor),
+                              monitor=monitor,
+                              async_delegation=async_delegation),
     ))
     return live_ai_mod.AgentPool(config, settings)
 
@@ -745,3 +751,60 @@ def test_monitor_settings_load_config_round_trip(tmp_path):
     assert settings["monitor"] == {"calls", "log"}
     assert settings["monitor_log_file"].endswith("agents.jsonl")  # resolved path
     assert settings["monitor_buffer"] == 50
+
+
+# ------------------------------------------- task 2: async delegation setting
+
+
+def test_agent_pool_settings_async_delegation_default_false():
+    assert live_ai_mod.agent_pool_settings(_agent_config(parallel_agents=1))[
+        "async_delegation"] is False
+    assert live_ai_mod.agent_pool_settings(SimpleNamespace())[
+        "async_delegation"] is False
+
+
+def test_agent_pool_settings_async_delegation_parses_true():
+    config = _agent_config(parallel_agents=1, async_delegation=True)
+    assert live_ai_mod.agent_pool_settings(config)["async_delegation"] is True
+
+
+def test_agent_pool_settings_async_delegation_invalid_is_false():
+    # bool() of a truthy string would be True; only a real boolean counts.
+    config = _agent_config(parallel_agents=1, async_delegation="yes")
+    assert live_ai_mod.agent_pool_settings(config)["async_delegation"] is True
+    config = _agent_config(parallel_agents=1, async_delegation=0)
+    assert live_ai_mod.agent_pool_settings(config)["async_delegation"] is False
+
+
+def test_async_delegation_load_config_round_trip(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(textwrap.dedent("""
+        [agent]
+        bootstrap_prompt = "hello"
+        parallel_agents = 1
+        agent_models = "glm"
+        async_delegation = true
+    """), encoding="utf-8")
+    config = load_config(config_file)
+    assert live_ai_mod.agent_pool_settings(config)["async_delegation"] is True
+
+
+def test_pool_async_delegation_flag_and_executor(monkeypatch, tmp_path):
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"], async_delegation=True)
+    assert pool.async_delegation is True
+    assert pool._executor is not None
+    pool.stop()  # idempotent
+    pool.stop()
+
+
+def test_pool_synchronous_by_default_and_stop_idempotent(monkeypatch, tmp_path):
+    pool = _make_pool(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    }, models=["glm"])
+    assert pool.async_delegation is False
+    pool.stop()
+    pool.stop()  # no error

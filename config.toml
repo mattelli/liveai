@@ -35,6 +35,7 @@ agent_models = ["ternary-bonsai", "ternary-bonsai"]  # models.json entry names, 
 monitor = "log"                                  # sub-agent monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
 monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
 monitor_buffer = 1000                            # in-memory events kept for the agent_activity tool
+# async_delegation = true                         # ask_agent/run_parallel_agents return receipts immediately; worker answers arrive on a later turn (default false: synchronous)
 
 [scheduler] # schedule agent prompts for a future time (all keys optional)
 enabled = false                       # false (or missing section) -> tools are no-ops
