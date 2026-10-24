@@ -765,7 +765,7 @@ def test_monitor_command_clear(capsys):
         live_ai.bind_monitor(None)
     out = capsys.readouterr().out
     assert "cleared" in out.lower()
-    assert "No sub-agent activity" in out
+    assert "No monitoring data available." in out
     assert monitor.snapshot() == []
 
 
@@ -792,8 +792,8 @@ def test_monitor_command_bad_usage(capsys):
     assert "Usage: /monitor [N|clear]" in out
 
 
-def test_monitor_command_disabled_hint(capsys):
-    """Empty buffer + monitoring disabled in config -> a config hint."""
+def test_monitor_command_empty_buffer_hint(capsys):
+    """Empty buffer (monitoring on or off) -> the no-data hint."""
     import src.live_ai as live_ai
     from src.live_ai import AgentMonitor
 
@@ -808,7 +808,7 @@ def test_monitor_command_disabled_hint(capsys):
     finally:
         live_ai.bind_monitor(None)
     out = capsys.readouterr().out
-    assert 'monitor = "calls"' in out
+    assert "No monitoring data available." in out
 
 
 def test_monitor_in_help(capsys):

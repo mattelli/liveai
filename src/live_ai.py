@@ -154,6 +154,14 @@ _MONITOR_FLAGS = frozenset({"calls", "log"})
 _DEFAULT_MONITOR_LOG_FILE = "agents.jsonl"
 _DEFAULT_MONITOR_BUFFER = 100
 
+# Process-wide cache of server-reported model metadata, keyed by
+# (base_url, model). The main agent and its pooled workers usually boot the
+# same models.json entry; without this each of them re-pays the metadata
+# round-trips (OpenAI /models + native-API probes) at startup. Populated by
+# Brain._fetch_model_metadata; /model switches need no invalidation (the key
+# includes the model, and metadata is static per model).
+_MODEL_META_CACHE: dict[tuple[str, str], dict] = {}
+
 
 def _monitor_flags(value) -> set:
     """Parse ``[agent] monitor`` (string or list) into a set of known flags.
@@ -803,14 +811,21 @@ class OpenAICore:
 
         ``use_raw_fallback=False`` skips the tolerant re-request for servers
         returning a bare JSON array. Failures degrade silently. Successful
-        results are cached on the instance (model metadata is static for the
-        session), while a total failure stores no cache so a later call can
-        retry. Returns a dict of non-empty scalar/list-of-scalar values,
-        possibly {}.
+        results are cached per instance *and* process-wide (keyed by
+        ``base_url + model``): the main agent and its pooled workers usually
+        boot the same model entry, and without the shared cache each of them
+        pays the metadata round-trips again at startup. A total failure stores
+        no cache so a later call can retry. Returns a dict of non-empty
+        scalar/list-of-scalar values, possibly {}.
         """
         cached = getattr(self, "_model_meta", None)
         if cached is not None:
             return cached
+        cache_key = (self._base_url, self._model_name)
+        shared = _MODEL_META_CACHE.get(cache_key)
+        if shared is not None:
+            self._model_meta = shared
+            return shared
         record = None
         try:
             record = self._client.models.retrieve(self._model_name)
@@ -847,6 +862,7 @@ class OpenAICore:
                 meta.setdefault(key, value)
         if meta:
             self._model_meta = meta
+            _MODEL_META_CACHE[cache_key] = meta
         return meta
 
     def _find_in_raw_models_list(self):

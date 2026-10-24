@@ -22,6 +22,20 @@ def _drain_scheduler_pending_results():
     drain_scheduled_results()
 
 
+@pytest.fixture(autouse=True)
+def _reset_model_meta_cache():
+    """Keep the process-wide model-metadata cache from leaking between tests.
+
+    Brain._fetch_model_metadata caches per (base_url, model) process-wide so
+    the main agent and its pooled workers share one fetch; tests must start
+    with a cold cache to exercise the real fetch paths.
+    """
+    import src.live_ai as live_ai
+    live_ai._MODEL_META_CACHE.clear()
+    yield
+    live_ai._MODEL_META_CACHE.clear()
+
+
 class FakeDevice:
     """Stand-in for InputAudioDevice; no hardware touched."""
 
