@@ -237,18 +237,18 @@ committed and its tests pass.
 
 ## 6. Verification checklist (definition of done)
 
-- [ ] `python -m pytest tests/` passes with the new tests from all tasks.
-- [ ] With `async_delegation` unset, all existing tests pass untouched and
+- [x] `python -m pytest tests/` passes with the new tests from all tasks.
+- [x] With `async_delegation` unset, all existing tests pass untouched and
       runtime behavior is byte-identical (synchronous delegation).
-- [ ] With `async_delegation = true`: `ask_agent`/`run_parallel_agents`
+- [x] With `async_delegation = true`: `ask_agent`/`run_parallel_agents`
       return receipts immediately; the main agent's turn completes without
       waiting; worker answers arrive as injected assistant messages on a
       later turn, carrying the receipt id.
-- [ ] Worker failures are delivered (no silent hangs); same-agent tasks
+- [x] Worker failures are delivered (no silent hangs); same-agent tasks
       never run `act()` concurrently; nested delegation still refused.
-- [ ] Monitor events (`start`/`tool_call`/`tool_result`/`answer`) are
+- [x] Monitor events (`start`/`tool_call`/`tool_result`/`answer`) are
       recorded for async runs exactly as for synchronous ones; `/monitor`
       and `agent_activity()` show pending vs finished delegations.
-- [ ] Shutdown drains pending results; `pool.stop()` is idempotent; no
+- [x] Shutdown drains pending results; `pool.stop()` is idempotent; no
       thread leaks between tests (autouse fixture).
-- [ ] One commit per task, in order, with the messages above.
+- [x] One commit per task, in order, with the messages above.
