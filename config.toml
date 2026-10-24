@@ -32,9 +32,14 @@ max_act_rounds = 500                               # max tool-loop rounds per ag
 parallel_agents = 2                                # extra agents beside the running one (0 = off)
 agent_models = ["ternary-bonsai", "ternary-bonsai"]  # models.json entry names, one per agent
 # agent_system_prompts = []                        # optional per-agent system prompts
-# monitor = "log"                                  # sub-agent monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
-# monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
-# monitor_buffer = 100                             # in-memory events kept for the agent_activity tool
+monitor = "log"                                  # sub-agent monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
+monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
+monitor_buffer = 1000                            # in-memory events kept for the agent_activity tool
+
+[scheduler] # schedule agent prompts for a future time (all keys optional)
+enabled = false                       # false (or missing section) -> tools are no-ops
+persist_file = ".res/schedule.json"  # task persistence (survives restarts)
+on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 
 [ui] # chat appearance (all keys optional)
 prompt = "You (hint '/') ›"          # chat-mode input label
@@ -116,11 +121,6 @@ extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx,
 image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
 chunk_size = 5             # sentences per indexed passage
 top_k = 5                  # default number of results returned by query_corpus
-
-[scheduler] # schedule agent prompts for a future time (all keys optional)
-enabled = false                       # false (or missing section) -> tools are no-ops
-persist_file = ".res/schedule.json"  # task persistence (survives restarts)
-on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 
 [mcp] # MCP (Model Context Protocol) servers as agent tools (optional; pip install mcp)
 # Every server tool becomes a native agent tool (mcp_<server>_<tool>); the

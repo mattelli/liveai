@@ -700,10 +700,8 @@ class ConversationSession:
             return
         flags = live_ai.agent_pool_settings(
             getattr(self.agent, "config", None)).get("monitor") or set()
-        if "calls" not in flags and not monitor.snapshot(limit=1):
-            cprint(
-                "Monitoring is disabled: set [agent] monitor = \"calls\" "
-                "in config.toml to record sub-agent activity.", "yellow")
+        if not monitor.snapshot(limit=1):
+            cprint("No monitoring data available.", "yellow")
             return
         text = monitor.tail(limit=limit)
         cprint(text, "cyan")
