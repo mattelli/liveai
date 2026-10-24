@@ -54,7 +54,7 @@ class ConversationSession:
     """
 
     COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info",
-                "/model", "/session", "/mcp")
+                "/model", "/session", "/mcp", "/monitor")
 
     def __init__(self, agent, read_prompt: Callable[[], str | None], use_tools: bool = True,
                  quit_on_prompt_interrupt: bool = False):
@@ -204,6 +204,9 @@ class ConversationSession:
         if cmd == "/mcp":
             self._cmd_mcp(arg)
             return True
+        if cmd == "/monitor":
+            self._cmd_monitor(arg)
+            return True
 
         cprint(f"Unknown command: {text}. Type /help.", "red")
         return True
@@ -219,6 +222,7 @@ class ConversationSession:
             ("/model [name]", "switch to a model from the models JSON file"),
             ("/session store|list|load", "save/list/restore chat sessions (JSON)"),
             ("/mcp [refresh]", "list the MCP servers/tools; refresh reconnects"),
+            ("/monitor [N|clear]", "show the last sub-agent activities; clear empties"),
             ("Ctrl+C", "stop the response being generated"),
             ("Ctrl+D", "exit the session"),
         ]
@@ -664,6 +668,45 @@ class ConversationSession:
         return 0
 
     # ---------------------------------------------------------------- banner
+
+    def _cmd_monitor(self, arg: str) -> None:
+        """Show the recent sub-agent activity (``/monitor [N|clear]``).
+
+        ``/monitor`` prints the most recent events (default 20), ``/monitor N``
+        the last N events and ``/monitor clear`` empties the in-memory buffer
+        (the JSONL file sink is not touched). When monitoring is disabled in
+        the config (``[agent] monitor`` without ``calls``) a hint is shown.
+        """
+        import src.live_ai as live_ai
+
+        arg = arg.strip().lower()
+        monitor = live_ai.get_monitor()
+        if arg == "clear":
+            if monitor is None:
+                cprint("Monitoring is not active (no agent pool).", "yellow")
+                return
+            monitor.clear()
+            cprint("Monitor buffer cleared.", "green")
+            return
+        limit = 20
+        if arg:
+            try:
+                limit = max(1, int(arg))
+            except ValueError:
+                cprint("Usage: /monitor [N|clear]", "yellow")
+                return
+        if monitor is None:
+            cprint("Monitoring is not active (no agent pool).", "yellow")
+            return
+        flags = live_ai.agent_pool_settings(
+            getattr(self.agent, "config", None)).get("monitor") or set()
+        if "calls" not in flags and not monitor.snapshot(limit=1):
+            cprint(
+                "Monitoring is disabled: set [agent] monitor = \"calls\" "
+                "in config.toml to record sub-agent activity.", "yellow")
+            return
+        text = monitor.tail(limit=limit)
+        cprint(text, "cyan")
 
     def banner(self) -> None:
         ui = getattr(getattr(self.agent, "config", None), "ui", None)

@@ -706,3 +706,112 @@ def test_cmd_mcp_unknown_subcommand_shows_usage(monkeypatch, capsys):
     out = capsys.readouterr().out.lower()
     assert "usage" in out
     assert "srv" not in out  # listing skipped for a bad sub-command
+
+
+# ------------------------------------------------------------------- /monitor
+
+
+def test_monitor_command_shows_recent_events(capsys):
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    monitor.record("glm", "start", prompt="research X")
+    monitor.record("glm", "answer", answer="found it")
+    live_ai.bind_monitor(monitor)
+    try:
+        s = make(["/monitor", "/quit"])
+        s.run()
+    finally:
+        live_ai.bind_monitor(None)
+    out = capsys.readouterr().out
+    assert "[glm] started: research X" in out
+    assert "[glm] answered: found it" in out
+
+
+def test_monitor_command_with_limit(capsys):
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    for i in range(5):
+        monitor.record("glm", "tool_call", tool=f"t{i}")
+    live_ai.bind_monitor(monitor)
+    try:
+        s = make(["/monitor 2", "/quit"])
+        s.run()
+    finally:
+        live_ai.bind_monitor(None)
+    out = capsys.readouterr().out
+    assert "t3" in out and "t4" in out
+    assert "t0" not in out and "t1" not in out
+
+
+def test_monitor_command_clear(capsys):
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    monitor.record("glm", "start", prompt="x")
+    live_ai.bind_monitor(monitor)
+    try:
+        agent = FakeAgent()
+        agent.config = SimpleNamespace(agent=SimpleNamespace(
+            bootstrap_prompt="b", parallel_agents=0, monitor="calls"))
+        it = iter(["/monitor clear", "/monitor", "/quit"])
+        s = ConversationSession(agent, lambda: next(it))
+        s.run()
+    finally:
+        live_ai.bind_monitor(None)
+    out = capsys.readouterr().out
+    assert "cleared" in out.lower()
+    assert "No sub-agent activity" in out
+    assert monitor.snapshot() == []
+
+
+def test_monitor_command_no_pool(capsys):
+    import src.live_ai as live_ai
+    live_ai.bind_monitor(None)
+    s = make(["/monitor", "/quit"])
+    s.run()
+    out = capsys.readouterr().out
+    assert "not active" in out
+
+
+def test_monitor_command_bad_usage(capsys):
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    live_ai.bind_monitor(AgentMonitor(maxlen=10))
+    try:
+        s = make(["/monitor bogus", "/quit"])
+        s.run()
+    finally:
+        live_ai.bind_monitor(None)
+    out = capsys.readouterr().out
+    assert "Usage: /monitor [N|clear]" in out
+
+
+def test_monitor_command_disabled_hint(capsys):
+    """Empty buffer + monitoring disabled in config -> a config hint."""
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    live_ai.bind_monitor(AgentMonitor(maxlen=10))
+    try:
+        agent = FakeAgent()
+        agent.config = SimpleNamespace(agent=SimpleNamespace(
+            bootstrap_prompt="b", parallel_agents=0))
+        it = iter(["/monitor", "/quit"])
+        s = ConversationSession(agent, lambda: next(it))
+        s.run()
+    finally:
+        live_ai.bind_monitor(None)
+    out = capsys.readouterr().out
+    assert 'monitor = "calls"' in out
+
+
+def test_monitor_in_help(capsys):
+    s = make(["/help", "/quit"])
+    s.run()
+    assert "/monitor" in capsys.readouterr().out
