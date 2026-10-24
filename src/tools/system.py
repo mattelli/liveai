@@ -74,6 +74,8 @@ def run_command(cmd: str, timeout_s: float = 30.0, cwd: str | None = None) -> st
             stderr=subprocess.PIPE,
             cwd=Path(cwd) if cwd is not None else Path.cwd(),
             text=True,
+            encoding="utf-8",
+            errors="replace",
             shell=True,
         )
     except Exception as exc:

@@ -12,7 +12,7 @@ from typing import Callable, Literal
 from rich.console import Console
 from rich.syntax import Syntax
 
-Colors = Literal['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white', 'reset']
+Colors = Literal['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', "grey", 'white', 'reset']
 
 # Activity spinner: braille dots, redrawn every _SPIN_INTERVAL seconds
 # while a generation produces no visible output.

@@ -129,11 +129,34 @@ class ConversationSession:
                 cprint(" ⏹  generation cancelled", "yellow")
 
     def _run_turn(self, text: str) -> None:
+        # Inject any scheduled-task results that fired since the last turn so
+        # the main agent becomes aware of them (same visibility as pooled
+        # subagent answers, which are returned into the history directly).
+        self._inject_scheduled_results()
         if self.use_tools:
             self.agent.act(text)
         else:
             for f in self.agent.model_fragments(text):
                 self.agent.print_fragment(f)
+
+    def _inject_scheduled_results(self) -> None:
+        """Append pending scheduled-task results to the agent's history.
+
+        The scheduler thread queues results instead of writing the history
+        directly (an append from another thread could corrupt an in-flight
+        tool-call round); here the main thread owns the list, so appending is
+        safe. Results arrive as assistant messages the agent can mention or act
+        on during the turn.
+        """
+        try:
+            from src.tools.scheduler import drain_scheduled_results
+        except ImportError:  # pragma: no cover - scheduler module always exists
+            return
+        for task_id, answer in drain_scheduled_results():
+            self.agent.messages.append({
+                "role": "assistant",
+                "content": f"Scheduled task {task_id} completed. Result:\n{answer}",
+            })
 
     def _flush(self) -> None:
         if hasattr(self.agent, "flush_stream"):

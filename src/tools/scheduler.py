@@ -41,7 +41,7 @@ from src.common import dump_func_call
 __all__ = [
     "ScheduledTask", "Scheduler", "SchedulerTools", "configure",
     "bind_scheduler", "cancel_scheduled_task", "list_scheduled_tasks",
-    "next_occurrence", "parse_when", "schedule_task",
+    "drain_scheduled_results", "next_occurrence", "parse_when", "schedule_task",
 ]
 
 logger = logging.getLogger(__name__)
@@ -266,6 +266,8 @@ class Scheduler:
         run_at = parse_when(at)
         if not repeat and run_at <= datetime.now():
             raise ValueError(f"scheduled time {at!r} is in the past")
+        if repeat:  # reject invalid recurrence up-front (would crash _run_loop)
+            next_occurrence(repeat, run_at)
         with self._lock:
             task = ScheduledTask(
                 id=f"t-{self._next_id}", prompt=prompt,
@@ -398,6 +400,13 @@ class Scheduler:
             except (KeyError, TypeError) as exc:
                 self.logger.warning("Skipping malformed schedule record: %s", exc)
                 continue
+            if task.repeat:
+                try:  # skip tasks with an invalid repeat (e.g. legacy files)
+                    next_occurrence(task.repeat, task.due_at())
+                except ValueError as exc:
+                    self.logger.warning("Skipping task %s with invalid repeat: %s",
+                                        task.id, exc)
+                    continue
             if task.due_at().timestamp() <= now and not task.repeat:
                 missed.append(task)  # one-shot missed while the app was off
                 continue
@@ -485,6 +494,34 @@ def _agent_executor(task: ScheduledTask) -> None:
         agent.act(task.prompt)
     except Exception as exc:
         logger.error("Scheduled task %s execution failed: %s", task.id, exc)
+        return
+    # Deliver the answer to the user: the executor agent is quiet, so without
+    # this the result would only live in the agent's own message history.
+    answer = ""
+    if agent.messages:
+        answer = str(agent.messages[-1].get("content") or "").strip()
+    if answer:
+        logger.info("Scheduled task %s completed: %s", task.id, answer)
+        # Queue the result so the main agent becomes aware of it on its next
+        # turn (drain_scheduled_results); direct history writes from this
+        # thread could corrupt an in-flight tool-call round.
+        with _PENDING_RESULTS_LOCK:
+            _PENDING_RESULTS.append((task.id, answer))
+    else:
+        logger.warning("Scheduled task %s produced no answer", task.id)
+
+
+# Results of scheduled tasks waiting to be injected into the main agent's
+# context (consumed by drain_scheduled_results, see ConversationSession).
+_PENDING_RESULTS: list[tuple[str, str]] = []
+_PENDING_RESULTS_LOCK = threading.Lock()
+
+
+def drain_scheduled_results() -> list[tuple[str, str]]:
+    """Return and clear the scheduled-task results pending main-agent delivery."""
+    with _PENDING_RESULTS_LOCK:
+        pending, _PENDING_RESULTS[:] = _PENDING_RESULTS[:], []
+    return pending
 
 
 # Lazily built dedicated execution agent (owned by the scheduler thread).

@@ -1,11 +1,9 @@
 [logging]
 level = "WARNING"
 
-[brain] 
-# LLM configuration: the model connection (model, base_url, api_key_env) lives
-# in the models JSON file ([brain] models_file); its FIRST entry boots the
-# session and /model switches between the entries at runtime. The API keys are
-# read from the environment variables named by each entry (also resolved from .env).
+[brain] # LLM configuration: the model connection (model, base_url, api_key_env) lives in the models JSON file ([brain] models_file); 
+# its FIRST entry boots the session and /model switches between the entries at runtime. 
+# The API keys are read from the environment variables named by each entry (also resolved from .env).
 
 # Legacy, models-file-less setup (used only when models_file is unset):
 # base_url = "https://openrouter.ai/api/v1"
@@ -28,7 +26,7 @@ temperature = 0.6
 show_thinking = true
 max_thinking_tokens = 0                   # max tokens of thinking to visualize (0 = unlimited)
 
-[agent]
+[agent] # multi-agent configuration
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
 max_act_rounds = 500                               # max tool-loop rounds per agent turn (default 100)
 parallel_agents = 2                                # extra agents beside the running one (0 = off)
@@ -118,10 +116,9 @@ chunk_size = 5             # sentences per indexed passage
 top_k = 5                  # default number of results returned by query_corpus
 
 [scheduler] # schedule agent prompts for a future time (all keys optional)
-# enabled = true                # false (or missing section) -> tools are no-ops
-# persist_file = "data/schedule.json"  # task persistence (survives restarts)
-# on_missed = "skip"            # one-shot tasks missed while the app was off:
-#                               # "run" -> execute immediately, "skip" -> drop
+enabled = true                       # false (or missing section) -> tools are no-ops
+persist_file = ".res/schedule.json"  # task persistence (survives restarts)
+on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 
 [mcp] # MCP (Model Context Protocol) servers as agent tools (optional; pip install mcp)
 # Every server tool becomes a native agent tool (mcp_<server>_<tool>); the
