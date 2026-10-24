@@ -825,6 +825,43 @@ OS Linux / macOS (bash)
 
 
 
+## Unit tests
+
+The test suite is standard **pytest** (no LLM, no network: every test uses
+stubbed clients and fake agents, so it runs offline in ~30s).
+
+Run everything from the project root:
+
+```
+python -m pytest tests/
+```
+
+Useful variants:
+
+```
+python -m pytest tests/ -q                 # quiet output, one dot per test
+python -m pytest tests/ -x                 # stop at the first failure
+python -m pytest tests/ -v --tb=short      # verbose + short tracebacks
+python -m pytest tests/ --durations=10     # show the slowest tests
+```
+
+Run a subset:
+
+```
+python -m pytest tests/test_live_ai.py                 # one file
+python -m pytest tests/test_session.py -k tools        # tests matching a name
+python -m pytest tests/test_session.py::test_tools_lists_available_tools
+```
+
+Notes:
+
+- The setup script creates the project virtual environment
+  (`.liveai-cpu/`); if your shell is not inside it, activate it first
+  (`.liveai-cpu\Scripts\activate` on Windows) or invoke its interpreter
+  directly: `.liveai-cpu\Scripts\python.exe -m pytest tests/`.
+- A few scheduler tests use real threads with short waits (~150 ms), which is
+  where most of the ~30s runtime comes from.
+
 ## System Notes
 
 ```
