@@ -229,6 +229,94 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
     }
 
 
+## sub-agent activity monitor (task 2) ##
+
+# Thread-safe ring buffer of sub-agent activity events, filled by AgentPool
+# and drained by the UI (session poll / console tail / JSONL file). Kept at
+# module level so the session and any watcher see the same stream even when
+# the pool is rebuilt; a module-level lock serializes appends from the
+# parallel worker threads.
+MONITOR_BUFFER_DEFAULT = 100
+
+
+class AgentMonitor:
+    """Thread-safe ring buffer of sub-agent activity events.
+
+    Events are plain dicts (JSON-friendly): ``{"ts", "agent", "event", ...}``
+    with ``event`` in ``{"start", "answer", "tool_call", "tool_result"}``.
+    ``record()`` appends, trims to ``maxlen`` and mirrors every event to the
+    optional JSONL file (``[agent] monitor_log_file``) - a failed write is
+    logged once and the file sink is dropped (monitoring must never break the
+    agents). ``snapshot()`` returns the most recent events oldest-first for
+    the UI; ``clear()`` empties the buffer (the file sink is untouched).
+    """
+
+    def __init__(self, maxlen: int = MONITOR_BUFFER_DEFAULT, log_file: str | None = None):
+        self.maxlen = max(1, int(maxlen or MONITOR_BUFFER_DEFAULT))
+        self.log_file = log_file
+        self._events: list[dict] = []
+        self._lock = threading.Lock()
+        self._log_failed = False
+        self.logger = getLogger("AgentMonitor")
+
+    def record(self, agent: str, event: str, **fields) -> None:
+        """Append one event (thread-safe) and mirror it to the JSONL sink."""
+        entry = {"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                 "agent": agent, "event": event, **fields}
+        with self._lock:
+            self._events.append(entry)
+            if len(self._events) > self.maxlen:
+                del self._events[: len(self._events) - self.maxlen]
+            # The file write happens under the same lock: parallel worker
+            # threads appending concurrently would otherwise interleave
+            # partial lines and lose events in the JSONL sink.
+            self._write_log(entry)
+
+    def __len__(self) -> int:
+        """Current number of buffered events."""
+        with self._lock:
+            return len(self._events)
+
+    def _write_log(self, entry: dict) -> None:
+        """Append one event as a JSON line; drop the sink after a failure."""
+        if not self.log_file or self._log_failed:
+            return
+        try:
+            path = pathlib.Path(self.log_file)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            self._log_failed = True
+            self.logger.warning("Monitor log %s disabled after write error: %s",
+                                self.log_file, exc)
+
+    def snapshot(self, limit: int | None = None) -> list[dict]:
+        """Most recent events, oldest-first (all when ``limit`` is None)."""
+        with self._lock:
+            events = list(self._events)
+        return events[-limit:] if limit else events
+
+    def clear(self) -> None:
+        """Empty the buffer (the JSONL file sink is not touched)."""
+        with self._lock:
+            self._events.clear()
+
+
+_MONITOR: AgentMonitor | None = None
+
+
+def get_monitor() -> AgentMonitor | None:
+    """The process-wide monitor (None until bind_monitor is called)."""
+    return _MONITOR
+
+
+def bind_monitor(monitor: AgentMonitor | None) -> None:
+    """Install the process-wide monitor (called by main.py with the pool)."""
+    global _MONITOR
+    _MONITOR = monitor
+
+
 ## delegation tools (agent-as-tool) ##
 
 # The pool is injected by main.py via bind_agent_pool (same seam pattern as
