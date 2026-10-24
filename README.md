@@ -12,8 +12,14 @@ Whisper is a pre-trained model for automatic speech recognition (ASR) and speech
 See [Whisper](https://huggingface.co/openai/whisper-medium)
 
 ```
+# A) git + git-lfs
 git lfs install
 git clone https://huggingface.co/guillaumekln/faster-whisper-medium
+
+# B) Python 
+from faster_whisper import WhisperModel
+model = WhisperModel("medium", device="auto", compute_type="int8")
+
 ```
 
 ## LLM backend (OpenAI-compatible API)
@@ -170,9 +176,9 @@ git lfs install
 git clone https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2 \
     .res/embedding/all-MiniLM-L6-v2
 
-# C) Python (downloads into the HF cache, then saves a local copy)
-python -c "from sentence_transformers import SentenceTransformer; \
-SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')"
+# C) Python
+from sentence_transformers import SentenceTransformer
+SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')
 ```
 
 Notes:
@@ -257,9 +263,10 @@ git lfs install
 git clone https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2     .res/embedding/all-MiniLM-L6-v2
 git clone https://huggingface.co/sentence-transformers/clip-ViT-B-32     .res/embedding/clip-ViT-B-32
 
-# C) Python (downloads into the HF cache, then saves a local copy)
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')"
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('sentence-transformers/clip-ViT-B-32').save('.res/embedding/clip-ViT-B-32')"
+# C) Python 
+from sentence_transformers import SentenceTransformer
+SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2').save('.res/embedding/all-MiniLM-L6-v2')
+SentenceTransformer('sentence-transformers/clip-ViT-B-32').save('.res/embedding/clip-ViT-B-32')
 ```
 
 For multilingual text corpora, use the sample's aligned model instead by
