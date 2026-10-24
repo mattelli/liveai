@@ -709,7 +709,7 @@ class ConversationSession:
         flags = live_ai.agent_pool_settings(
             getattr(self.agent, "config", None)).get("monitor") or set()
         if not monitor.snapshot(limit=1):
-            cprint("No monitoring data available.", "yellow")
+            cprint("No sub-agent activity recorded.", "yellow")
             return
         text = monitor.tail(limit=limit)
         cprint(text, "cyan")

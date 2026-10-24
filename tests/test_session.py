@@ -765,7 +765,7 @@ def test_monitor_command_clear(capsys):
         live_ai.bind_monitor(None)
     out = capsys.readouterr().out
     assert "cleared" in out.lower()
-    assert "No monitoring data available." in out
+    assert "No sub-agent activity recorded." in out
     assert monitor.snapshot() == []
 
 
@@ -808,7 +808,7 @@ def test_monitor_command_empty_buffer_hint(capsys):
     finally:
         live_ai.bind_monitor(None)
     out = capsys.readouterr().out
-    assert "No monitoring data available." in out
+    assert "No sub-agent activity recorded." in out
 
 
 def test_monitor_in_help(capsys):
