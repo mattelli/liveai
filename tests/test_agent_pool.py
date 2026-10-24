@@ -27,7 +27,6 @@ def test_agent_pool_settings_full_config():
         parallel_agents=2,
         agent_models=["glm", "qwen"],
         agent_system_prompts=["research", "code"],
-        agent_quiet=True,
     )
     assert live_ai_mod.agent_pool_settings(config) == {
         "count": 2,
@@ -101,10 +100,12 @@ def test_agent_pool_settings_rejects_bad_count():
     assert live_ai_mod.agent_pool_settings(config)["count"] == 0
 
 
-def test_agent_pool_settings_quiet_defaults_true_and_is_bool():
+def test_agent_pool_settings_quiet_is_always_true():
+    """Pooled agents are always quiet: no user-facing flag anymore."""
     assert live_ai_mod.agent_pool_settings(_agent_config(parallel_agents=1))["quiet"] is True
+    # A leftover agent_quiet key in the config is ignored.
     config = _agent_config(parallel_agents=1, agent_quiet=False)
-    assert live_ai_mod.agent_pool_settings(config)["quiet"] is False
+    assert live_ai_mod.agent_pool_settings(config)["quiet"] is True
 
 
 # ------------------------------------------------- load_config round-trip
@@ -120,7 +121,6 @@ def test_load_config_round_trips_agent_pool_keys(tmp_path):
         parallel_agents = 2
         agent_models = "glm, qwen"
         agent_system_prompts = "research, code"
-        agent_quiet = false
     """), encoding="utf-8")
     config = load_config(config_file)
     settings = live_ai_mod.agent_pool_settings(config)
@@ -128,7 +128,7 @@ def test_load_config_round_trips_agent_pool_keys(tmp_path):
         "count": 2,
         "models": ["glm", "qwen"],
         "system_prompts": ["research", "code"],
-        "quiet": False,
+        "quiet": True,
         "monitor": set(),
         "monitor_log_file": "data/agents.jsonl",
         "monitor_buffer": 100,

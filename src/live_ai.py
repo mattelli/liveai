@@ -191,17 +191,18 @@ def _monitor_buffer(value) -> int:
 def agent_pool_settings(config: SimpleNamespace) -> dict:
     """Resolve the ``[agent]`` multi-agent pool settings (backward compatible).
 
-    Returns ``{"count", "models", "system_prompts", "quiet", "monitor",
+    Returns ``{"count", "models", "system_prompts", "monitor",
     "monitor_log_file", "monitor_buffer"}`` where ``count`` is the number of
     extra agents beside the running one, ``models`` the models.json entry
     names (one per agent, truncated to ``count``), ``system_prompts``
-    optional per-agent prompts (padded with ``None``), ``quiet`` whether
-    workers must not print/speak (default ``True``), ``monitor`` the set of
+    optional per-agent prompts (padded with ``None``), ``monitor`` the set of
     monitoring flags (``"calls"``: labeled [CALL] blocks for sub-agent tool
     calls; ``"log"``: JSONL event log), ``monitor_log_file`` the JSONL log
     path and ``monitor_buffer`` the in-memory event ring size.
     Missing keys or a missing ``[agent]`` section keep the single-agent,
-    unmonitored behavior (``count = 0``, ``monitor = set()``).
+    unmonitored behavior (``count = 0``, ``monitor = set()``). Pooled agents
+    are always quiet (they never print or speak): there is no user-facing
+    flag for it.
 
     ``agent_models``/``agent_system_prompts`` accept either a list or a
     comma-separated string; both forms are equivalent.
@@ -222,7 +223,7 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
         "count": count,
         "models": models,
         "system_prompts": (prompts + [None] * count)[:count],
-        "quiet": bool(getattr(agent, "agent_quiet", True)),
+        "quiet": True,
         "monitor": _monitor_flags(getattr(agent, "monitor", None)),
         "monitor_log_file": str(log_file) if log_file else _DEFAULT_MONITOR_LOG_FILE,
         "monitor_buffer": _monitor_buffer(getattr(agent, "monitor_buffer", None)),
@@ -1510,8 +1511,7 @@ class Agent(Brain):
         }
         return [per_agent.get(tool, tool) for tool in tools]
 
-    def __init__(self, config: SimpleNamespace, isolated_tools: bool = False,
-                 quiet: bool = False):
+    def __init__(self, config: SimpleNamespace, isolated_tools: bool = False, quiet: bool = False):
         # Set before super().__init__: OpenAICore.__init__ skips the
         # module-default tool binding for isolated (pooled) agents, and
         # OpenAICore.__init__ builds the stream printer (quiet -> NullPrinter).
