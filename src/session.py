@@ -13,13 +13,13 @@ from src.tools import allow_speech, clear_chat
 
 
 # Startup logo shown inside the banner panel ([ui] banner_logo = false turns
-# it off). Raw ASCII art: keep it a raw string so the backslashes survive.
+# it off). Raw ASCII art (pyfiglet "small" font): keep it a raw string so the
+# backslashes survive.
 _LOGO = r"""
- _   _ _____ ____      _    ____  _   _    _    ____  _____ ____
-| | | | ____|  _ \    / \  |  _ \| \ | |  / \  / ___| ____|  _ \
-| | | |  _| | |_) |  / _ \ | | | |  \| | / _ \| |   |  _| | |_) |
-| |_| | |___|  _ <  / ___ \| |_| | |\  |/ ___ \| |___| |___|  _ <
- \___/|_____|_| \_\/_/   \_\____/|_| \_/_/   \_\____|_____|_| \_\
+ _    _____   _____   _   ___
+| |  |_ _\ \ / / __| /_\ |_ _|
+| |__ | | \ V /| _| / _ \ | |
+|____|___| \_/ |___/_/ \_\___|
 """
 
 
