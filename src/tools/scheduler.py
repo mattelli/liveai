@@ -547,23 +547,22 @@ def _agent_executor(task: ScheduledTask) -> None:
         # Queue the result so the main agent becomes aware of it on its next
         # turn (drain_scheduled_results); direct history writes from this
         # thread could corrupt an in-flight tool-call round.
-        with _PENDING_RESULTS_LOCK:
-            _PENDING_RESULTS.append((task.id, answer))
+        # Lazy import: src.live_ai imports the src.tools package, so a
+        # module-level import here would be circular.
+        from src.live_ai import queue_agent_result
+        queue_agent_result("scheduled", task.id, answer)
     else:
         logger.warning("Scheduled task %s produced no answer", task.id)
 
 
-# Results of scheduled tasks waiting to be injected into the main agent's
-# context (consumed by drain_scheduled_results, see ConversationSession).
-_PENDING_RESULTS: list[tuple[str, str]] = []
-_PENDING_RESULTS_LOCK = threading.Lock()
-
-
 def drain_scheduled_results() -> list[tuple[str, str]]:
-    """Return and clear the scheduled-task results pending main-agent delivery."""
-    with _PENDING_RESULTS_LOCK:
-        pending, _PENDING_RESULTS[:] = _PENDING_RESULTS[:], []
-    return pending
+    """Return and clear the scheduled-task results pending main-agent delivery.
+
+    Thin wrapper over the shared background-results queue in ``src.live_ai``
+    (one delivery mechanism for scheduled tasks and async delegations).
+    """
+    from src.live_ai import drain_agent_results_of_kind  # lazy: circular at import
+    return drain_agent_results_of_kind("scheduled")
 
 
 # Lazily built dedicated execution agent (owned by the scheduler thread).

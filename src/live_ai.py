@@ -400,6 +400,40 @@ def bind_monitor(monitor: AgentMonitor | None) -> None:
     _MONITOR = monitor
 
 
+## background results waiting for the main agent (task 1) ##
+
+# Results produced by background workers (scheduled tasks, async delegations)
+# and waiting to be injected into the main agent's history. Entries are
+# (kind, id, text) with kind in {"scheduled", "delegation"}; the session
+# drains the queue at the start of every turn. Background threads only append
+# under the lock; the main thread is the sole consumer (atomic swap), so
+# history writes never race an in-flight tool-call round.
+_BACKGROUND_RESULTS: list[tuple[str, str, str]] = []
+_BACKGROUND_RESULTS_LOCK = threading.Lock()
+
+
+def queue_agent_result(kind: str, result_id: str, text: str) -> None:
+    """Queue one background result for main-agent delivery (thread-safe)."""
+    with _BACKGROUND_RESULTS_LOCK:
+        _BACKGROUND_RESULTS.append((kind, str(result_id), text))
+
+
+def drain_agent_results() -> list[tuple[str, str, str]]:
+    """Return and clear every pending background result (main thread only)."""
+    with _BACKGROUND_RESULTS_LOCK:
+        pending, _BACKGROUND_RESULTS[:] = _BACKGROUND_RESULTS[:], []
+    return pending
+
+
+def drain_agent_results_of_kind(kind: str) -> list[tuple[str, str]]:
+    """Return and clear the pending results of one kind as (id, text) pairs."""
+    with _BACKGROUND_RESULTS_LOCK:
+        matching = [entry for entry in _BACKGROUND_RESULTS if entry[0] == kind]
+        _BACKGROUND_RESULTS[:] = [
+            entry for entry in _BACKGROUND_RESULTS if entry[0] != kind]
+    return [(result_id, text) for _, result_id, text in matching]
+
+
 ## delegation tools (agent-as-tool) ##
 
 # The pool is injected by main.py via bind_agent_pool (same seam pattern as
