@@ -815,3 +815,24 @@ def test_monitor_in_help(capsys):
     s = make(["/help", "/quit"])
     s.run()
     assert "/monitor" in capsys.readouterr().out
+
+
+# ------------------------------------------------------- /tools grouped view
+
+
+def test_tools_lists_tools_grouped_by_topic(capsys):
+    agent = ToolAgent()
+    it = iter(["/tools", "", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    # unknown tools (test doubles) are grouped under "other"
+    assert "other:" in out
+    assert "greet" in out and "Say hello." in out and "echo" in out
+
+
+def test_tools_grouped_selection_by_number_runs_tool():
+    """Number selection maps to the grouped display order."""
+    agent = ToolAgent()
+    it = iter(["/tools", "2", "hello", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.launched == [("echo", "hello")]

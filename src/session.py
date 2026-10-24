@@ -292,13 +292,21 @@ class ConversationSession:
             return
 
         cprint("Available tools:", "cyan")
-        for index, tool in enumerate(tools, 1):
-            doc = (getattr(tool, "__doc__", "") or "").strip().splitlines()
-            summary = doc[0].strip() if doc else ""
-            line = f"  {index:>2}. {self._tool_name(tool)}"
-            if summary:
-                line += f" - {summary}"
-            cprint(line, "cyan")
+        import src.live_ai as live_ai
+        # Grouped display order is also the selection order: flatten the
+        # groups so number N maps to the Nth listed tool.
+        tools = [tool for _, group in live_ai.tool_topics(tools) for tool in group]
+        index = 0
+        for topic, topic_tools in live_ai.tool_topics(tools):
+            cprint(f"{topic}:", "yellow", bold=True)
+            for tool in topic_tools:
+                index += 1
+                doc = (getattr(tool, "__doc__", "") or "").strip().splitlines()
+                summary = doc[0].strip() if doc else ""
+                line = f"  {index:>2}. {self._tool_name(tool)}"
+                if summary:
+                    line += f" - {summary}"
+                cprint(line, "cyan")
 
         selection = self._read_tool_input(
             "Select a tool (number or name, blank to cancel): "

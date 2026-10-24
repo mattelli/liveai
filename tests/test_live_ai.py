@@ -1363,3 +1363,55 @@ def test_refresh_mcp_tools_without_manager(monkeypatch):
     agent = live_ai_mod.Agent(_remote_config())
     message = agent.refresh_mcp_tools()
     assert "not configured" in message
+
+
+# ------------------------------------------------------- tool topic grouping
+
+
+def test_tool_topics_groups_known_tools_in_curated_order():
+    brain = live_ai_mod.Brain.__new__(live_ai_mod.Brain)
+    tools = [
+        live_ai_mod.web_search, live_ai_mod.recall_memory,
+        live_ai_mod.ask_agent, brain.model_info,
+    ]
+    grouped = live_ai_mod.tool_topics(tools)
+    topics = [topic for topic, _ in grouped]
+    # curated order wins regardless of the input order
+    assert topics == ["model", "delegation", "memory", "web"]
+
+
+def test_tool_topics_preserves_input_order_within_topic():
+    tools = [live_ai_mod.web_search, live_ai_mod.extract_webpage,
+             live_ai_mod.web_news]
+    grouped = dict(live_ai_mod.tool_topics(tools))
+    assert [t.__name__ for t in grouped["web"]] == [
+        "web_search", "extract_webpage", "web_news"]
+
+
+def test_tool_topics_unknown_tools_land_in_other_last():
+    def mystery_tool():
+        """Unknown."""
+
+    tools = [mystery_tool, live_ai_mod.recall_memory]
+    grouped = live_ai_mod.tool_topics(tools)
+    assert [topic for topic, _ in grouped] == ["memory", "other"]
+    assert grouped[-1][1] == [mystery_tool]
+
+
+def test_tool_topics_flattened_is_deterministic():
+    """Grouping reorders by topic, but the flattened order is deterministic
+    (same input -> same display order), which is what /tools numbering uses."""
+    tools = [
+        live_ai_mod.web_search, live_ai_mod.recall_memory,
+        live_ai_mod.ask_agent, live_ai_mod.exit_gracefully,
+        live_ai_mod.write_text_file,
+    ]
+    first = [tool for _, group in live_ai_mod.tool_topics(tools) for tool in group]
+    second = [tool for _, group in live_ai_mod.tool_topics(list(reversed(tools)))
+              for tool in group]
+    assert first == second  # stable regardless of input order
+    assert set(first) == set(tools)  # no tool lost or duplicated
+
+
+def test_tool_topics_empty_list():
+    assert live_ai_mod.tool_topics([]) == []

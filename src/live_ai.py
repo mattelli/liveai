@@ -142,6 +142,56 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     ]
 
 
+# Topic grouping for the /tools launcher (session.py): tool name -> topic.
+# Curated order = display order; tools missing from the map (e.g. MCP-injected
+# or test doubles) fall under "other", listed last.
+_TOOL_TOPICS: dict[str, tuple[str, ...]] = {
+    "model": ("model_info",),
+    "delegation": ("ask_agent", "run_parallel_agents", "agent_activity"),
+    "memory": ("recall_memory", "store_memory", "clear_chat"),
+    "speech": ("allow_speech",),
+    "scheduling": ("schedule_task", "list_scheduled_tasks",
+                   "cancel_scheduled_task"),
+    "documents": ("summarize_doc", "query_document", "list_corpora",
+                  "store_corpus", "query_corpus"),
+    "images": ("image_response", "capture_image", "image_search",
+               "generate_image", "unload_image_generator"),
+    "files": ("run_command", "search_in_file", "search_pattern_in_files",
+              "read_text_file", "replace_string_in_file", "write_text_file",
+              "download_file", "extract_archive", "zip_files"),
+    "web": ("web_search", "web_images", "web_videos", "web_news", "web_books",
+            "extract_webpage"),
+    "finance": ("fetch_financial_data", "save_financial_chart"),
+    "system": ("system_info", "current_date_time", "get_working_directory",
+               "exit_gracefully"),
+    "mcp": ("mcp_list_tools", "mcp_call_tool"),
+}
+
+
+def tool_topics(tools: list) -> list[tuple[str, list]]:
+    """Group a tool list by topic for display.
+
+    Returns ``[(topic, [tools...]), ...]`` with topics in the curated
+    ``_TOOL_TOPICS`` order (only non-empty ones), unknown tools collected
+    under ``"other"`` last. Within a topic the input order is preserved, so
+    the flattened groups reproduce the input order exactly (selection
+    numbering in the /tools launcher stays stable).
+    """
+    name_to_topic = {
+        name: topic
+        for topic, names in _TOOL_TOPICS.items() for name in names
+    }
+    grouped: dict[str, list] = {}
+    for tool in tools:
+        name = getattr(tool, "__name__", tool.__class__.__name__)
+        topic = name_to_topic.get(name, "other")
+        grouped.setdefault(topic, []).append(tool)
+    ordered = [t for t in _TOOL_TOPICS if t in grouped]
+    if "other" in grouped:
+        ordered.append("other")
+    return [(topic, grouped[topic]) for topic in ordered]
+
+
 def _split_list(value) -> list[str]:
     """Normalize a pool setting: comma-separated string or list -> list."""
     if isinstance(value, str):
