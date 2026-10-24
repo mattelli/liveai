@@ -1415,3 +1415,30 @@ def test_tool_topics_flattened_is_deterministic():
 
 def test_tool_topics_empty_list():
     assert live_ai_mod.tool_topics([]) == []
+
+
+# --------------------------------------------- JSON schema for bare dict
+
+
+def test_json_schema_bare_dict_is_object():
+    """A bare ``dict`` annotation maps to {"type": "object"}.
+
+    Regression: get_origin(dict) is None, so a bare dict fell through to
+    {"type": "string"} and models were told that e.g. run_parallel_agents'
+    task objects were plain strings.
+    """
+    assert live_ai_mod.OpenAICore._json_schema(dict) == {"type": "object"}
+    assert live_ai_mod.OpenAICore._json_schema(dict[str, str]) == {"type": "object"}
+
+
+def test_json_schema_list_of_dict_items_are_objects():
+    assert live_ai_mod.OpenAICore._json_schema(list[dict]) == {
+        "type": "array", "items": {"type": "object"}}
+
+
+def test_run_parallel_agents_schema_offers_task_objects():
+    """The model-visible schema must describe tasks as objects, not strings."""
+    definition = live_ai_mod.OpenAICore._openai_tool_definition(
+        live_ai_mod.run_parallel_agents)
+    tasks = definition["function"]["parameters"]["properties"]["tasks"]
+    assert tasks == {"type": "array", "items": {"type": "object"}}

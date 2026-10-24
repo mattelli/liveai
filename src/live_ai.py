@@ -1092,7 +1092,11 @@ class OpenAICore:
         if origin in (list, set, tuple):
             args = get_args(annotation)
             return {"type": "array", "items": OpenAICore._json_schema(args[0]) if args else {}}
-        if origin is dict:
+        if annotation is dict or origin is dict:
+            # A bare ``dict`` annotation has no origin (get_origin(dict) is
+            # None); without this check it fell through to {"type": "string"},
+            # telling models that e.g. run_parallel_agents' task objects were
+            # plain strings.
             return {"type": "object"}
         if origin is Union or origin is types.UnionType:
             args = [arg for arg in get_args(annotation) if arg is not type(None)]
