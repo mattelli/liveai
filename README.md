@@ -670,6 +670,42 @@ Notes:
   point workers at cloud endpoints in models.json for true parallelism, or
   keep `parallel_agents = 1` on constrained machines.
 
+### Async delegation (non-blocking)
+
+By default delegation is **synchronous**: the main agent's turn blocks until
+the worker(s) finish, then the answer(s) come back as the tool result. With
+
+```toml
+[agent]
+async_delegation = true
+```
+
+the delegation tools return **immediately** with a receipt and the workers
+keep running in the background, so the user can keep chatting:
+
+- `ask_agent(agent="glm", prompt="research X")` →
+  `Delegated task d-1 to glm (async): results will be delivered when the
+  worker finishes.`
+- `run_parallel_agents(tasks=[...])` →
+  `Delegated 2 tasks (d-1, d-2) to glm, qwen (async): results will be
+  delivered as the workers finish.`
+
+When a worker finishes, its answer is injected into the main agent's history
+at the start of the next turn as an assistant message:
+
+```
+Worker glm finished delegated task d-1. Result:
+<answer>
+```
+
+Worker failures are delivered too (`Worker glm failed delegated task d-1:
+<error>`), so nothing hangs silently. The main agent can report pending work
+via `agent_activity()` (a delegation with a `start` but no `answer` event is
+still running) and the receipts in its history let it correlate ids with
+tasks. Results arrive in completion order, each carrying its receipt id.
+Monitoring (`[agent] monitor`, `/monitor`) records async runs exactly like
+synchronous ones.
+
 ## Sub-agent activity monitoring
 
 Workers are quiet by default, so their work is invisible. The `[agent] monitor`

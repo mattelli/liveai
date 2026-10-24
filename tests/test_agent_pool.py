@@ -961,3 +961,72 @@ def test_synchronous_mode_unchanged(monkeypatch, tmp_path):
     _scripted_agent(agent, [("the answer", [])])
     assert pool.ask("glm", "hi") == "the answer"  # blocking, direct answer
     assert live_ai_mod.drain_agent_results() == []  # nothing queued
+
+
+# ------------------------------------------------- task 4: async e2e smoke
+
+
+def test_e2e_async_delegation_receipt_and_delivery(monkeypatch, tmp_path):
+    """Full async flow: receipt -> worker runs -> delivery on next turn.
+
+    Offline pool with async_delegation = true; the delegation tool returns a
+    receipt immediately, the submitted delegation runs to completion, and a
+    session turn injects the worker answer into the main agent's history.
+    """
+    import threading
+    import time
+    from tests.test_live_ai import _fake_openai
+
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    config = _pool_config(tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+    })
+    settings = {"count": 1, "models": ["glm"], "system_prompts": [None],
+                "quiet": True, "monitor": set(),
+                "monitor_log_file": "agents.jsonl", "monitor_buffer": 100,
+                "async_delegation": True}
+    pool = live_ai_mod.AgentPool(config, settings)
+    live_ai_mod.bind_agent_pool(pool)
+    try:
+        agent = pool.agents["glm"]
+        agent._stream = _QuietRoundStream()
+        agent._context_window = 1024
+        agent._messages = [{"role": "system", "content": "s"}]
+        agent.tool_definitions = []
+        agent._tool_impls = {}
+        agent._stream_round = lambda tools: ("worker answer", [])
+
+        receipt = live_ai_mod.ask_agent("glm", "summarize the news")
+        assert "Delegated task" in receipt and "(async)" in receipt
+        receipt_id = receipt.split(" ")[2]
+
+        # wait for the background worker to finish and queue the delivery
+        deadline = time.monotonic() + 5
+        pending = []
+        while time.monotonic() < deadline:
+            pending = live_ai_mod.drain_agent_results()
+            if pending:
+                break
+            time.sleep(0.02)
+        assert len(pending) == 1
+        kind, delegation_id, text = pending[0]
+        assert kind == "delegation" and delegation_id == receipt_id
+        assert "Worker glm finished delegated task" in text
+        assert "worker answer" in text
+
+        # a session turn injects the delivery into the main agent's history
+        from tests.conftest import FakeAgent
+        from src.session import ConversationSession
+        main_agent = FakeAgent()
+        main_agent.messages = []
+        live_ai_mod.queue_agent_result(kind, delegation_id, text)  # re-queue
+        it = iter(["thanks", "/quit"])
+        ConversationSession(main_agent, lambda: next(it)).run()
+        contents = [m["content"] for m in main_agent.messages
+                    if m["role"] == "assistant"]
+        assert any("Worker glm finished delegated task" in c for c in contents)
+    finally:
+        live_ai_mod.bind_agent_pool(None)
+        pool.stop()
