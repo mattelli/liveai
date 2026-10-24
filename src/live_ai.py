@@ -124,7 +124,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     """
     return [
         agent.model_info,
-        ask_agent, run_parallel_agents,
+        ask_agent, run_parallel_agents, agent_activity,
         recall_memory, store_memory, clear_chat,
         image_response, allow_speech,
         schedule_task, list_scheduled_tasks, cancel_scheduled_task,
@@ -302,6 +302,30 @@ class AgentMonitor:
         with self._lock:
             self._events.clear()
 
+    _EVENT_ICONS = {"start": "🚀", "answer": "✅", "tool_call": "🔧", "tool_result": "↩"}
+
+    def format_event(self, event: dict) -> str:
+        """One human-readable console line for an event."""
+        icon = self._EVENT_ICONS.get(event.get("event"), "•")
+        agent = event.get("agent", "?")
+        kind = event.get("event", "?")
+        if kind == "start":
+            return f"{icon} [{agent}] started: {str(event.get('prompt', ''))[:80]}"
+        if kind == "answer":
+            return f"{icon} [{agent}] answered: {str(event.get('answer', ''))[:80]}"
+        if kind == "tool_call":
+            return f"{icon} [{agent}] tool {event.get('tool', '?')}"
+        if kind == "tool_result":
+            return f"{icon} [{agent}] -> {str(event.get('result', ''))[:80]}"
+        return f"{icon} [{agent}] {kind}"
+
+    def tail(self, limit: int = 20) -> str:
+        """The most recent events as formatted console lines (oldest-first)."""
+        events = self.snapshot(limit=limit)
+        if not events:
+            return "No sub-agent activity recorded yet."
+        return "\n".join(self.format_event(event) for event in events)
+
 
 _MONITOR: AgentMonitor | None = None
 
@@ -384,6 +408,22 @@ def run_parallel_agents(tasks: list[dict]) -> str:
         {"agent": agent, "prompt": prompt, "answer": answer}
         for (agent, prompt), answer in zip(normalized, results)
     ])
+
+
+def agent_activity(last: int = 20) -> str:
+    """
+    Report the recent sub-agent activity: the last `last` events
+    (delegations, tool calls, answers) as human-readable one-line strings,
+    oldest first. Useful when the user asks what the sub-agents did or
+    what is currently running in the agent pool.
+    """
+    monitor = get_monitor()
+    if monitor is None:
+        return "No sub-agent activity recorded."
+    events = monitor.snapshot(limit=max(1, int(last or 20)))
+    if not events:
+        return "No sub-agent activity recorded."
+    return "\n".join(monitor.format_event(event) for event in events)
 
 
 def _load_env_file(dotenv_path: pathlib.Path | None = None) -> None:

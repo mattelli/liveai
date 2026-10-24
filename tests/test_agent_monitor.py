@@ -292,3 +292,147 @@ def test_monitor_survives_pool_rebuild(monkeypatch, tmp_path):
     }, models=["qwen"])
     pool_b.monitor_flags = {"calls"}
     assert pool_b.monitor is pool_a.monitor
+
+
+# ------------------------------------------- task 4: agent_activity tool
+
+
+def test_agent_activity_unbound_returns_empty_message():
+    live_ai_mod.bind_monitor(None)
+    assert live_ai_mod.agent_activity() == "No sub-agent activity recorded."
+
+
+def test_agent_activity_formats_events_newest_last():
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    monitor.record("glm", "start", prompt="research X")
+    monitor.record("glm", "tool_call", tool="web_search")
+    monitor.record("glm", "answer", answer="found it")
+    live_ai_mod.bind_monitor(monitor)
+    try:
+        report = live_ai_mod.agent_activity()
+    finally:
+        live_ai_mod.bind_monitor(None)
+    lines = report.splitlines()
+    assert len(lines) == 3
+    assert "glm" in lines[0] and "research X" in lines[0]
+    assert "web_search" in lines[1]
+    assert "found it" in lines[2]
+
+
+def test_agent_activity_last_limits_to_most_recent():
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    for i in range(5):
+        monitor.record("glm", "tool_call", tool=f"t{i}")
+    live_ai_mod.bind_monitor(monitor)
+    try:
+        report = live_ai_mod.agent_activity(last=2)
+    finally:
+        live_ai_mod.bind_monitor(None)
+    lines = report.splitlines()
+    assert len(lines) == 2
+    assert "t3" in lines[0] and "t4" in lines[1]
+
+
+def test_agent_activity_bound_but_empty():
+    from src.live_ai import AgentMonitor
+
+    live_ai_mod.bind_monitor(AgentMonitor(maxlen=10))
+    try:
+        assert live_ai_mod.agent_activity() == "No sub-agent activity recorded."
+    finally:
+        live_ai_mod.bind_monitor(None)
+
+
+def test_default_tools_include_agent_activity():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    names = [tool.__name__ for tool in agent._build_tools()]
+    assert "agent_activity" in names
+
+
+def test_agent_activity_tool_definition_well_formed():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    tools = live_ai_mod._default_tools(agent)
+    definitions = {d["function"]["name"]: d for d in
+                   (live_ai_mod.OpenAICore._openai_tool_definition(t) for t in tools)}
+    definition = definitions["agent_activity"]["function"]
+    assert definition["description"]
+    assert definition["parameters"]["type"] == "object"
+
+
+# ------------------------------------------------- task 5: e2e smoke
+
+
+def _script_agent(agent, rounds):
+    """Minimal quiet-agent plumbing + scripted completion rounds."""
+    agent._stream = _QuietRoundStream()
+    agent._context_window = 1024
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent.tool_definitions = []
+    scripted = iter(rounds)
+    agent._stream_round = lambda tools: next(scripted)
+
+
+def test_e2e_ask_and_parallel_logged_and_reported(monkeypatch, tmp_path):
+    """One ask() + one ask_parallel() with two agents, monitor = "calls,log".
+
+    The JSONL file must hold the full event sequence per agent (including a
+    tool call) and agent_activity() must report both agent names.
+    """
+    from tests.test_agent_pool import _pool_config
+    from tests.test_live_ai import _fake_openai
+
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    config = _pool_config(tmp_path, {
+        "boot": {"model": "boot-model"},
+        "glm": {"model": "glm-model"},
+        "qwen": {"model": "qwen-model"},
+    })
+    log_file = tmp_path / "agents.jsonl"
+    settings = {"count": 2, "models": ["glm", "qwen"],
+                "system_prompts": [None, None], "quiet": True,
+                "monitor": {"calls", "log"},
+                "monitor_log_file": str(log_file), "monitor_buffer": 100}
+    pool = live_ai_mod.AgentPool(config, settings)
+    assert live_ai_mod.get_monitor() is pool.monitor  # bound for agent_activity
+
+    # glm: one tool call, then the final answer (real _execute_tool path).
+    # It is delegated twice (ask + ask_parallel), so four scripted rounds.
+    glm = pool.agents["glm"]
+    glm._tool_impls = {"echo": lambda **kw: f"echo:{kw.get('text', '')}"}
+    _script_agent(glm, [
+        ("", [{"id": "c1", "name": "echo", "arguments": '{"text": "hi"}'}]),
+        ("glm answer", []),
+        ("", [{"id": "c2", "name": "echo", "arguments": '{"text": "yo"}'}]),
+        ("glm answer", []),
+    ])
+    qwen = pool.agents["qwen"]
+    qwen._tool_impls = {}
+    _script_agent(qwen, [("qwen answer", [])])
+
+    assert pool.ask("glm", "task one") == "glm answer"
+    results = pool.ask_parallel([("glm", "p1"), ("qwen", "p2")])
+    assert results == ["glm answer", "qwen answer"]
+
+    # JSONL: one JSON object per line, complete event sequence per agent.
+    events = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
+    glm_events = [e for e in events if e["agent"] == "glm"]
+    qwen_events = [e for e in events if e["agent"] == "qwen"]
+    assert [e["event"] for e in glm_events] == [
+        "start", "tool_call", "tool_result", "answer",
+        "start", "tool_call", "tool_result", "answer"]
+    assert glm_events[0]["prompt"] == "task one"
+    assert glm_events[3]["answer"] == "glm answer"
+    assert glm_events[2]["result"] == "echo:hi"
+    assert [e["event"] for e in qwen_events] == ["start", "answer"]
+    assert qwen_events[1]["answer"] == "qwen answer"
+    assert all("ts" in e for e in events)
+
+    # agent_activity() reports both agents from the shared ring buffer.
+    report = live_ai_mod.agent_activity(last=50)
+    assert "glm" in report and "qwen" in report
+    assert "task one" in report and "p2" in report
