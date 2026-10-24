@@ -893,3 +893,44 @@ def test_gradient_logo_custom_art():
 
     text = _gradient_logo("AB\nCD")
     assert "AB" in text.plain and "CD" in text.plain
+
+
+# ------------------------------------------- background results injection
+
+
+def test_session_injects_delegation_results(capsys):
+    import src.live_ai as live_ai
+
+    agent = FakeAgent()
+    agent.messages = []
+    live_ai.queue_agent_result(
+        "delegation", "d-1", "Worker glm finished delegated task d-1. Result:\n42")
+    it = iter(["thanks", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    contents = [m["content"] for m in agent.messages if m["role"] == "assistant"]
+    assert any("Worker glm finished delegated task d-1" in c for c in contents)
+
+
+def test_session_injects_scheduled_results_unchanged():
+    import src.live_ai as live_ai
+
+    agent = FakeAgent()
+    agent.messages = []
+    live_ai.queue_agent_result("scheduled", "t-1", "the reminder text")
+    it = iter(["ok", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    contents = [m["content"] for m in agent.messages if m["role"] == "assistant"]
+    assert any("Scheduled task t-1 completed" in c and "the reminder text" in c
+               for c in contents)
+
+
+def test_session_skips_unknown_background_kind():
+    import src.live_ai as live_ai
+
+    agent = FakeAgent()
+    agent.messages = []
+    live_ai.queue_agent_result("mystery", "x-1", "odd payload")
+    it = iter(["ok", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()  # must not raise
+    contents = [m["content"] for m in agent.messages if m["role"] == "assistant"]
+    assert not any("odd payload" in c for c in contents)

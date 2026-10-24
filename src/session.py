@@ -6,6 +6,7 @@ import json
 import pathlib
 import signal
 from datetime import datetime
+from logging import getLogger
 from typing import Callable
 
 from src.common import cprint, safe_filename
@@ -171,23 +172,31 @@ class ConversationSession:
                 self.agent.print_fragment(f)
 
     def _inject_scheduled_results(self) -> None:
-        """Append pending scheduled-task results to the agent's history.
+        """Append pending background results to the agent's history.
 
-        The scheduler thread queues results instead of writing the history
-        directly (an append from another thread could corrupt an in-flight
-        tool-call round); here the main thread owns the list, so appending is
-        safe. Results arrive as assistant messages the agent can mention or act
-        on during the turn.
+        Background workers (scheduler tasks, async delegations) queue results
+        instead of writing the history directly (an append from another
+        thread could corrupt an in-flight tool-call round); here the main
+        thread owns the list, so appending is safe. Results arrive as
+        assistant messages the agent can mention or act on during the turn.
         """
         try:
-            from src.tools.scheduler import drain_scheduled_results
-        except ImportError:  # pragma: no cover - scheduler module always exists
+            from src.live_ai import drain_agent_results
+        except ImportError:  # pragma: no cover - live_ai always exists
             return
-        for task_id, answer in drain_scheduled_results():
-            self.agent.messages.append({
-                "role": "assistant",
-                "content": f"Scheduled task {task_id} completed. Result:\n{answer}",
-            })
+        for kind, result_id, text in drain_agent_results():
+            if kind == "scheduled":
+                self.agent.messages.append({
+                    "role": "assistant",
+                    "content": f"Scheduled task {result_id} completed. Result:\n{text}",
+                })
+            elif kind == "delegation":
+                self.agent.messages.append({
+                    "role": "assistant",
+                    "content": text,
+                })
+            else:  # unknown kind: log and skip, never crash the turn
+                getLogger(__name__).warning("Unknown background result kind %r", kind)
 
     def _flush(self) -> None:
         if hasattr(self.agent, "flush_stream"):

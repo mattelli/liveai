@@ -7,6 +7,10 @@ from src.common import cprint, load_config, prompt_input
 WORK_DIR = Path(__file__).parent.resolve()
 CONFIG_FILE = WORK_DIR / "config.toml"
 
+# The agent pool built by _setup_agent_pool (None when never started); kept
+# module-level so the finally block can stop its delegation executor.
+_AGENT_POOL = None
+
 
 def parse_args(argv=None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Live assistant (voice or chat mode)")
@@ -77,6 +81,7 @@ def main(argv=None) -> int:
         if reader is not None:
             reader.close()
         _stop_scheduler()  # no-op when the scheduler never started
+        _stop_agent_pool()  # no-op when the pool never started
 
 
 def _setup_scheduler(config) -> None:
@@ -116,6 +121,7 @@ def _setup_agent_pool(config) -> None:
     No-op when ``parallel_agents`` is 0/missing, so single-agent setups are
     untouched. Failures raise: a misconfigured pool must not start silently.
     """
+    global _AGENT_POOL
     from src.live_ai import AgentPool, agent_pool_settings, bind_agent_pool
 
     agent_cfg = getattr(config, "agent", None)
@@ -128,7 +134,18 @@ def _setup_agent_pool(config) -> None:
             f"[agent] parallel_agents={n} but agent_models has only "
             f"{len(settings['models'])} entries: add one models.json entry "
             "name per worker agent")
-    bind_agent_pool(AgentPool(config, settings))
+    _AGENT_POOL = AgentPool(config, settings)
+    bind_agent_pool(_AGENT_POOL)
+
+
+def _stop_agent_pool() -> None:
+    """Stop the pool's delegation executor if the pool was started."""
+    pool = getattr(_AGENT_POOL, "stop", None) if _AGENT_POOL else None
+    if callable(pool):
+        try:
+            pool()
+        except Exception as exc:
+            logging.getLogger(__name__).warning("Agent pool stop failed: %s", exc)
 
 
 def _chat_label(config) -> str:

@@ -1935,6 +1935,12 @@ class AgentPool:
         ``caller`` is the name of the agent currently running the tool call
         ('' = the main agent). A pooled agent delegating to itself (or to any
         pooled agent) is refused: nested delegation would deadlock the pool.
+
+        With ``[agent] async_delegation`` enabled the call returns a receipt
+        immediately and the worker runs on the pool's executor; its answer is
+        queued for main-agent delivery on a later turn (shared
+        background-results queue). Otherwise the call blocks until the worker
+        finishes and returns the answer (historical behavior).
         """
         name = str(agent_name or "").strip()
         agent = self.agents.get(name)
@@ -1945,6 +1951,17 @@ class AgentPool:
             raise ValueError(
                 f"Nested delegation refused: pooled agent {caller!r} cannot call "
                 "ask_agent/run_parallel_agents (would deadlock the pool)")
+        if self.async_delegation:
+            delegation_id = self._next_delegation_id()
+            self._delegations[delegation_id] = {"agent": name, "prompt": prompt}
+            self._executor.submit(self._run_delegation, delegation_id, name, prompt)
+            return (f"Delegated task {delegation_id} to {name} (async): results "
+                    "will be delivered when the worker finishes.")
+        return self._run_delegation_blocking(name, prompt)
+
+    def _run_delegation_blocking(self, name: str, prompt: str) -> str:
+        """Synchronous delegation body (historical behavior, also shared)."""
+        agent = self.agents[name]
         _TOOL_CONTEXT.agent_name = name  # visible to the sub-agent's tool calls
         set_subagent_dump(False)           # suppress inner tool-call dumps
         self._monitor_record(name, "start", prompt=prompt)
@@ -1956,6 +1973,43 @@ class AgentPool:
             set_subagent_dump(True)
         return agent.messages[-1]["content"]
 
+    def _run_delegation(self, delegation_id: str, name: str, prompt: str) -> None:
+        """Run one async delegation to completion and queue the delivery.
+
+        Runs on the pool's executor thread. The per-agent lock keeps the
+        "one ``act()`` per agent" rule (same-agent tasks serialize). The
+        answer (or the failure) is queued for main-agent delivery; the
+        delegation is removed from the registry either way.
+        """
+        agent = self.agents[name]
+        lock = self._agent_lock(name)
+        try:
+            with lock:
+                _TOOL_CONTEXT.agent_name = name
+                set_subagent_dump(False)
+                self._monitor_record(name, "start", prompt=prompt)
+                try:
+                    agent.act(prompt)
+                    answer = str(agent.messages[-1]["content"])
+                    self._monitor_record(name, "answer", answer=answer)
+                except Exception as exc:
+                    self.logger.error("Delegation %s (%s) failed: %s",
+                                      delegation_id, name, exc)
+                    self._monitor_record(name, "answer", answer=f"failed: {exc}")
+                    queue_agent_result(
+                        "delegation", delegation_id,
+                        f"Worker {name} failed delegated task {delegation_id}: {exc}")
+                    return
+                finally:
+                    _TOOL_CONTEXT.agent_name = ""
+                    set_subagent_dump(True)
+            queue_agent_result(
+                "delegation", delegation_id,
+                f"Worker {name} finished delegated task {delegation_id}. "
+                f"Result:\\n{answer}")
+        finally:
+            self._delegations.pop(delegation_id, None)
+
     def ask_parallel(self, tasks: list[tuple[str, str]],
                      caller: str = "") -> list[str]:
         """Run (agent_name, prompt) tasks concurrently; results in task order.
@@ -1965,6 +2019,12 @@ class AgentPool:
         never run ``act()`` concurrently (shared history/stream state would
         corrupt tool-call groups -> server-side "incomplete parallel
         tool-call group" errors). See ``ask`` for the ``caller`` rule.
+
+        With ``[agent] async_delegation`` enabled the call submits every task
+        to the pool's executor and returns one receipt per task immediately
+        (same-agent tasks serialize on the per-agent lock); results are
+        delivered on a later turn. Otherwise the call blocks until every task
+        finished and returns the answers in task order.
         """
         if not tasks:
             return []
@@ -1972,6 +2032,22 @@ class AgentPool:
             raise ValueError(
                 f"Nested delegation refused: pooled agent {caller!r} cannot call "
                 "ask_agent/run_parallel_agents (would deadlock the pool)")
+        if self.async_delegation:
+            receipts: list[str] = []
+            for name, prompt in tasks:
+                name = str(name).strip()
+                if name not in self.agents:
+                    raise KeyError(
+                        f"Unknown agent {name!r}. Available: "
+                        + ", ".join(self.agents))
+                delegation_id = self._next_delegation_id()
+                self._delegations[delegation_id] = {"agent": name, "prompt": prompt}
+                self._executor.submit(self._run_delegation, delegation_id, name, prompt)
+                receipts.append(f"{delegation_id}={name}")
+            ids = ", ".join(receipt.rsplit("=", 1)[0] for receipt in receipts)
+            agents = ", ".join(receipt.rsplit("=", 1)[1] for receipt in receipts)
+            return (f"Delegated {len(tasks)} tasks ({ids}) to {agents} (async): "
+                    "results will be delivered as the workers finish.")
         # Group tasks by agent, preserving task order within each group.
         by_agent: dict[str, list[tuple[int, str]]] = {}
         for index, (name, prompt) in enumerate(tasks):
