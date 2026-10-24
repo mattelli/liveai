@@ -470,6 +470,32 @@ def _default_agent_factory():
         return None
 
 
+def _monitor_or_none():
+    """The process-wide activity monitor, or None when monitoring is off.
+
+    Lazy import: ``src.live_ai`` imports the scheduler tools, so a module-level
+    import here would be circular. Any failure keeps the scheduler working.
+    """
+    try:
+        from src.live_ai import get_monitor
+        return get_monitor()
+    except Exception:  # pragma: no cover - monitoring must never break tasks
+        return None
+
+
+def _set_executor_name(name: str) -> None:
+    """Set/clear the thread-local agent name ('scheduler') for the executor.
+
+    A non-empty name makes ``Agent._execute_tool`` report the scheduled run's
+    tool calls/results to the monitor, exactly like pooled agents.
+    """
+    try:
+        from src.live_ai import _TOOL_CONTEXT
+        _TOOL_CONTEXT.agent_name = name
+    except Exception:  # pragma: no cover - monitoring must never break tasks
+        pass
+
+
 def _agent_executor(task: ScheduledTask) -> None:
     """
     Run a due task's prompt on the dedicated scheduler agent.
@@ -478,6 +504,12 @@ def _agent_executor(task: ScheduledTask) -> None:
     scheduler thread (only one ``act()`` at a time — ``Agent.act()`` is not
     thread-safe). Agent failures are logged, never raised: the scheduler
     thread must survive a broken model endpoint.
+
+    The run is monitored like pooled-agent delegations when ``[agent] monitor``
+    is enabled: a ``start`` event before ``act()``, an ``answer`` event with
+    the final message afterwards, and per-tool ``tool_call``/``tool_result``
+    events (via the 'scheduler' thread-local agent name). With monitoring off
+    the monitor is None and nothing is recorded.
     """
     global _EXECUTOR_AGENT
     agent = _EXECUTOR_AGENT
@@ -490,21 +522,28 @@ def _agent_executor(task: ScheduledTask) -> None:
             return
         _EXECUTOR_AGENT = agent
     logger.info("Scheduled task %s -> execution agent", task.id)
+    monitor = _monitor_or_none()
+    if monitor is not None:
+        monitor.record("scheduler", "start", prompt=str(task.prompt)[:200])
     set_subagent_dump(False)
+    _set_executor_name("scheduler")
     try:
         agent.act(task.prompt)
     except Exception as exc:
         logger.error("Scheduled task %s execution failed: %s", task.id, exc)
         return
     finally:
+        _set_executor_name("")
         set_subagent_dump(True)
     # Deliver the answer to the user: the executor agent is quiet, so without
     # this the result would only live in the agent's own message history.
     answer = ""
-    if agent.messages:
+    if getattr(agent, "messages", None):
         answer = str(agent.messages[-1].get("content") or "").strip()
     if answer:
         logger.info("Scheduled task %s completed: %s", task.id, answer)
+        if monitor is not None:
+            monitor.record("scheduler", "answer", answer=answer[:200])
         # Queue the result so the main agent becomes aware of it on its next
         # turn (drain_scheduled_results); direct history writes from this
         # thread could corrupt an in-flight tool-call round.

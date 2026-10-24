@@ -19,10 +19,12 @@ class _FakeAgent:
 
     def __init__(self):
         self.prompts: list[str] = []
+        self.messages: list[dict] = []
 
     def act(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        return f"done: {prompt}"
+        self.messages.append({"role": "assistant", "content": f"done: {prompt}"})
+        return self.messages[-1]["content"]
 
 
 @pytest.fixture
@@ -212,3 +214,146 @@ def test_main_setup_scheduler_noop_when_disabled(monkeypatch):
     main._setup_scheduler(object())
     assert scheduler_module._SCHEDULER is None  # nothing was created/started
     main._stop_scheduler()  # must be a safe no-op
+
+
+# ------------------------------------------ scheduled tasks are monitored
+
+
+def test_scheduled_run_records_start_and_answer(agent_env, tmp_path_factory):
+    """A scheduled run emits start/answer events under the 'scheduler' name."""
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    live_ai.bind_monitor(monitor)
+    try:
+        s = _scheduler(tmp_path_factory.mktemp("sched"), execute=scheduler_module._agent_executor)
+        soon = (datetime.now() + timedelta(milliseconds=150)).isoformat()
+        s.add("remind me", soon)
+        s.start()
+        try:
+            import time
+            deadline = datetime.now() + timedelta(seconds=5)
+            while datetime.now() < deadline and len(monitor) < 2:
+                time.sleep(0.02)
+            events = monitor.snapshot()
+            assert [(e["agent"], e["event"]) for e in events] == [
+                ("scheduler", "start"), ("scheduler", "answer")]
+            assert events[0]["prompt"] == "remind me"
+            assert events[1]["answer"] == "done: remind me"
+        finally:
+            s.stop()
+    finally:
+        live_ai.bind_monitor(None)
+
+
+def test_scheduled_tool_calls_reported_to_monitor(agent_env, tmp_path_factory):
+    """Tool calls during a scheduled run flow into the monitor."""
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    class _ToolAgent:
+        _tool_impls = {"echo": lambda **kw: "echo-ok"}
+
+        def __init__(self):
+            self.messages = []
+
+        def act(self, prompt):
+            # simulate a tool call executed during the scheduled run
+            live_ai.Agent._execute_tool(self, {"name": "echo", "arguments": "{}"})
+            self.messages.append({"role": "assistant", "content": "ok"})
+
+    agent = _ToolAgent()
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(scheduler_module, "_AGENT_FACTORY", lambda: agent)
+        monkey.setattr(scheduler_module, "_EXECUTOR_AGENT", None)
+        monitor = AgentMonitor(maxlen=10)
+        live_ai.bind_monitor(monitor)
+        s = _scheduler(tmp_path_factory.mktemp("sched2"), execute=scheduler_module._agent_executor)
+        soon = (datetime.now() + timedelta(milliseconds=150)).isoformat()
+        s.add("use the tool", soon)
+        s.start()
+        import time
+        deadline = datetime.now() + timedelta(seconds=5)
+        while datetime.now() < deadline and len(monitor) < 3:
+            time.sleep(0.02)
+        events = monitor.snapshot()
+        assert [(e["agent"], e["event"]) for e in events] == [
+            ("scheduler", "start"), ("scheduler", "tool_call"),
+            ("scheduler", "tool_result"), ("scheduler", "answer")]
+        assert events[1]["tool"] == "echo"
+        assert events[2]["result"] == "echo-ok"
+    finally:
+        live_ai.bind_monitor(None)
+        monkey.undo()
+        s.stop()
+
+
+def test_scheduled_run_not_monitored_when_monitor_off(agent_env, tmp_path_factory):
+    """With monitoring disabled (no bound monitor) nothing is recorded."""
+    import src.live_ai as live_ai
+    live_ai.bind_monitor(None)
+    s = _scheduler(tmp_path_factory.mktemp("sched3"), execute=scheduler_module._agent_executor)
+    soon = (datetime.now() + timedelta(milliseconds=150)).isoformat()
+    s.add("quiet task", soon)
+    s.start()
+    try:
+        import time
+        deadline = datetime.now() + timedelta(seconds=5)
+        while datetime.now() < deadline and not agent_env.prompts:
+            time.sleep(0.02)
+        assert agent_env.prompts == ["quiet task"]  # task still ran
+        assert live_ai.get_monitor() is None        # nothing recorded anywhere
+    finally:
+        s.stop()
+
+
+def test_scheduled_run_failure_records_start_only(agent_env, tmp_path_factory):
+    """An exploding agent still leaves the start event (no answer)."""
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    class _ExplodingAgent:
+        def act(self, prompt):
+            raise RuntimeError("model down")
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(scheduler_module, "_AGENT_FACTORY", lambda: _ExplodingAgent())
+        monkey.setattr(scheduler_module, "_EXECUTOR_AGENT", None)
+        monitor = AgentMonitor(maxlen=10)
+        live_ai.bind_monitor(monitor)
+        s = _scheduler(tmp_path_factory.mktemp("sched4"), execute=scheduler_module._agent_executor)
+        soon = (datetime.now() + timedelta(milliseconds=150)).isoformat()
+        s.add("boom", soon)
+        s.start()
+        import time
+        deadline = datetime.now() + timedelta(seconds=5)
+        while datetime.now() < deadline and len(monitor) < 1:
+            time.sleep(0.02)
+        import time as _t
+        _t.sleep(0.3)  # give the executor time to hit the exception
+        events = monitor.snapshot()
+        assert [e["event"] for e in events] == ["start"]  # no answer on failure
+    finally:
+        live_ai.bind_monitor(None)
+        monkey.undo()
+        s.stop()
+
+
+def test_scheduled_events_visible_in_agent_activity(agent_env):
+    """agent_activity() reports scheduled runs alongside pooled agents."""
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    monitor.record("scheduler", "start", prompt="check the news")
+    monitor.record("glm", "start", prompt="research X")
+    live_ai.bind_monitor(monitor)
+    try:
+        report = live_ai.agent_activity()
+        assert "scheduler" in report and "check the news" in report
+        assert "glm" in report
+    finally:
+        live_ai.bind_monitor(None)

@@ -34,7 +34,7 @@ def test_agent_pool_settings_full_config():
         "system_prompts": ["research", "code"],
         "quiet": True,
         "monitor": set(),
-        "monitor_log_file": "data/agents.jsonl",
+        "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
     }
 
@@ -48,7 +48,7 @@ def test_agent_pool_settings_defaults_when_keys_missing():
         "system_prompts": [],
         "quiet": True,
         "monitor": set(),
-        "monitor_log_file": "data/agents.jsonl",
+        "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
     }
 
@@ -60,7 +60,7 @@ def test_agent_pool_settings_without_agent_section():
         "system_prompts": [],
         "quiet": True,
         "monitor": set(),
-        "monitor_log_file": "data/agents.jsonl",
+        "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
     }
 
@@ -82,7 +82,7 @@ def test_agent_pool_settings_accepts_comma_separated_strings():
         "system_prompts": ["research", "code"],
         "quiet": True,
         "monitor": set(),
-        "monitor_log_file": "data/agents.jsonl",
+        "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
     }
 
@@ -130,7 +130,7 @@ def test_load_config_round_trips_agent_pool_keys(tmp_path):
         "system_prompts": ["research", "code"],
         "quiet": True,
         "monitor": set(),
-        "monitor_log_file": "data/agents.jsonl",
+        "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
     }
 

@@ -4,6 +4,24 @@ import numpy as np
 from types import SimpleNamespace
 
 
+@pytest.fixture(autouse=True)
+def _drain_scheduler_pending_results():
+    """Keep scheduled-task results from leaking between tests.
+
+    The scheduler executor queues answers into a module-level list consumed
+    by the session on its next turn; a leftover entry from one test would
+    crash or pollute an unrelated test's fake agent.
+    """
+    try:
+        from src.tools.scheduler import drain_scheduled_results
+    except ImportError:  # pragma: no cover - scheduler module always exists
+        yield
+        return
+    drain_scheduled_results()  # clear anything left from a previous test
+    yield
+    drain_scheduled_results()
+
+
 class FakeDevice:
     """Stand-in for InputAudioDevice; no hardware touched."""
 
