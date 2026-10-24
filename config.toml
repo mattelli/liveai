@@ -33,6 +33,9 @@ parallel_agents = 2                                # extra agents beside the run
 agent_models = ["ternary-bonsai", "ternary-bonsai"]  # models.json entry names, one per agent
 # agent_system_prompts = []                        # optional per-agent system prompts
 # agent_quiet = false                              # workers don't print/speak (default true)
+# monitor = ""                                     # sub-agent monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
+# monitor_log_file = "data/agents.jsonl"           # JSONL event log path (monitor = "log")
+# monitor_buffer = 100                             # in-memory events kept for the agent_activity tool
 
 [ui] # chat appearance (all keys optional)
 prompt = "You (hint '/') ›"          # chat-mode input label
@@ -116,7 +119,7 @@ chunk_size = 5             # sentences per indexed passage
 top_k = 5                  # default number of results returned by query_corpus
 
 [scheduler] # schedule agent prompts for a future time (all keys optional)
-enabled = true                       # false (or missing section) -> tools are no-ops
+enabled = false                       # false (or missing section) -> tools are no-ops
 persist_file = ".res/schedule.json"  # task persistence (survives restarts)
 on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 

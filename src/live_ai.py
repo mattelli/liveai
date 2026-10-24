@@ -149,16 +149,59 @@ def _split_list(value) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
+# Known [agent] monitor flags; unknown tokens are ignored, "none" clears all.
+_MONITOR_FLAGS = frozenset({"calls", "log"})
+_DEFAULT_MONITOR_LOG_FILE = "data/agents.jsonl"
+_DEFAULT_MONITOR_BUFFER = 100
+
+
+def _monitor_flags(value) -> set:
+    """Parse ``[agent] monitor`` (string or list) into a set of known flags.
+
+    ``"calls,log"`` / ``["calls", "log"]`` -> ``{"calls", "log"}``; unknown
+    tokens are ignored; the token ``"none"`` (or an empty value) clears all
+    flags, keeping the historical fully-quiet sub-agent behavior.
+    """
+    if isinstance(value, str):
+        items = [item.strip().lower() for item in value.split(",") if item.strip()]
+    else:
+        items = [str(item).strip().lower() for item in (value or []) if str(item).strip()]
+    flags: set = set()
+    for item in items:
+        if item == "none":
+            return set()
+        if item in _MONITOR_FLAGS:
+            flags.add(item)
+    return flags
+
+
+def _monitor_buffer(value) -> int:
+    """Resolve ``[agent] monitor_buffer``: int or numeric string, default 100.
+
+    Invalid or non-positive values fall back to the default (a zero/negative
+    buffer would make ``agent_activity`` useless, so it is not honored).
+    """
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return _DEFAULT_MONITOR_BUFFER
+    return parsed if parsed > 0 else _DEFAULT_MONITOR_BUFFER
+
+
 def agent_pool_settings(config: SimpleNamespace) -> dict:
     """Resolve the ``[agent]`` multi-agent pool settings (backward compatible).
 
-    Returns ``{"count", "models", "system_prompts", "quiet"}`` where ``count``
-    is the number of extra agents beside the running one, ``models`` the
-    models.json entry names (one per agent, truncated to ``count``),
-    ``system_prompts`` optional per-agent prompts (padded with ``None``) and
-    ``quiet`` whether workers must not print/speak (default ``True``).
-    Missing keys or a missing ``[agent]`` section keep the single-agent
-    behavior (``count = 0``).
+    Returns ``{"count", "models", "system_prompts", "quiet", "monitor",
+    "monitor_log_file", "monitor_buffer"}`` where ``count`` is the number of
+    extra agents beside the running one, ``models`` the models.json entry
+    names (one per agent, truncated to ``count``), ``system_prompts``
+    optional per-agent prompts (padded with ``None``), ``quiet`` whether
+    workers must not print/speak (default ``True``), ``monitor`` the set of
+    monitoring flags (``"calls"``: labeled [CALL] blocks for sub-agent tool
+    calls; ``"log"``: JSONL event log), ``monitor_log_file`` the JSONL log
+    path and ``monitor_buffer`` the in-memory event ring size.
+    Missing keys or a missing ``[agent]`` section keep the single-agent,
+    unmonitored behavior (``count = 0``, ``monitor = set()``).
 
     ``agent_models``/``agent_system_prompts`` accept either a list or a
     comma-separated string; both forms are equivalent.
@@ -172,11 +215,17 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
         count = 0
     models = _split_list(getattr(agent, "agent_models", []) or [])[:count]
     prompts = _split_list(getattr(agent, "agent_system_prompts", []) or [])
+    # load_config path-resolves keys ending in "_file" (relative to the config
+    # dir); keep whatever arrives (str or Path) and default when unset.
+    log_file = getattr(agent, "monitor_log_file", None)
     return {
         "count": count,
         "models": models,
         "system_prompts": (prompts + [None] * count)[:count],
         "quiet": bool(getattr(agent, "agent_quiet", True)),
+        "monitor": _monitor_flags(getattr(agent, "monitor", None)),
+        "monitor_log_file": str(log_file) if log_file else _DEFAULT_MONITOR_LOG_FILE,
+        "monitor_buffer": _monitor_buffer(getattr(agent, "monitor_buffer", None)),
     }
 
 

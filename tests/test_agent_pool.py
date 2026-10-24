@@ -34,6 +34,9 @@ def test_agent_pool_settings_full_config():
         "models": ["glm", "qwen"],
         "system_prompts": ["research", "code"],
         "quiet": True,
+        "monitor": set(),
+        "monitor_log_file": "data/agents.jsonl",
+        "monitor_buffer": 100,
     }
 
 
@@ -45,6 +48,9 @@ def test_agent_pool_settings_defaults_when_keys_missing():
         "models": [],
         "system_prompts": [],
         "quiet": True,
+        "monitor": set(),
+        "monitor_log_file": "data/agents.jsonl",
+        "monitor_buffer": 100,
     }
 
 
@@ -54,6 +60,9 @@ def test_agent_pool_settings_without_agent_section():
         "models": [],
         "system_prompts": [],
         "quiet": True,
+        "monitor": set(),
+        "monitor_log_file": "data/agents.jsonl",
+        "monitor_buffer": 100,
     }
 
 
@@ -73,6 +82,9 @@ def test_agent_pool_settings_accepts_comma_separated_strings():
         "models": ["glm", "qwen"],
         "system_prompts": ["research", "code"],
         "quiet": True,
+        "monitor": set(),
+        "monitor_log_file": "data/agents.jsonl",
+        "monitor_buffer": 100,
     }
 
 
@@ -117,6 +129,9 @@ def test_load_config_round_trips_agent_pool_keys(tmp_path):
         "models": ["glm", "qwen"],
         "system_prompts": ["research", "code"],
         "quiet": False,
+        "monitor": set(),
+        "monitor_log_file": "data/agents.jsonl",
+        "monitor_buffer": 100,
     }
 
 
@@ -664,3 +679,67 @@ def test_ask_parallel_distinct_agents_still_fan_out(monkeypatch, tmp_path):
 
     assert results == ["glm: a", "qwen: b"]
     assert sorted(started) == ["glm", "qwen"]
+
+
+# ------------------------------------------------ task 1: monitor settings
+
+
+def test_monitor_flags_parsing_variants():
+    parse = live_ai_mod._monitor_flags
+    assert parse(None) == set()
+    assert parse("") == set()
+    assert parse("none") == set()
+    assert parse("calls") == {"calls"}
+    assert parse("log") == {"log"}
+    assert parse("calls,log") == {"calls", "log"}
+    assert parse("log, calls") == {"calls", "log"}
+    assert parse(" CALLS , LOG ") == {"calls", "log"}
+    assert parse(["calls", "log"]) == {"calls", "log"}
+    assert parse("calls,bogus,log") == {"calls", "log"}  # unknown ignored
+    assert parse("bogus") == set()
+    assert parse("calls,none,log") == set()  # "none" clears everything
+
+
+def test_monitor_buffer_parsing():
+    parse = live_ai_mod._monitor_buffer
+    assert parse(None) == 100
+    assert parse(100) == 100
+    assert parse("50") == 50
+    assert parse(25) == 25
+    assert parse("bad") == 100
+    assert parse(0) == 100      # non-positive falls back to the default
+    assert parse(-5) == 100
+
+
+def test_agent_pool_settings_monitor_keys():
+    config = _agent_config(parallel_agents=1, monitor="calls,log",
+                           monitor_log_file="logs/sub.jsonl", monitor_buffer="25")
+    settings = live_ai_mod.agent_pool_settings(config)
+    assert settings["monitor"] == {"calls", "log"}
+    assert settings["monitor_log_file"] == "logs/sub.jsonl"
+    assert settings["monitor_buffer"] == 25
+
+
+def test_agent_pool_settings_monitor_log_file_path_object():
+    # load_config path-resolves *_file keys to Path objects; settings keep it.
+    import pathlib as _pl
+    config = _agent_config(parallel_agents=1, monitor_log_file=_pl.Path("x/y.jsonl"))
+    assert live_ai_mod.agent_pool_settings(config)["monitor_log_file"] == str(_pl.Path("x/y.jsonl"))
+
+
+def test_monitor_settings_load_config_round_trip(tmp_path):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(textwrap.dedent("""
+        [agent]
+        bootstrap_prompt = "hello"
+        parallel_agents = 1
+        agent_models = "glm"
+        monitor = "calls, log"
+        monitor_log_file = "logs/agents.jsonl"
+        monitor_buffer = 50
+    """), encoding="utf-8")
+    config = load_config(config_file)
+    settings = live_ai_mod.agent_pool_settings(config)
+    assert settings["monitor"] == {"calls", "log"}
+    assert settings["monitor_log_file"].endswith("agents.jsonl")  # resolved path
+    assert settings["monitor_buffer"] == 50
