@@ -295,7 +295,7 @@ def test_dump_func_call_success_green_multiline(capsys, monkeypatch):
     assert "\x1b[1;90;48;5;22m[CALL] search(" in body[0]
     assert "query = 'etf list'" in body[1]
     assert "n_results = 5" in body[2]
-    assert "→ ok (" in body[3]
+    assert "-> ok (" in body[3]
     # grey foreground on dark-green background (256-color 22), bold
     assert all("\x1b[1;90;48;5;22m" in line for line in body)
 
