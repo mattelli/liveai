@@ -12,6 +12,37 @@ from src.common import cprint, safe_filename
 from src.tools import allow_speech, clear_chat
 
 
+# Startup logo shown inside the banner panel ([ui] banner_logo = false turns
+# it off). Raw ASCII art: keep it a raw string so the backslashes survive.
+_LOGO = r"""
+ _   _ _____ ____      _    ____  _   _    _    ____  _____ ____
+| | | | ____|  _ \    / \  |  _ \| \ | |  / \  / ___| ____|  _ \
+| | | |  _| | |_) |  / _ \ | | | |  \| | / _ \| |   |  _| | |_) |
+| |_| | |___|  _ <  / ___ \| |_| | |\  |/ ___ \| |___| |___|  _ <
+ \___/|_____|_| \_\/_/   \_\____/|_| \_/_/   \_\____|_____|_| \_\
+"""
+
+
+def _gradient_logo(art: str = _LOGO, start: tuple = (0, 200, 255),
+                   end: tuple = (180, 0, 255)):
+    """The logo as rich ``Text`` with a vertical truecolor gradient.
+
+    Each line interpolates ``start`` -> ``end`` RGB; rich degrades the
+    styles automatically on terminals without truecolor support.
+    """
+    from rich.text import Text
+
+    text = Text()
+    rows = art.strip("\n").splitlines()
+    for index, row in enumerate(rows):
+        t = index / max(1, len(rows) - 1)
+        r = int(start[0] + (end[0] - start[0]) * t)
+        g = int(start[1] + (end[1] - start[1]) * t)
+        b = int(start[2] + (end[2] - start[2]) * t)
+        text.append(row + "\n", style=f"rgb({r},{g},{b})")
+    return text
+
+
 @contextlib.contextmanager
 def _generation_sigint_guard(agent):
     """Route SIGINT to ``agent.cancel_generation`` while a generation runs.
@@ -732,26 +763,33 @@ class ConversationSession:
         if ui is not None and not getattr(ui, "banner", True):
             cprint(plain, "green")
             return
+        show_logo = bool(getattr(ui, "banner_logo", True))
         try:
             from rich.console import Console
             from rich.markup import escape
             from rich.panel import Panel
+            from rich.text import Text
 
-            lines = []
+            body = Text()
+            if show_logo:
+                body.append_text(_gradient_logo())
+                body.append("\n")
             model = getattr(self.agent, "_model_name", None)
             if model:
-                lines.append(f"[bold]model[/bold] {escape(str(model))}")
-            lines.append(
+                body.append(f"model ", style="bold")
+                body.append(f"{escape(str(model))}\n")
+            body.append(
                 f"tools {tools} · /help commands · Ctrl+C stop"
                 + ("" if self._quit_on_prompt_interrupt else " · Ctrl+D quit")
+                + "\n"
             )
-            lines.append(
+            body.append(
                 f"input multiline {'on' if multiline else 'off'} · "
                 + ("Esc+Enter accepts" if multiline else "Enter accepts")
             )
             Console().print(
                 Panel(
-                    "\n".join(lines),
+                    body,
                     title="Live Assistant",
                     border_style="cyan",
                     expand=True,

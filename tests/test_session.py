@@ -836,3 +836,60 @@ def test_tools_grouped_selection_by_number_runs_tool():
     it = iter(["/tools", "2", "hello", "/quit"])
     ConversationSession(agent, lambda: next(it)).run()
     assert agent.launched == [("echo", "hello")]
+
+
+# ----------------------------------------------------------------- banner logo
+
+
+def test_banner_shows_gradient_logo(capsys):
+    """Default [ui] config: the ASCII-art logo appears inside the panel."""
+    agent = FakeAgent()
+    agent.config = SimpleNamespace(ui=SimpleNamespace(banner=True))
+    it = iter(["/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "Live Assistant" in out
+    assert "_/\\_" in out or "_____" in out  # a row of the ASCII art
+
+
+def test_banner_logo_hidden_when_disabled(capsys):
+    """[ui] banner_logo = false: panel without the ASCII art."""
+    agent = FakeAgent()
+    agent.config = SimpleNamespace(ui=SimpleNamespace(
+        banner=True, banner_logo=False))
+    it = iter(["/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "Live Assistant" in out          # panel still there
+    assert "_/\\_" not in out               # but no art row
+
+
+def test_banner_plain_line_when_banner_false(capsys):
+    """[ui] banner = false: single-line banner, no panel, no logo."""
+    agent = FakeAgent()
+    agent.config = SimpleNamespace(ui=SimpleNamespace(
+        banner=False, banner_logo=True))
+    it = iter(["/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "Agent ready." in out
+    assert "Live Assistant" not in out
+
+
+def test_gradient_logo_styles_each_line():
+    """Every logo line carries an rgb style interpolating start -> end."""
+    from src.session import _LOGO, _gradient_logo
+
+    text = _gradient_logo()
+    rows = _LOGO.strip("\n").splitlines()
+    assert len(text.spans) >= len(rows)  # one styled span per row (at least)
+    first, last = text.spans[0], text.spans[-1]
+    assert "rgb(0,200,255)" in str(first.style)      # start color
+    assert "rgb(180,0,255)" in str(last.style)       # end color
+
+
+def test_gradient_logo_custom_art():
+    from src.session import _gradient_logo
+
+    text = _gradient_logo("AB\nCD")
+    assert "AB" in text.plain and "CD" in text.plain
