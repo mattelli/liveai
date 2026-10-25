@@ -9,7 +9,7 @@ from src.common import dump_func_call
 
 __all__ = [
     "current_date_time", "exit_gracefully", "get_working_directory",
-    "run_command", "system_info",
+    "run_command", "spawn_process", "system_info",
 ]
 
 
@@ -89,3 +89,27 @@ def run_command(cmd: str, timeout_s: float = 30.0, cwd: str | None = None) -> st
     if process.returncode != 0:
         return f"Return code [{process.returncode}]: {stderr}"
     return stdout
+
+
+@dump_func_call
+def spawn_process(cmd: str, cwd: str | None = None) -> str:
+    """
+    Spawn a process without waiting for it: the command keeps running in the
+    background after this call returns. Returns the spawned Process ID (PID)
+    so the caller can inspect or stop it later (e.g. with run_command), or
+    an error message if the process could not be started.
+    Useful when user asks to launch a long-running program
+    (a server, a watcher, a player) without blocking the conversation.
+    """
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            cwd=Path(cwd) if cwd is not None else Path.cwd(),
+            shell=True,
+        )
+    except Exception as exc:
+        return f"Error spawning process: {exc}"
+    return f"Process started with PID {process.pid}"

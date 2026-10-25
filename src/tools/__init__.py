@@ -1,6 +1,7 @@
 """Tool collection for the Live Assistant agent, split by topic.
 
-- ``system``    : platform info, date/time, working directory, shell commands
+- ``system``    : platform info, date/time, working directory, shell commands,
+                  background process spawning
 - ``files``     : read/write/search/replace files
 - ``web``       : DDGS metasearch, webpage extraction, file downloads
 - ``archives``  : extract zip/7z/tar/gz archives and zip folder contents
@@ -32,7 +33,7 @@ from src.common import normalize_extensions, safe_filename
 
 from .system import (
     current_date_time, exit_gracefully, get_working_directory, run_command,
-    system_info,
+    spawn_process, system_info,
 )
 from .files import (
     read_text_file, replace_string_in_file,
@@ -72,7 +73,8 @@ __all__ = [
     "query_document", "read_text_file", "recall_memory",
     "replace_string_in_file", "run_command", "safe_filename",
     "save_financial_chart", "schedule_task", "search_in_file",
-    "search_pattern_in_files", "select_financial_columns", "store_corpus",
+    "search_pattern_in_files", "select_financial_columns", "spawn_process",
+    "store_corpus",
     "store_memory", "summarize_doc", "system_info", "unload_image_generator",
     "web_books", "web_images", "web_news", "web_search", "web_videos",
     "write_text_file", "zip_files",

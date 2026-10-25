@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter, set_subagent_dump
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
-    read_text_file, write_text_file, run_command,
+    read_text_file, write_text_file, run_command, spawn_process,
     web_search, web_images, web_videos, web_news, web_books, extract_webpage,
     capture_image,
     generate_image, unload_image_generator,
@@ -154,7 +154,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
         summarize_doc, query_document, image_search,
         list_corpora, store_corpus, query_corpus,
         capture_image, system_info, current_date_time, get_working_directory,
-        run_command, search_in_file, search_pattern_in_files,
+        run_command, spawn_process, search_in_file, search_pattern_in_files,
         read_text_file, replace_string_in_file, write_text_file,
         web_search, web_images, web_videos, web_news, web_books,
         extract_webpage, download_file, extract_archive, zip_files,
@@ -224,7 +224,7 @@ _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
             "extract_webpage"),
     "finance": ("fetch_financial_data", "save_financial_chart"),
     "system": ("system_info", "current_date_time", "get_working_directory",
-               "exit_gracefully"),
+               "spawn_process", "exit_gracefully"),
     "mcp": ("mcp_list_tools", "mcp_call_tool"),
 }
 

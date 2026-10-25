@@ -625,7 +625,7 @@ now tracks **scheduled-task runs** (see [Sub-agent activity monitoring](#sub-age
 ## Reducing token consumption
 
 Every request re-sends the system prompt, the tool schemas and the whole chat
-history — the agents defined in `src/live_ai.py` register 42 tools (~21k chars
+history — the agents defined in `src/live_ai.py` register 43 tools (~21k chars
 of JSON schemas ≈ 5.3k tokens) and a single big tool output is re-sent on every
 round of a turn. Four config keys (all default to the historical behavior when
 unset) keep that cost bounded:
@@ -649,7 +649,7 @@ unset) keep that cost bounded:
   over eager summarization: it is free, deterministic and never distorts what
   it keeps.
 - `tool_doc_chars` + no `default` values in schemas — shrinks the fixed
-  per-request payload (measured: 21.9k → 19.1k chars for the full 42-tool set);
+  per-request payload (measured: 21.9k → 19.1k chars for the full 43-tool set);
   `tool_groups` excludes whole topics (finance, archives, ...) for zero tokens.
 - `context_trim_ratio` / `context_keep_messages` — at the start of each turn,
   when usage passes the ratio, the oldest *complete* tool rounds are dropped
@@ -783,6 +783,19 @@ browser-based authorization step does not fit the synchronous tool model yet).
 server is a local process; a URL server is a remote service). Only configure
 servers you trust — the same class of trust as the built-in `run_command`
 tool.
+
+
+## Process spawning (`spawn_process`)
+
+The `system` topic includes **`spawn_process(cmd, cwd="")`**: it starts a
+command without waiting for it (stdout/stderr/stdin detached) and returns
+either the spawned **Process ID (PID)** — e.g. `Process started with PID 12345`
+— or an error message (`Error spawning process: ...`) if the process could not
+be started. Useful for long-running programs (a local server, a watcher, a
+player) that must keep running while the conversation continues; inspect or
+stop the process later through `run_command` (e.g. `taskkill /PID 12345` on
+Windows, `kill 12345` on POSIX). Unlike `run_command` (blocking, captures
+output), `spawn_process` returns immediately and discards the child output.
 
 
 ## Task scheduler (optional)

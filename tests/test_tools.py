@@ -241,6 +241,65 @@ def test_run_command_honours_cwd(tmp_path):
     assert str(tmp_path) in out
 
 
+# ------------------------------------------------------------- spawn_process
+
+
+def test_spawn_process_returns_pid():
+    out = tools.spawn_process(f'"{sys.executable}" -c "import time; time.sleep(2)"')
+    match = re.search(r"PID (\d+)", out)
+    assert match, out
+    assert int(match.group(1)) > 0
+
+
+def test_spawn_process_returns_immediately():
+    """The call returns while the spawned process is still running."""
+    import time
+
+    start = time.monotonic()
+    out = tools.spawn_process(f'"{sys.executable}" -c "import time; time.sleep(5)"')
+    elapsed = time.monotonic() - start
+    assert "PID" in out
+    assert elapsed < 2.0  # no wait for the 5s child
+
+
+def test_spawn_process_error_message(monkeypatch):
+    def exploding_popen(*args, **kwargs):
+        raise OSError("cannot spawn")
+
+    monkeypatch.setattr(subprocess, "Popen", exploding_popen)
+    out = tools.spawn_process("anything")
+    assert "Error spawning process" in out and "cannot spawn" in out
+
+
+def test_spawn_process_honours_cwd(tmp_path):
+    """The child runs with the given working directory."""
+    marker = tmp_path / "cwd.txt"
+    out = tools.spawn_process(
+        f'"{sys.executable}" -c "import os; open(r\'{marker}\', \'w\').write(os.getcwd())"',
+        cwd=str(tmp_path),
+    )
+    assert "PID" in out
+    import time
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline and not marker.exists():
+        time.sleep(0.05)
+    assert marker.exists()
+    assert marker.read_text(encoding="utf-8").strip() == str(tmp_path)
+
+
+def test_spawn_process_is_exported_and_listed():
+    assert callable(tools.spawn_process)
+    import src.live_ai as live_ai
+    from types import SimpleNamespace
+
+    # registered in the agent's default tool set and the system topic
+    offline = SimpleNamespace(model_info=lambda: "")
+    tool_names = [getattr(t, "__name__", "") for t in live_ai._default_tools(offline)]
+    assert "spawn_process" in tool_names
+    assert "spawn_process" in live_ai._TOOL_TOPICS["system"]
+
+
 def test_exit_gracefully_raises_system_exit():
     with pytest.raises(SystemExit) as exc:
         tools.exit_gracefully()
