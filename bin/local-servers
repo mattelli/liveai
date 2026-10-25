@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Local Model Runner
+# Interactive menu: pick options while the terminal stays open.
+# Quit with q or Ctrl+C.
+
+cd "$(dirname "$0")"
+
+source ../../.liveai-cpu/bin/activate
+
+echo "--------------------------------------------------"
+echo "Local Model Runner"
+echo "Interactive menu: pick options while the terminal"
+echo "stays open. Quit with q or Ctrl+C."
+echo "--------------------------------------------------"
+
+python ../../samples/local_model_runner.py -i "$@"
+
+read

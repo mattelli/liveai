@@ -10,4 +10,4 @@ cd "$SCRIPT_DIR"
 source "../.liveai-cpu/bin/activate"
 
 echo "Loading Agent ..."
-python "../main.py" "--chat" "$@"
+python "../main.py" "--config" "../config.toml" "$@"
