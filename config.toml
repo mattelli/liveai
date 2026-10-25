@@ -2,8 +2,6 @@
 level = "WARNING"
 
 [brain] # LLM configuration: the model connection (model, base_url, api_key_env) lives in the models JSON file ([brain] models_file); 
-# its FIRST entry boots the session and /model switches between the entries at runtime. 
-# The API keys are read from the environment variables named by each entry (also resolved from .env).
 
 # Legacy, models-file-less setup (used only when models_file is unset):
 # base_url = "https://openrouter.ai/api/v1"
@@ -12,14 +10,17 @@ level = "WARNING"
 
 system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 memory_path = "memory.log"
-sessions_dir = ".sessions"   # folder for /session store|list|load chat session files (JSON)
-models_file = "models.json"  # models: first entry boots, /model switches (JSON: name -> {api_key_env, base_url, model})
+sessions_dir = ".sessions"         # folder for /session store|list|load chat session files (JSON)
+models_file = "models.json"        # models: first entry boots, /model switches (JSON: name -> {api_key_env, base_url, model})
+max_response_tokens = 0.1          # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
+temperature = 0.6                  # randomness (0 = deterministic, 1 = random)
+max_tool_result_chars = 4000       # cap tool results stored in the history, head+tail kept (0 = uncapped)
+context_trim_ratio = 0.7           # prune oldest complete tool rounds when context usage exceeds this ratio (0 = never prune)
+context_keep_messages = 40         # recent messages never pruned (used when context_trim_ratio > 0)
 # Vision support and the context window are auto-detected from the model metadata reported by the server (OpenAI /models endpoint, e.g. LMStudio max_context_length). 
 # Only set the optional overrides below for servers that do not report them:
 # vision = true
 # context_window = 8192
-max_response_tokens = 0.1                 # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
-temperature = 0.6
 
 # Chain-of-thought visualization: stream the model's reasoning while it thinks
 # Reasoning is display-only: it never enters the chat history or the spoken/returned answer.
@@ -29,9 +30,9 @@ max_thinking_tokens = 0                   # max tokens of thinking to visualize 
 [agent] # multi-agent configuration
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
 max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
+tool_doc_chars = 300       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
+tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
 parallel_agents = 0        # extra agents beside the running one (0 = off)
-# tool_doc_chars = 300     # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
-# tool_groups = "model, delegation, memory, files, web, documents, images, system, mcp"  # keep only these tool topics (default "all")
 agent_models = [           # models.json entry names, one per agent
     "ternary-bonsai", 
     "ternary-bonsai"
