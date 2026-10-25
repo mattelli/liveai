@@ -1,6 +1,8 @@
-﻿"""Tests for the multi-agent pool (PLAN.md tasks 1-7).
+﻿"""Tests for the agent-pool removal (PLAN_REMOVE_AGENT_POOL.md).
 
-Task 1: ``[agent]`` pool settings resolution (``agent_pool_settings``).
+The pool is gone; these tests verify the removal (delegation tools, pool
+class, settings) and keep the monitor-settings tests until Task 5 relocates
+them.
 """
 
 import pathlib
@@ -318,144 +320,6 @@ def test_non_quiet_agent_still_speaks(monkeypatch, tmp_path):
     assert recorder.spoken == ["full"]
 
 
-# ------------------------------------------------------- task 4: AgentPool
-
-
-def _pool_config(tmp_path, models_data, **brain_overrides):
-    """Config for AgentPool: models file + TEST_API_KEY in the environment."""
-    import json
-    from tests.test_live_ai import _remote_config
-
-    models_file = tmp_path / "models.json"
-    models_file.write_text(json.dumps(models_data), encoding="utf-8")
-    brain_overrides.setdefault("models_file", str(models_file))
-    return _remote_config(**brain_overrides)
-
-
-def _make_pool(monkeypatch, tmp_path, models_data, models, monitor=None,
-               **brain_overrides):
-    from tests.test_live_ai import _fake_openai
-
-    _fake_openai(monkeypatch)
-    monkeypatch.setenv("TEST_API_KEY", "k")
-    config = _pool_config(tmp_path, models_data, **brain_overrides)
-    settings = live_ai_mod.agent_pool_settings(SimpleNamespace(
-        agent=SimpleNamespace(parallel_agents=len(models),
-                              agent_models=", ".join(models),
-                              monitor=monitor),
-    ))
-    return live_ai_mod.AgentPool(config, settings)
-
-
-def test_agent_pool_builds_one_agent_per_model(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-        "qwen": {"model": "qwen-model"},
-    }, models=["glm", "qwen"])
-
-    assert set(pool.agents) == {"glm", "qwen"}
-    assert pool.agents["glm"]._model_name == "glm-model"
-    assert pool.agents["qwen"]._model_name == "qwen-model"
-    # pooled agents are quiet and tool-isolated
-    assert all(a.quiet and a.isolated_tools for a in pool.agents.values())
-
-
-def test_agent_pool_unknown_model_entry_fails_fast(monkeypatch, tmp_path):
-    with pytest.raises(ValueError, match="unknown model entry 'nope'"):
-        _make_pool(monkeypatch, tmp_path, {
-            "boot": {"model": "boot-model"},
-        }, models=["nope"])
-
-
-def test_agent_pool_requires_models_file(monkeypatch, tmp_path):
-    from tests.test_live_ai import _fake_openai, _remote_config
-
-    _fake_openai(monkeypatch)
-    monkeypatch.setenv("TEST_API_KEY", "k")
-    config = _remote_config()  # no models_file
-    with pytest.raises(ValueError, match="models_file"):
-        live_ai_mod.AgentPool(config, {"count": 1, "models": ["glm"],
-                                       "system_prompts": [None], "quiet": True})
-
-
-def test_agent_pool_empty_models_fails(monkeypatch, tmp_path):
-    with pytest.raises(ValueError, match="no agents configured"):
-        _make_pool(monkeypatch, tmp_path, {"boot": {"model": "m"}}, models=[])
-
-
-def test_agent_pool_ask_returns_final_answer(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    agent = pool.agents["glm"]
-    agent._stream = _QuietRoundStream()
-    agent._context_window = 1024
-    agent.tool_definitions = []
-    agent._tool_impls = {}
-    scripted = iter([("the weather is sunny", [])])
-    agent._stream_round = lambda tools: next(scripted)
-
-    assert pool.ask("glm", "weather?") == "the weather is sunny"
-    assert agent._messages[-1]["role"] == "user" or True  # history appended
-
-
-def test_agent_pool_ask_unknown_agent_raises_keyerror(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"])
-
-    with pytest.raises(KeyError, match="Available: glm"):
-        pool.ask("nope", "hi")
-
-
-def test_agent_pool_ask_parallel_preserves_order(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-        "qwen": {"model": "qwen-model"},
-    }, models=["glm", "qwen"])
-
-    ran = []
-
-    def fake_ask(agent_name, prompt):
-        ran.append((agent_name, prompt))
-        return f"answer-{agent_name}"
-
-    monkeypatch.setattr(pool, "ask", fake_ask)
-    results = pool.ask_parallel([("qwen", "t2"), ("glm", "t1")])
-
-    assert results == ["answer-qwen", "answer-glm"]  # task order, not runtime order
-    assert ("qwen", "t2") in ran and ("glm", "t1") in ran
-
-
-def test_agent_pool_ask_parallel_empty_tasks(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"])
-
-    assert pool.ask_parallel([]) == []
-
-
-def test_agent_pool_per_agent_system_prompt(monkeypatch, tmp_path):
-    from tests.test_live_ai import _fake_openai
-
-    _fake_openai(monkeypatch)
-    monkeypatch.setenv("TEST_API_KEY", "k")
-    config = _pool_config(tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    })
-    settings = {"count": 1, "models": ["glm"],
-                "system_prompts": ["You research the web."], "quiet": True}
-    pool = live_ai_mod.AgentPool(config, settings)
-
-    assert pool.agents["glm"]._messages[0]["content"] == "You research the web."
-
-
 # ------------------------------------------- delegation tools removed
 
 
@@ -475,6 +339,13 @@ def test_delegation_tools_removed():
     assert "ask_agent" not in names
     assert "run_parallel_agents" not in names
     assert "agent_activity" in names
+
+
+def test_agent_pool_class_removed():
+    """The AgentPool class no longer exists in src.live_ai."""
+    assert not hasattr(live_ai_mod, "AgentPool")
+    with pytest.raises(ImportError):
+        from src.live_ai import AgentPool  # noqa: F401
 
 
 # ------------------------------------------- max_act_rounds from [agent] config
@@ -508,89 +379,6 @@ def test_max_act_rounds_load_config_round_trip(tmp_path):
     assert config.agent.max_act_rounds == 100
     rounds = int(getattr(config.agent, "max_act_rounds", 0) or 0)
     assert (rounds if rounds > 0 else live_ai_mod.Agent.MAX_ACT_ROUNDS) == 100
-
-
-# ------------------------------- duplicate entries & same-agent parallelism
-
-
-def test_duplicate_model_entries_get_unique_keys(monkeypatch, tmp_path):
-    """Each agent_models entry owns its own isolated Agent instance.
-
-    Regression: duplicate names collapsed into one dict entry, so two
-    identical entries silently built a 1-agent pool.
-    """
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm", "glm"])
-
-    assert set(pool.agents) == {"glm", "glm#2"}
-    assert pool.agents["glm"] is not pool.agents["glm#2"]
-    assert pool.agents["glm"]._model_name == "glm-model"
-    assert pool.agents["glm#2"]._model_name == "glm-model"
-
-
-def test_ask_parallel_same_agent_runs_sequentially(monkeypatch, tmp_path):
-    """Tasks naming the same agent must never run act() concurrently.
-
-    Regression: two tasks on one agent interleaved the shared message
-    history, producing server-side "incomplete parallel tool-call group"
-    errors.
-    """
-    import threading
-    import time
-
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    agent = pool.agents["glm"]
-    agent._messages = [{"role": "system", "content": "s"}]
-
-    active = [0]
-    max_active = [0]
-
-    def tracking_act(prompt):
-        active[0] += 1
-        max_active[0] = max(max_active[0], active[0])
-        time.sleep(0.05)  # widen the window: concurrent act() would overlap
-        active[0] -= 1
-        agent._messages.append(
-            {"role": "assistant", "content": f"done: {prompt}"})
-
-    agent.act = tracking_act  # instance attr: ask() picks it up
-    results = pool.ask_parallel([("glm", "task a"), ("glm", "task b")])
-
-    assert results == ["done: task a", "done: task b"]  # task order kept
-    assert max_active[0] == 1  # strictly sequential on the shared agent
-
-
-def test_ask_parallel_distinct_agents_still_fan_out(monkeypatch, tmp_path):
-    """Distinct agents run concurrently (same-name tasks only serialize)."""
-    import threading
-
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-        "qwen": {"model": "qwen-model"},
-    }, models=["glm", "qwen"])
-    barrier = threading.Barrier(2, timeout=5)
-    started = []
-
-    def make_act(name):
-        def act(prompt):
-            started.append(name)
-            barrier.wait()  # both agents must be inside act() simultaneously
-            pool.agents[name]._messages.append(
-                {"role": "assistant", "content": f"{name}: {prompt}"})
-        return act
-
-    pool.agents["glm"].act = make_act("glm")
-    pool.agents["qwen"].act = make_act("qwen")
-    results = pool.ask_parallel([("glm", "a"), ("qwen", "b")])
-
-    assert results == ["glm: a", "qwen: b"]
-    assert sorted(started) == ["glm", "qwen"]
 
 
 # ------------------------------------------------ task 1: monitor settings

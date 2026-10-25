@@ -9,9 +9,6 @@ import src.live_ai as live_ai_mod
 from src.live_ai import AgentMonitor
 
 
-from tests.test_agent_pool import _make_pool, _QuietRoundStream  # noqa: E402
-
-
 @pytest.fixture(autouse=True)
 def _reset_process_monitor():
     """Keep the module-level monitor from leaking between tests."""
