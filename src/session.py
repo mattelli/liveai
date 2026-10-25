@@ -746,7 +746,7 @@ class ConversationSession:
         monitor = live_ai.get_monitor()
         if arg == "clear":
             if monitor is None:
-                cprint("Monitoring is not active (no agent pool).", "yellow")
+                cprint("Monitoring is not active.", "yellow")
                 return
             monitor.clear()
             cprint("Monitor buffer cleared.", "green")
@@ -759,10 +759,8 @@ class ConversationSession:
                 cprint("Usage: /monitor [N|clear]", "yellow")
                 return
         if monitor is None:
-            cprint("Monitoring is not active (no agent pool).", "yellow")
+            cprint("Monitoring is not active.", "yellow")
             return
-        flags = live_ai.agent_pool_settings(
-            getattr(self.agent, "config", None)).get("monitor") or set()
         if not monitor.snapshot(limit=1):
             cprint("No sub-agent activity recorded.", "yellow")
             return

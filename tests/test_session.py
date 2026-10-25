@@ -757,7 +757,7 @@ def test_monitor_command_clear(capsys):
     try:
         agent = FakeAgent()
         agent.config = SimpleNamespace(agent=SimpleNamespace(
-            bootstrap_prompt="b", parallel_agents=0, monitor="calls"))
+            bootstrap_prompt="b", monitor="calls"))
         it = iter(["/monitor clear", "/monitor", "/quit"])
         s = ConversationSession(agent, lambda: next(it))
         s.run()
@@ -801,7 +801,7 @@ def test_monitor_command_empty_buffer_hint(capsys):
     try:
         agent = FakeAgent()
         agent.config = SimpleNamespace(agent=SimpleNamespace(
-            bootstrap_prompt="b", parallel_agents=0))
+            bootstrap_prompt="b"))
         it = iter(["/monitor", "/quit"])
         s = ConversationSession(agent, lambda: next(it))
         s.run()

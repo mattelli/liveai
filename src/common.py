@@ -348,8 +348,7 @@ def load_config(config_path: Path) -> SimpleNamespace:
         """Recursively convert a dict to a SimpleNamespace, resolving paths.
 
         Only scalar string values are path-resolved; strings inside TOML
-        lists are kept verbatim (they are labels/prompts like agent_models
-        entry names, not paths).
+        lists are kept verbatim (they are labels/prompts, not paths).
         """
         result = {}
         for k, v in d.items():

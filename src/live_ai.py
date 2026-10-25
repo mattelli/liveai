@@ -267,7 +267,7 @@ _DEFAULT_MONITOR_LOG_FILE = "agents.jsonl"
 _DEFAULT_MONITOR_BUFFER = 100
 
 # Process-wide cache of server-reported model metadata, keyed by
-# (base_url, model). The main agent and its pooled workers usually boot the
+# (base_url, model). The main agent and the scheduler execution agent usually boot the
 # same models.json entry; without this each of them re-pays the metadata
 # round-trips (OpenAI /models + native-API probes) at startup. Populated by
 # Brain._fetch_model_metadata; /model switches need no invalidation (the key
@@ -306,49 +306,6 @@ def _monitor_buffer(value) -> int:
     except (TypeError, ValueError):
         return _DEFAULT_MONITOR_BUFFER
     return parsed if parsed > 0 else _DEFAULT_MONITOR_BUFFER
-
-
-def agent_pool_settings(config: SimpleNamespace) -> dict:
-    """Resolve the ``[agent]`` multi-agent pool settings (backward compatible).
-
-    Returns ``{"count", "models", "system_prompts", "monitor",
-    "monitor_log_file", "monitor_buffer"}`` where
-    ``count`` is the number of extra agents beside the running one,
-    ``models`` the models.json entry names (one per agent, truncated to
-    ``count``), ``system_prompts`` optional per-agent prompts (padded with
-    ``None``), ``monitor`` the set of monitoring flags (``"calls"``: labeled
-    [CALL] blocks for sub-agent tool calls; ``"log"``: JSONL event log),
-    ``monitor_log_file`` the JSONL log path, ``monitor_buffer`` the
-    in-memory event ring size.
-    Missing keys or a missing ``[agent]`` section keep the single-agent,
-    unmonitored behavior (``count = 0``, ``monitor = set()``).
-    Pooled agents are always quiet (they never print or speak): there is no
-    user-facing flag for it.
-
-    ``agent_models``/``agent_system_prompts`` accept either a list or a
-    comma-separated string; both forms are equivalent.
-    """
-    agent = getattr(config, "agent", None)
-    try:
-        count = int(getattr(agent, "parallel_agents", 0) or 0)
-    except (TypeError, ValueError):
-        count = 0
-    if count < 0:
-        count = 0
-    models = _split_list(getattr(agent, "agent_models", []) or [])[:count]
-    prompts = _split_list(getattr(agent, "agent_system_prompts", []) or [])
-    # load_config path-resolves keys ending in "_file" (relative to the config
-    # dir); keep whatever arrives (str or Path) and default when unset.
-    log_file = getattr(agent, "monitor_log_file", None)
-    return {
-        "count": count,
-        "models": models,
-        "system_prompts": (prompts + [None] * count)[:count],
-        "quiet": True,
-        "monitor": _monitor_flags(getattr(agent, "monitor", None)),
-        "monitor_log_file": str(log_file) if log_file else _DEFAULT_MONITOR_LOG_FILE,
-        "monitor_buffer": _monitor_buffer(getattr(agent, "monitor_buffer", None)),
-    }
 
 
 def monitor_settings(config: SimpleNamespace) -> dict:
@@ -634,7 +591,7 @@ class OpenAICore:
         self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
         ui = getattr(config, "ui", None)
         if getattr(self, "quiet", False):
-            # Quiet (pooled) agents buffer fragments instead of printing:
+            # Quiet agents (e.g. the scheduler execution agent) buffer fragments instead of printing:
             # parallel act() calls must not interleave on the console.
             self._stream = NullPrinter()
         else:
@@ -648,7 +605,7 @@ class OpenAICore:
         # src.tools.configure; the live state is bound here (getter first:
         # the messages list is re-read on every access, so clearing or
         # reassigning the session history stays visible to the tools).
-        # Isolated (pooled) agents skip the module-default binding: they get
+        # Isolated agents (e.g. the scheduler execution agent) skip the module-default binding: they get
         # their own tool instances in Agent._build_tools, and binding here
         # would hijack the main agent's module-default tools.
         from src.tools import memory as memory_tools, vision as vision_tools
@@ -942,7 +899,7 @@ class OpenAICore:
         ``use_raw_fallback=False`` skips the tolerant re-request for servers
         returning a bare JSON array. Failures degrade silently. Successful
         results are cached per instance *and* process-wide (keyed by
-        ``base_url + model``): the main agent and its pooled workers usually
+        ``base_url + model``): the main agent and the scheduler execution agent usually
         boot the same model entry, and without the shared cache each of them
         pays the metadata round-trips again at startup. A total failure stores
         no cache so a later call can retry. Returns a dict of non-empty
@@ -1677,7 +1634,7 @@ class Brain(OpenAICore):
 
 
 class NullPrinter:
-    """StreamPrinter stand-in for quiet (pooled) agents: buffer only, no console.
+    """StreamPrinter stand-in for quiet agents (scheduler executor): buffer only, no console.
 
     Keeps the StreamPrinter interface (feed/flush/note/spinner/mark_line_clean)
     so Agent code paths stay unchanged; nothing is written to stdout.
@@ -1723,11 +1680,10 @@ class Agent(Brain):
     def _build_tools(self) -> list[Callable]:
         """Tool set of this agent.
 
-        Pooled agents (``isolated_tools``) get fresh per-agent instances of
-        the session-bound tools (memory, vision) so parallel agents never
-        share module-level state (PLAN.md task 2, accepted solution). The
-        main agent keeps the module-default instances bound by
-        ``Brain.__init__`` — existing behavior unchanged.
+        Isolated agents (``isolated_tools``) get fresh per-agent instances of
+        the session-bound tools (memory, vision) so background agents never
+        share module-level state. The main agent keeps the module-default
+        instances bound by ``Brain.__init__`` — existing behavior unchanged.
         """
         tools = _select_tools(
             _default_tools(self),
@@ -1751,7 +1707,7 @@ class Agent(Brain):
 
     def __init__(self, config: SimpleNamespace, isolated_tools: bool = False, quiet: bool = False):
         # Set before super().__init__: OpenAICore.__init__ skips the
-        # module-default tool binding for isolated (pooled) agents, and
+        # module-default tool binding for isolated agents, and
         # OpenAICore.__init__ builds the stream printer (quiet -> NullPrinter).
         self.isolated_tools = isolated_tools
         self.quiet = quiet
@@ -1802,7 +1758,7 @@ class Agent(Brain):
         ]
         self._tool_impls = {tool.__name__: tool for tool in self.tools}
         # MCP server tools (PLAN.md task 5): injected after the built-in tool
-        # setup, for the main agent and pooled agents alike (the manager is
+        # setup, for the main agent and isolated agents alike (the manager is
         # process-wide; isolated memory/vision tools are unaffected).
         from src.tools import mcp as mcp_tools
         extra_defs, extra_impls = mcp_tools.mcp_tool_bindings(
@@ -2014,7 +1970,7 @@ class Agent(Brain):
         except Exception as exc:
             result = f"Error: {exc}"
         result = result if isinstance(result, str) else str(result)
-        # Sub-agent tool activity (task 3): pooled agents report their tool
+        # Sub-agent tool activity: isolated agents report their tool
         # calls/results to the process-wide monitor (agent name comes from
         # the thread-local set by AgentPool.ask).
         monitor = get_monitor()

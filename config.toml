@@ -22,21 +22,12 @@ context_keep_messages = 40         # recent messages never pruned (used when con
 # vision = true
 # context_window = 8192
 
-[agent] # multi-agent configuration
+[agent] # agent configuration
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
 max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
 tool_doc_chars = 300       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
 tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
-parallel_agents = 0        # extra agents beside the running one (0 = off)
-agent_models = [           # models.json entry names, one per agent
-    "ternary-bonsai", 
-    "ternary-bonsai"
-    ]
-agent_system_prompts = [   # optional per-agent system prompts
-    "You are a helpful assistant able to run any available tool.",
-    "You are a helpful assistant able to run any available tool."
-    ]
-monitor = "log"                                  # sub-agent monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
+monitor = "log"                                  # scheduled-task monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
 monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
 monitor_buffer = 200                             # in-memory events kept for the agent_activity tool
 
