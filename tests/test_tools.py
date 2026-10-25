@@ -1593,6 +1593,7 @@ def test_embedding_corpus_defaults_when_config_is_minimal(tmp_path, corpora_seam
 def memory_seam(monkeypatch, tmp_path):
     monkeypatch.setattr(tools.memory, "_history_provider", None)
     monkeypatch.setattr(tools.memory, "_config_cache", None)
+    monkeypatch.setattr(tools.memory._default, "_summarizer", None)
     tools.memory.configure(SimpleNamespace(
         brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
                               system_prompt="be helpful"),
@@ -1697,6 +1698,141 @@ def test_clear_chat_reseeds_with_recalled_personal_data(memory_seam, tmp_path):
 def test_clear_chat_without_bound_session(memory_seam, monkeypatch):
     monkeypatch.setattr(tools.memory, "_history_provider", None)
     assert memory_seam.clear_chat().startswith("Error:")
+
+
+# ------------------------------------------------------------- T15b compaction
+
+
+def test_compact_chat_without_bound_session(memory_seam):
+    assert memory_seam.compact_chat().startswith("Error:")
+
+
+def test_compact_chat_already_short(memory_seam):
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "hello"},
+        {"role": "assistant", "content": "hi"},
+    ]
+    memory_seam.bind_history(lambda: messages)
+    snapshot = list(messages)
+
+    assert memory_seam.compact_chat() == "Context is already compact; nothing to do."
+    assert messages == snapshot  # untouched
+
+
+def test_compact_chat_keeps_recent_turns_and_summary(memory_seam):
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old question {i}"} for i in range(6)]
+        + [{"role": "assistant", "content": f"old answer {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent question"},
+           {"role": "assistant", "content": "recent answer"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "SUMMARY")
+
+    result = memory_seam.compact_chat(keep_last=2)
+
+    assert result == "Chat compacted: 13 messages summarized into 1, 2 kept."
+    assert messages[0] == {"role": "system", "content": "be helpful"}
+    assert messages[1] == {"role": "user", "content": "No personal data found!"}
+    assert messages[2]["role"] == "user"
+    assert messages[2]["content"].startswith("[Compacted context on ")
+    assert "SUMMARY" in messages[2]["content"]
+    assert messages[3:] == [
+        {"role": "user", "content": "recent question"},
+        {"role": "assistant", "content": "recent answer"},
+    ]
+    assert len(messages) == 5
+
+
+def test_compact_chat_preserves_list_object(memory_seam):
+    messages = [
+        {"role": "user", "content": f"m{i}"} for i in range(10)
+    ]
+    memory_seam.bind_history(lambda: messages)
+    same = messages
+
+    memory_seam.compact_chat()
+
+    assert messages is same  # in place: the session keeps the same list object
+
+
+def test_compact_chat_uses_bound_summarizer(memory_seam):
+    messages = (
+        [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    seen = []
+
+    def summarizer(old):
+        seen.append(list(old))
+        return "S"
+
+    memory_seam.bind_summarizer(summarizer)
+    memory_seam.compact_chat(keep_last=1)  # clamped to minimum 2
+
+    # the summarizer received exactly the non-recent messages, not the head copy
+    assert seen == [[{"role": "user", "content": f"old {i}"} for i in range(5)]]
+
+
+def test_compact_chat_reseeds_personal_data(memory_seam, tmp_path):
+    (tmp_path / "history.txt").write_text("stored personal data", encoding="utf-8")
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+
+    memory_seam.compact_chat()
+
+    assert messages[0] == {"role": "system", "content": "be helpful"}
+    assert messages[1] == {"role": "user", "content": "stored personal data"}
+
+
+def test_compact_chat_fallback_summary_without_summarizer(memory_seam):
+    messages = (
+        [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+
+    memory_seam.compact_chat()
+
+    # no system message in the original history: head = config system + recall
+    assert "old 0" in messages[2]["content"]  # fallback extractive summary used
+
+
+def test_compact_chat_invalid_keep_last_uses_default(memory_seam):
+    messages = [{"role": "user", "content": f"m{i}"} for i in range(10)]
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "S")
+
+    memory_seam.compact_chat(keep_last="abc")  # invalid -> default 4
+
+    assert messages[-4:] == [{"role": "user", "content": f"m{i}"} for i in (6, 7, 8, 9)]
+
+
+def test_module_default_compact_chat(monkeypatch, tmp_path):
+    monkeypatch.setattr(tools.memory, "_history_provider", None)
+    monkeypatch.setattr(tools.memory, "_config_cache", None)
+    tools.memory.configure(SimpleNamespace(
+        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+                              system_prompt="be helpful"),
+        agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
+    ))
+    messages = [{"role": "user", "content": f"m{i}"} for i in range(8)]
+    tools.memory.bind_history(lambda: messages)
+    tools.memory.bind_summarizer(lambda old: "MODSUM")
+
+    result = tools.memory.compact_chat()
+
+    assert result == "Chat compacted: 4 messages summarized into 1, 4 kept."
+    assert "MODSUM" in messages[2]["content"]
+    assert messages[1] == {"role": "user", "content": "No personal data found!"}
+    assert len(messages) == 7
 
 
 # ------------------------------------------------------------------ T16 speech

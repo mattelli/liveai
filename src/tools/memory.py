@@ -26,8 +26,8 @@ from datetime import datetime
 from src.common import dump_func_call
 
 __all__ = [
-    "MemoryTools", "configure", "bind_history",
-    "recall_memory", "store_memory", "clear_chat",
+    "MemoryTools", "configure", "bind_history", "bind_summarizer",
+    "recall_memory", "store_memory", "clear_chat", "compact_chat",
 ]
 
 _config_cache = None      # [brain] + [agent] sections injected via configure()
@@ -56,6 +56,7 @@ class MemoryTools:
 
     def __init__(self) -> None:
         self._history_provider = None  # callable returning the live messages list
+        self._summarizer = None        # callable messages -> summary text
 
     def for_owner(self, agent) -> "MemoryTools":
         """Fresh instance for a specific agent (per-agent tool isolation)."""
@@ -69,6 +70,17 @@ class MemoryTools:
         clearing or reassigning the session history is always reflected.
         """
         self._history_provider = provider
+
+    def bind_summarizer(self, provider) -> None:
+        """
+        Bind the summarizer used by :meth:`compact_chat` (called by ``Brain``
+        when an LLM-backed summary is available). ``provider`` is a callable
+        taking the messages to summarize (plain OpenAI-style dicts) and
+        returning a plain-text summary. When unbound, the built-in extractive
+        fallback (:meth:`_fallback_summary`) is used, keeping compaction
+        testable and usable without a model.
+        """
+        self._summarizer = provider
 
     def _config(self, key, attr, default=None):
         section = (_config_cache or {}).get(key)
@@ -163,6 +175,92 @@ class MemoryTools:
         except Exception as e:
             return f"Error: {e}"
 
+    # ---------------------------------------------------------------- compaction
+
+    _SUMMARY_PREFIX = "[Compacted context"
+
+    @staticmethod
+    def _fallback_summary(messages: list[dict]) -> str:
+        """Extractive fallback: join message texts, head+tail truncated.
+
+        Used when no summarizer is bound, keeping ``compact_chat`` usable and
+        unit-testable without an LLM.
+        """
+        texts = [
+            m.get("content") or "" for m in messages
+            if isinstance(m.get("content"), str)
+        ]
+        joined = "\n".join(t.strip() for t in texts if t.strip())
+        limit = 2000
+        if len(joined) <= limit:
+            return joined or "(no content)"
+        return joined[:limit // 2] + "\n[...]" + joined[-limit // 2:]
+
+    def _reseeded_head(self, messages: list[dict]) -> list[dict]:
+        """``[system, recalled personal data]`` head, like ``clear_chat``.
+
+        Preserves the live system message (falls back to the ``[brain]``
+        system_prompt when absent) and the personal-memory seeding.
+        """
+        system_prompt = self._config("brain", "system_prompt", "")
+        system = next(
+            (m["content"] for m in messages if m["role"] == "system"),
+            system_prompt,
+        )
+        return [
+            {"role": "system", "content": system},
+            {"role": "user", "content": self.recall_memory()},
+        ]
+
+    @dump_func_call
+    def compact_chat(self, keep_last: int = 4) -> str:
+        """
+        Useful when the conversation history grows long: summarize the oldest
+        messages into a compact summary and keep only the most recent turns
+        verbatim. The system prompt and the recalled personal data are
+        preserved; the history is shrunk in place (the session keeps the same
+        list object). Pass ``keep_last`` to control how many recent messages
+        are kept (minimum 2, default 4).
+        """
+        try:
+            provider = self._history_provider
+            if provider is None:
+                return "Error: no chat session is bound."
+            messages = provider()
+            try:
+                keep = int(keep_last)
+            except (TypeError, ValueError):
+                keep = 4
+            keep = max(2, keep)
+            # At least one summaryable message beyond the kept recent turns.
+            if len(messages) < keep + 2:
+                return "Context is already compact; nothing to do."
+
+            old = messages[:-keep]
+            recent = list(messages[-keep:])
+            summarizer = self._summarizer or self._fallback_summary
+            summary = summarizer(old)
+            summary = summary.strip() or "(empty summary)"
+
+            stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            new_history = self._reseeded_head(messages)
+            new_history.append({
+                "role": "user",
+                "content": (
+                    f"{self._SUMMARY_PREFIX} on {stamp}] Summary of the "
+                    f"earlier conversation:\n{summary}"
+                ),
+            })
+            new_history.extend(recent)
+
+            messages[:] = new_history  # in place: same list object for the session
+            return (
+                f"Chat compacted: {len(old)} messages summarized into 1, "
+                f"{len(recent)} kept."
+            )
+        except Exception as e:
+            return f"Error: {e}"
+
 
 class _ModuleDefaultMemoryTools(MemoryTools):
     """Module-default instance backed by the module global ``_history_provider``.
@@ -204,3 +302,13 @@ def store_memory(content: str = "") -> str:
 def clear_chat() -> str:
     """Clean the conversation history (module-default instance)."""
     return _default.clear_chat()
+
+
+def bind_summarizer(provider) -> None:
+    """Bind the compaction summarizer (module-default instance)."""
+    _default.bind_summarizer(provider)
+
+
+def compact_chat(keep_last: int = 4) -> str:
+    """Compact the conversation history into a summary (module-default)."""
+    return _default.compact_chat(keep_last)
