@@ -357,7 +357,15 @@ def _remote_config(**brain_overrides):
         base_url="https://api.test/v1", api_key_env="TEST_API_KEY",
     )
     brain.update(brain_overrides)
-    return SimpleNamespace(brain=SimpleNamespace(**brain))
+    # Thinking display settings live in [ui] (moved from [brain]).
+    ui = dict(
+        show_thinking=brain_overrides.get("show_thinking", False),
+        max_thinking_tokens=brain_overrides.get("max_thinking_tokens", 0),
+    )
+    for key in ("show_thinking", "max_thinking_tokens"):
+        brain.pop(key, None)
+    return SimpleNamespace(brain=SimpleNamespace(**brain),
+                           ui=SimpleNamespace(**ui))
 
 
 def test_load_env_file_defaults_to_project_root(monkeypatch):
@@ -1035,7 +1043,7 @@ def test_boot_without_models_file_requires_model_and_base_url(monkeypatch):
         live_ai_mod.Brain(_remote_config(model=""))
 
 
-## Chain-of-thought visualization ([brain] show_thinking / max_thinking_tokens) ##
+## Chain-of-thought visualization ([ui] show_thinking / max_thinking_tokens) ##
 
 class _ThinkingRecorder:
     """StreamPrinter stand-in that records thinking vs. answer text."""

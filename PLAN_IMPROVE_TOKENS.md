@@ -60,7 +60,7 @@ behavior** (backward compatible): existing tests must stay green untouched.
   no config to exclude a group from the agents.
 - Config today (`config.toml`): `max_response_tokens = 0.1` (good),
   `show_thinking = true` with `max_thinking_tokens = 0` (display-only, but
-  reasoning tokens may be billed by providers), `max_act_rounds = 500`.
+  reasoning tokens may be billed by providers; both keys live in `[ui]`), `max_act_rounds = 500`.
 
 ## 3. Expected behavior
 

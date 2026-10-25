@@ -596,9 +596,9 @@ model: the error is reported and the session continues with the previous one.
 ### Chain-of-thought visualization
 
 Reasoning models expose their thinking while they generate (`reasoning_content`
-or `reasoning` stream fields, or inline istine tags). With `[brain] show_thinking = true`
+or `reasoning` stream fields, or inline istine tags). With `[ui] show_thinking = true`
 the thought chain is streamed live in dim text behind a `💭` marker, capped by
-`[brain] max_thinking_tokens` (0 = unlimited). Thinking is display-only: it never
+`[ui] max_thinking_tokens` (0 = unlimited). Thinking is display-only: it never
 enters the chat history, the spoken reply or the returned answers.
 
 Notes:

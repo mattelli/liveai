@@ -122,7 +122,7 @@ def _truncate_tool_result(text: str, limit: int) -> str:
 
 
 def _thinking_token_cap(value) -> int:
-    """Resolve ``[brain] max_thinking_tokens`` into a visualization cap.
+    """Resolve ``[ui] max_thinking_tokens`` into a visualization cap.
 
     Bounds the number of chain-of-thought tokens that are streamed to the
     console while the model is thinking (reasoning tokens are never part of
@@ -647,10 +647,10 @@ class OpenAICore:
             getattr(config.brain, "max_response_tokens", 0),
             self._context_window,
         )
-        # Chain-of-thought visualization ([brain] show_thinking/max_thinking_tokens).
-        self._show_thinking = bool(getattr(config.brain, "show_thinking", False))
+        # Chain-of-thought visualization ([ui] show_thinking/max_thinking_tokens).
+        self._show_thinking = bool(getattr(config.ui, "show_thinking", False))
         self._max_thinking_tokens = _thinking_token_cap(
-            getattr(config.brain, "max_thinking_tokens", 0))
+            getattr(config.ui, "max_thinking_tokens", 0))
         self._reset_thinking()
         self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
         ui = getattr(config, "ui", None)
@@ -1431,7 +1431,7 @@ class Brain(OpenAICore):
             kwargs["tools"] = tools
         return self._client.chat.completions.create(**kwargs)
 
-    ## chain-of-thought visualization ([brain] show_thinking) ##
+    ## chain-of-thought visualization ([ui] show_thinking) ##
 
     _THINK_OPEN = "<think>"
     _THINK_CLOSE = "</think>"
@@ -1509,7 +1509,7 @@ class Brain(OpenAICore):
     def _feed_thinking(self, text: str) -> None:
         """Display one chain-of-thought chunk, honoring the token cap.
 
-        ``[brain] max_thinking_tokens`` bounds what is *visualized* per
+        ``[ui] max_thinking_tokens`` bounds what is *visualized* per
         generation round (the ~4 chars/token estimate matches
         ``_context_usage``): once the cap is hit a truncation marker is shown
         once and further thinking chunks of the round are dropped silently -
@@ -1538,7 +1538,7 @@ class Brain(OpenAICore):
         Reasoning (``reasoning_content``/``reasoning`` fields, or inline
         ``ine`` tags inside ``content``) goes to the thinking display;
         the return value is the answer text of the delta (may be empty).
-        With ``[brain] show_thinking`` off the answer passes through
+        With ``[ui] show_thinking`` off the answer passes through
         unchanged - including any literal ``ine`` tags - exactly as before
         the feature existed.
         """
