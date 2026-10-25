@@ -898,19 +898,6 @@ def test_gradient_logo_custom_art():
 # ------------------------------------------- background results injection
 
 
-def test_session_injects_delegation_results(capsys):
-    import src.live_ai as live_ai
-
-    agent = FakeAgent()
-    agent.messages = []
-    live_ai.queue_agent_result(
-        "delegation", "d-1", "Worker glm finished delegated task d-1. Result:\n42")
-    it = iter(["thanks", "/quit"])
-    ConversationSession(agent, lambda: next(it)).run()
-    contents = [m["content"] for m in agent.messages if m["role"] == "assistant"]
-    assert any("Worker glm finished delegated task d-1" in c for c in contents)
-
-
 def test_session_injects_scheduled_results_unchanged():
     import src.live_ai as live_ai
 

@@ -312,19 +312,16 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
     """Resolve the ``[agent]`` multi-agent pool settings (backward compatible).
 
     Returns ``{"count", "models", "system_prompts", "monitor",
-    "monitor_log_file", "monitor_buffer", "async_delegation"}`` where
+    "monitor_log_file", "monitor_buffer"}`` where
     ``count`` is the number of extra agents beside the running one,
     ``models`` the models.json entry names (one per agent, truncated to
     ``count``), ``system_prompts`` optional per-agent prompts (padded with
     ``None``), ``monitor`` the set of monitoring flags (``"calls"``: labeled
     [CALL] blocks for sub-agent tool calls; ``"log"``: JSONL event log),
     ``monitor_log_file`` the JSONL log path, ``monitor_buffer`` the
-    in-memory event ring size and ``async_delegation`` whether
-    ``ask_agent``/``run_parallel_agents`` return receipts immediately and
-    deliver worker answers on a later turn (default False: synchronous
-    delegation, the historical behavior).
+    in-memory event ring size.
     Missing keys or a missing ``[agent]`` section keep the single-agent,
-    unmonitored, synchronous behavior (``count = 0``, ``monitor = set()``).
+    unmonitored behavior (``count = 0``, ``monitor = set()``).
     Pooled agents are always quiet (they never print or speak): there is no
     user-facing flag for it.
 
@@ -351,7 +348,6 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
         "monitor": _monitor_flags(getattr(agent, "monitor", None)),
         "monitor_log_file": str(log_file) if log_file else _DEFAULT_MONITOR_LOG_FILE,
         "monitor_buffer": _monitor_buffer(getattr(agent, "monitor_buffer", None)),
-        "async_delegation": bool(getattr(agent, "async_delegation", False)),
     }
 
 
@@ -2101,12 +2097,6 @@ class Agent(Brain):
             self._active_stream = None
 
 
-# Monotonic delegation receipt counter (async mode): process-wide so ids stay
-# unique across pool rebuilds, like the monitor.
-_DELEGATION_COUNTER = 0
-_DELEGATION_LOCK = threading.Lock()
-
-
 class AgentPool:
     """Named sub-agents beside the running one (PLAN.md task 4).
 
@@ -2121,15 +2111,6 @@ class AgentPool:
     def __init__(self, config: SimpleNamespace, settings: dict):
         self.agents: dict[str, Agent] = {}
         self.logger = getLogger("AgentPool")
-        # Async delegation (task 2): receipts + background delivery when
-        # [agent] async_delegation is enabled; synchronous otherwise.
-        self.async_delegation = bool(settings.get("async_delegation", False))
-        self._executor = ThreadPoolExecutor(
-            max_workers=max(1, len(settings.get("models") or [1])),
-            thread_name_prefix="delegate")
-        self._agent_locks: dict[str, threading.Lock] = {}
-        self._delegations: dict[str, dict] = {}  # receipt id -> {agent, prompt}
-        self._stopped = False
         # Monitoring (task 3): the monitor (ring buffer + JSONL sink) is only
         # created and bound when [agent] monitor is enabled; with monitoring
         # off nothing is recorded and no log file is ever written.
@@ -2203,12 +2184,7 @@ class AgentPool:
         ``caller`` is the name of the agent currently running the tool call
         ('' = the main agent). A pooled agent delegating to itself (or to any
         pooled agent) is refused: nested delegation would deadlock the pool.
-
-        With ``[agent] async_delegation`` enabled the call returns a receipt
-        immediately and the worker runs on the pool's executor; its answer is
-        queued for main-agent delivery on a later turn (shared
-        background-results queue). Otherwise the call blocks until the worker
-        finishes and returns the answer (historical behavior).
+        The call blocks until the worker finishes and returns the answer.
         """
         name = str(agent_name or "").strip()
         agent = self.agents.get(name)
@@ -2219,16 +2195,10 @@ class AgentPool:
             raise ValueError(
                 f"Nested delegation refused: pooled agent {caller!r} cannot call "
                 "ask_agent/run_parallel_agents (would deadlock the pool)")
-        if self.async_delegation:
-            delegation_id = self._next_delegation_id()
-            self._delegations[delegation_id] = {"agent": name, "prompt": prompt}
-            self._executor.submit(self._run_delegation, delegation_id, name, prompt)
-            return (f"Delegated task {delegation_id} to {name} (async): results "
-                    "will be delivered when the worker finishes.")
         return self._run_delegation_blocking(name, prompt)
 
     def _run_delegation_blocking(self, name: str, prompt: str) -> str:
-        """Synchronous delegation body (historical behavior, also shared)."""
+        """Synchronous delegation body."""
         agent = self.agents[name]
         _TOOL_CONTEXT.agent_name = name  # visible to the sub-agent's tool calls
         set_subagent_dump(False)           # suppress inner tool-call dumps
@@ -2241,43 +2211,6 @@ class AgentPool:
             set_subagent_dump(True)
         return agent.messages[-1]["content"]
 
-    def _run_delegation(self, delegation_id: str, name: str, prompt: str) -> None:
-        """Run one async delegation to completion and queue the delivery.
-
-        Runs on the pool's executor thread. The per-agent lock keeps the
-        "one ``act()`` per agent" rule (same-agent tasks serialize). The
-        answer (or the failure) is queued for main-agent delivery; the
-        delegation is removed from the registry either way.
-        """
-        agent = self.agents[name]
-        lock = self._agent_lock(name)
-        try:
-            with lock:
-                _TOOL_CONTEXT.agent_name = name
-                set_subagent_dump(False)
-                self._monitor_record(name, "start", prompt=prompt)
-                try:
-                    agent.act(prompt)
-                    answer = str(agent.messages[-1]["content"])
-                    self._monitor_record(name, "answer", answer=answer)
-                except Exception as exc:
-                    self.logger.error("Delegation %s (%s) failed: %s",
-                                      delegation_id, name, exc)
-                    self._monitor_record(name, "answer", answer=f"failed: {exc}")
-                    queue_agent_result(
-                        "delegation", delegation_id,
-                        f"Worker {name} failed delegated task {delegation_id}: {exc}")
-                    return
-                finally:
-                    _TOOL_CONTEXT.agent_name = ""
-                    set_subagent_dump(True)
-            queue_agent_result(
-                "delegation", delegation_id,
-                f"Worker {name} finished delegated task {delegation_id}. "
-                f"Result:\\n{answer}")
-        finally:
-            self._delegations.pop(delegation_id, None)
-
     def ask_parallel(self, tasks: list[tuple[str, str]],
                      caller: str = "") -> list[str]:
         """Run (agent_name, prompt) tasks concurrently; results in task order.
@@ -2287,12 +2220,6 @@ class AgentPool:
         never run ``act()`` concurrently (shared history/stream state would
         corrupt tool-call groups -> server-side "incomplete parallel
         tool-call group" errors). See ``ask`` for the ``caller`` rule.
-
-        With ``[agent] async_delegation`` enabled the call submits every task
-        to the pool's executor and returns one receipt per task immediately
-        (same-agent tasks serialize on the per-agent lock); results are
-        delivered on a later turn. Otherwise the call blocks until every task
-        finished and returns the answers in task order.
         """
         if not tasks:
             return []
@@ -2300,22 +2227,6 @@ class AgentPool:
             raise ValueError(
                 f"Nested delegation refused: pooled agent {caller!r} cannot call "
                 "ask_agent/run_parallel_agents (would deadlock the pool)")
-        if self.async_delegation:
-            receipts: list[str] = []
-            for name, prompt in tasks:
-                name = str(name).strip()
-                if name not in self.agents:
-                    raise KeyError(
-                        f"Unknown agent {name!r}. Available: "
-                        + ", ".join(self.agents))
-                delegation_id = self._next_delegation_id()
-                self._delegations[delegation_id] = {"agent": name, "prompt": prompt}
-                self._executor.submit(self._run_delegation, delegation_id, name, prompt)
-                receipts.append(f"{delegation_id}={name}")
-            ids = ", ".join(receipt.rsplit("=", 1)[0] for receipt in receipts)
-            agents = ", ".join(receipt.rsplit("=", 1)[1] for receipt in receipts)
-            return (f"Delegated {len(tasks)} tasks ({ids}) to {agents} (async): "
-                    "results will be delivered as the workers finish.")
         # Group tasks by agent, preserving task order within each group.
         by_agent: dict[str, list[tuple[int, str]]] = {}
         for index, (name, prompt) in enumerate(tasks):
@@ -2334,29 +2245,3 @@ class AgentPool:
                 future.result()  # propagate the first task failure
         return results
 
-    ## async delegation (task 2/3) ##
-
-    def stop(self) -> None:
-        """Shut the delegation executor down without waiting (idempotent).
-
-        Called from main.py's finally block; running delegations finish their
-        current round (the executor only refuses *new* submissions).
-        """
-        if self._stopped:
-            return
-        self._stopped = True
-        self._executor.shutdown(wait=False)
-
-    def _next_delegation_id(self) -> str:
-        """Monotonic receipt id (``d-1``, ``d-2``, ...), process-wide."""
-        global _DELEGATION_COUNTER
-        with _DELEGATION_LOCK:
-            _DELEGATION_COUNTER += 1
-            return f"d-{_DELEGATION_COUNTER}"
-
-    def _agent_lock(self, name: str) -> threading.Lock:
-        """The per-agent lock serializing ``act()`` on one pooled agent."""
-        lock = self._agent_locks.get(name)
-        if lock is None:
-            lock = self._agent_locks.setdefault(name, threading.Lock())
-        return lock

@@ -174,7 +174,7 @@ class ConversationSession:
     def _inject_scheduled_results(self) -> None:
         """Append pending background results to the agent's history.
 
-        Background workers (scheduler tasks, async delegations) queue results
+        Background workers (scheduler tasks) queue results
         instead of writing the history directly (an append from another
         thread could corrupt an in-flight tool-call round); here the main
         thread owns the list, so appending is safe. Results arrive as
@@ -189,11 +189,6 @@ class ConversationSession:
                 self.agent.messages.append({
                     "role": "assistant",
                     "content": f"Scheduled task {result_id} completed. Result:\n{text}",
-                })
-            elif kind == "delegation":
-                self.agent.messages.append({
-                    "role": "assistant",
-                    "content": text,
                 })
             else:  # unknown kind: log and skip, never crash the turn
                 getLogger(__name__).warning("Unknown background result kind %r", kind)

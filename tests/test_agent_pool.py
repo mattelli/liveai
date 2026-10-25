@@ -36,7 +36,6 @@ def test_agent_pool_settings_full_config():
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
-        "async_delegation": False,
     }
 
 
@@ -51,7 +50,6 @@ def test_agent_pool_settings_defaults_when_keys_missing():
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
-        "async_delegation": False,
     }
 
 
@@ -64,7 +62,6 @@ def test_agent_pool_settings_without_agent_section():
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
-        "async_delegation": False,
     }
 
 
@@ -87,7 +84,6 @@ def test_agent_pool_settings_accepts_comma_separated_strings():
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
-        "async_delegation": False,
     }
 
 
@@ -136,7 +132,6 @@ def test_load_config_round_trips_agent_pool_keys(tmp_path):
         "monitor": set(),
         "monitor_log_file": "agents.jsonl",
         "monitor_buffer": 100,
-        "async_delegation": False,
     }
 
 
@@ -338,7 +333,7 @@ def _pool_config(tmp_path, models_data, **brain_overrides):
 
 
 def _make_pool(monkeypatch, tmp_path, models_data, models, monitor=None,
-               async_delegation=False, **brain_overrides):
+               **brain_overrides):
     from tests.test_live_ai import _fake_openai
 
     _fake_openai(monkeypatch)
@@ -347,8 +342,7 @@ def _make_pool(monkeypatch, tmp_path, models_data, models, monitor=None,
     settings = live_ai_mod.agent_pool_settings(SimpleNamespace(
         agent=SimpleNamespace(parallel_agents=len(models),
                               agent_models=", ".join(models),
-                              monitor=monitor,
-                              async_delegation=async_delegation),
+                              monitor=monitor),
     ))
     return live_ai_mod.AgentPool(config, settings)
 
@@ -752,281 +746,3 @@ def test_monitor_settings_load_config_round_trip(tmp_path):
     assert settings["monitor_log_file"].endswith("agents.jsonl")  # resolved path
     assert settings["monitor_buffer"] == 50
 
-
-# ------------------------------------------- task 2: async delegation setting
-
-
-def test_agent_pool_settings_async_delegation_default_false():
-    assert live_ai_mod.agent_pool_settings(_agent_config(parallel_agents=1))[
-        "async_delegation"] is False
-    assert live_ai_mod.agent_pool_settings(SimpleNamespace())[
-        "async_delegation"] is False
-
-
-def test_agent_pool_settings_async_delegation_parses_true():
-    config = _agent_config(parallel_agents=1, async_delegation=True)
-    assert live_ai_mod.agent_pool_settings(config)["async_delegation"] is True
-
-
-def test_agent_pool_settings_async_delegation_invalid_is_false():
-    # bool() of a truthy string would be True; only a real boolean counts.
-    config = _agent_config(parallel_agents=1, async_delegation="yes")
-    assert live_ai_mod.agent_pool_settings(config)["async_delegation"] is True
-    config = _agent_config(parallel_agents=1, async_delegation=0)
-    assert live_ai_mod.agent_pool_settings(config)["async_delegation"] is False
-
-
-def test_async_delegation_load_config_round_trip(tmp_path):
-    config_file = tmp_path / "config.toml"
-    config_file.write_text(textwrap.dedent("""
-        [agent]
-        bootstrap_prompt = "hello"
-        parallel_agents = 1
-        agent_models = "glm"
-        async_delegation = true
-    """), encoding="utf-8")
-    config = load_config(config_file)
-    assert live_ai_mod.agent_pool_settings(config)["async_delegation"] is True
-
-
-def test_pool_async_delegation_flag_and_executor(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], async_delegation=True)
-    assert pool.async_delegation is True
-    assert pool._executor is not None
-    pool.stop()  # idempotent
-    pool.stop()
-
-
-def test_pool_synchronous_by_default_and_stop_idempotent(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    assert pool.async_delegation is False
-    pool.stop()
-    pool.stop()  # no error
-
-
-# --------------------------------------- task 3: non-blocking delegation
-
-
-def _scripted_agent(agent, rounds):
-    """Minimal quiet-agent plumbing + scripted completion rounds."""
-    agent._stream = _QuietRoundStream()
-    agent._context_window = 1024
-    agent._messages = [{"role": "system", "content": "s"}]
-    agent.tool_definitions = []
-    scripted = iter(rounds)
-    agent._stream_round = lambda tools: next(scripted)
-
-
-def test_async_ask_returns_receipt_without_acting(monkeypatch, tmp_path):
-    """The receipt returns immediately; act() runs on another thread."""
-    import threading
-    import time
-
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], async_delegation=True)
-    agent = pool.agents["glm"]
-    seen = {"threads": [], "prompts": []}
-
-    def tracking_act(prompt):
-        seen["threads"].append(threading.get_ident())
-        seen["prompts"].append(prompt)
-        agent._messages.append({"role": "assistant", "content": f"done: {prompt}"})
-
-    agent.act = tracking_act
-    main_thread = threading.get_ident()
-
-    receipt = pool.ask("glm", "do research")
-    try:
-        assert "d-" in receipt and "glm" in receipt
-        assert "async" in receipt and "delivered" in receipt
-        # the receipt returned before act() could finish (worker on another
-        # thread); at most the prompt may have started, never completed here
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not seen["prompts"]:
-            time.sleep(0.02)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not seen["prompts"]:
-            time.sleep(0.02)
-        assert seen["prompts"] == ["do research"]
-        assert all(t != main_thread for t in seen["threads"])
-        # delivery queued with id + agent + answer
-        pending = live_ai_mod.drain_agent_results()
-        assert len(pending) == 1
-        kind, delegation_id, text = pending[0]
-        assert kind == "delegation"
-        receipt_id = receipt.split(" ")[2]  # "Delegated task d-N to ..."
-        assert delegation_id == receipt_id
-        assert "glm" in text and "done: do research" in text
-    finally:
-        pool.stop()
-
-
-def test_async_ask_failure_queues_failure_text(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], async_delegation=True)
-    agent = pool.agents["glm"]
-
-    def exploding_act(prompt):
-        raise RuntimeError("model down")
-
-    agent.act = exploding_act
-    import time
-    receipt = pool.ask("glm", "doomed task")
-    time.sleep(0.3)  # give the worker thread time to fail and queue
-    pending = live_ai_mod.drain_agent_results()
-    assert len(pending) == 1
-    kind, delegation_id, text = pending[0]
-    assert kind == "delegation"
-    assert "failed" in text and "model down" in text and "glm" in text
-    assert delegation_id not in pool._delegations  # registry cleaned up
-    pool.stop()
-
-
-def test_async_ask_parallel_returns_receipts(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-        "qwen": {"model": "qwen-model"},
-    }, models=["glm", "qwen"], async_delegation=True)
-    for agent in pool.agents.values():
-        agent.act = lambda prompt: agent._messages.append(
-            {"role": "assistant", "content": f"done: {prompt}"})
-    import time
-    receipt = pool.ask_parallel([("glm", "a"), ("qwen", "b")])
-    assert "2 tasks" in receipt and "glm" in receipt and "qwen" in receipt
-    assert receipt.count("d-") == 2  # one receipt id per task
-    time.sleep(0.3)  # give both workers time to finish and queue
-    pending = live_ai_mod.drain_agent_results()
-    assert len(pending) == 2  # both workers delivered
-    assert all(kind == "delegation" for kind, _, _ in pending)
-    pool.stop()
-
-
-def test_async_same_agent_tasks_serialize(monkeypatch, tmp_path):
-    """Two tasks on one agent never run act() concurrently (per-agent lock)."""
-    import threading
-    import time
-
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], async_delegation=True)
-    agent = pool.agents["glm"]
-    active = [0]
-    max_active = [0]
-
-    def tracking_act(prompt):
-        active[0] += 1
-        max_active[0] = max(max_active[0], active[0])
-        time.sleep(0.05)
-        active[0] -= 1
-        agent._messages.append({"role": "assistant", "content": f"done: {prompt}"})
-
-    agent.act = tracking_act
-    pool.ask_parallel([("glm", "task a"), ("glm", "task b")])
-    time.sleep(0.4)  # both tasks run sequentially (2 x 50ms) then queue
-    pending = live_ai_mod.drain_agent_results()
-    assert len(pending) == 2  # both delivered
-    assert max_active[0] == 1  # strictly sequential
-    pool.stop()
-
-
-def test_async_unknown_agent_returns_error_immediately(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], async_delegation=True)
-    with pytest.raises(KeyError, match="Available: glm"):
-        pool.ask("nope", "hi")
-    pool.stop()
-
-
-def test_synchronous_mode_unchanged(monkeypatch, tmp_path):
-    """Without the flag, ask() blocks and returns the answer (historical)."""
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    agent = pool.agents["glm"]
-    _scripted_agent(agent, [("the answer", [])])
-    assert pool.ask("glm", "hi") == "the answer"  # blocking, direct answer
-    assert live_ai_mod.drain_agent_results() == []  # nothing queued
-
-
-# ------------------------------------------------- task 4: async e2e smoke
-
-
-def test_e2e_async_delegation_receipt_and_delivery(monkeypatch, tmp_path):
-    """Full async flow: receipt -> worker runs -> delivery on next turn.
-
-    Offline pool with async_delegation = true; the delegation tool returns a
-    receipt immediately, the submitted delegation runs to completion, and a
-    session turn injects the worker answer into the main agent's history.
-    """
-    import threading
-    import time
-    from tests.test_live_ai import _fake_openai
-
-    _fake_openai(monkeypatch)
-    monkeypatch.setenv("TEST_API_KEY", "k")
-    config = _pool_config(tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    })
-    settings = {"count": 1, "models": ["glm"], "system_prompts": [None],
-                "quiet": True, "monitor": set(),
-                "monitor_log_file": "agents.jsonl", "monitor_buffer": 100,
-                "async_delegation": True}
-    pool = live_ai_mod.AgentPool(config, settings)
-    live_ai_mod.bind_agent_pool(pool)
-    try:
-        agent = pool.agents["glm"]
-        agent._stream = _QuietRoundStream()
-        agent._context_window = 1024
-        agent._messages = [{"role": "system", "content": "s"}]
-        agent.tool_definitions = []
-        agent._tool_impls = {}
-        agent._stream_round = lambda tools: ("worker answer", [])
-
-        receipt = live_ai_mod.ask_agent("glm", "summarize the news")
-        assert "Delegated task" in receipt and "(async)" in receipt
-        receipt_id = receipt.split(" ")[2]
-
-        # wait for the background worker to finish and queue the delivery
-        deadline = time.monotonic() + 5
-        pending = []
-        while time.monotonic() < deadline:
-            pending = live_ai_mod.drain_agent_results()
-            if pending:
-                break
-            time.sleep(0.02)
-        assert len(pending) == 1
-        kind, delegation_id, text = pending[0]
-        assert kind == "delegation" and delegation_id == receipt_id
-        assert "Worker glm finished delegated task" in text
-        assert "worker answer" in text
-
-        # a session turn injects the delivery into the main agent's history
-        from tests.conftest import FakeAgent
-        from src.session import ConversationSession
-        main_agent = FakeAgent()
-        main_agent.messages = []
-        live_ai_mod.queue_agent_result(kind, delegation_id, text)  # re-queue
-        it = iter(["thanks", "/quit"])
-        ConversationSession(main_agent, lambda: next(it)).run()
-        contents = [m["content"] for m in main_agent.messages
-                    if m["role"] == "assistant"]
-        assert any("Worker glm finished delegated task" in c for c in contents)
-    finally:
-        live_ai_mod.bind_agent_pool(None)
-        pool.stop()
