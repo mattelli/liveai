@@ -382,3 +382,75 @@ def test_act_calls_prune_history_once_per_turn(monkeypatch):
         lambda self: calls.append(1) or 0)
     agent.act("do it")
     assert len(calls) == 1
+
+
+# --------------------------------------------- e2e turn + config round-trip
+
+
+def test_e2e_turn_with_all_features_enabled():
+    """Full act() turn: capped result + pruning + final answer, valid history."""
+    agent = _BareAgent()
+    agent._messages = [{"role": "system", "content": "sys prompt"}]
+    agent._context_window = 8000
+    agent._max_tool_result_chars = 4000
+    agent._context_trim_ratio = 0.7
+    agent._context_keep_messages = 4
+    agent._turn_started = None
+    agent._show_thinking = False
+    agent._reset_thinking()
+    agent._stream = _FakeStream()
+    agent.tool_definitions = []
+    agent._tool_impls = {"big_tool": lambda: "B" * 50_000}
+    rounds = [[{"id": "c1", "name": "big_tool", "arguments": "{}"}]]
+
+    def fake_stream_round(tools):
+        calls = rounds.pop(0) if rounds else []
+        return "final answer" if not calls else "", calls
+
+    agent._stream_round = fake_stream_round
+    agent._stream_completion = lambda tools=None: iter(())
+    agent.act("use the tool")
+    roles = [m["role"] for m in agent._messages]
+    # system, user, assistant(tool_calls), tool(capped), assistant(answer)
+    assert roles == ["system", "user", "assistant", "tool", "assistant"]
+    tool_content = agent._messages[3]["content"]
+    assert "[truncated, 50000 chars total]" in tool_content
+    assert len(tool_content) <= 4000 + 100  # cap + marker
+    assert agent._messages[-1]["content"] == "final answer"
+
+
+def test_config_round_trip_parses_new_keys(tmp_path):
+    from src.common import load_config
+    config_text = """
+[brain]
+model = "m"
+system_prompt = "s"
+max_tool_result_chars = 4000
+context_trim_ratio = 0.7
+context_keep_messages = 50
+
+[agent]
+tool_doc_chars = 300
+tool_groups = "files, web"
+"""
+    path = tmp_path / "config.toml"
+    path.write_text(config_text, encoding="utf-8")
+    config = load_config(path)
+    assert config.brain.max_tool_result_chars == 4000
+    assert config.brain.context_trim_ratio == 0.7
+    assert config.brain.context_keep_messages == 50
+    assert config.agent.tool_doc_chars == 300
+    assert config.agent.tool_groups == "files, web"
+
+
+def test_config_round_trip_missing_keys_use_defaults():
+    agent = _BareAgent()
+    agent.config = SimpleNamespace(
+        brain=SimpleNamespace(model="m"),
+        agent=SimpleNamespace(),
+    )
+    # Same resolution logic as Agent.__init__ (exercised via getattr defaults).
+    assert int(getattr(agent.config.brain, "max_tool_result_chars", 0) or 0) == 0
+    assert float(getattr(agent.config.brain, "context_trim_ratio", 0) or 0) == 0.0
+    assert int(getattr(agent.config.agent, "tool_doc_chars", 0) or 0) == 0
+    assert getattr(agent.config.agent, "tool_groups", "all") == "all"

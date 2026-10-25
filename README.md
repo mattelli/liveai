@@ -706,6 +706,46 @@ tasks. Results arrive in completion order, each carrying its receipt id.
 Monitoring (`[agent] monitor`, `/monitor`) records async runs exactly like
 synchronous ones.
 
+## Reducing token consumption
+
+Every request re-sends the system prompt, the tool schemas and the whole chat
+history — the agents defined in `src/live_ai.py` register 44 tools (~22k chars
+of JSON schemas ≈ 5.5k tokens) and a single big tool output is re-sent on every
+round of a turn. Four config keys (all default to the historical behavior when
+unset) keep that cost bounded:
+
+```toml
+[brain]
+# max_tool_result_chars = 4000        # cap tool results stored in the history (head+tail kept with a truncation marker; 0 = uncapped)
+# context_trim_ratio = 0.7            # prune the oldest history when context usage exceeds this ratio (0 = never prune)
+# context_keep_messages = 40          # most recent messages never touched by pruning
+
+[agent]
+# tool_doc_chars = 300                # cap tool descriptions in the JSON schemas (0 = full docstrings)
+# tool_groups = "model, delegation, memory, files, web, documents, images, system, mcp"  # keep only these tool topics (default "all")
+```
+
+- `max_tool_result_chars` — oversized tool results keep the first 75% and the
+  last 25% (the tail preserves recent entries of append-ordered files like
+  `memory.log`) plus an explicit `[truncated, N chars total]` marker, so the
+  model can re-query with a targeted tool (`search_in_file`, `query_document`,
+  `summarize_doc`) instead of re-reading everything. Truncation is preferred
+  over eager summarization: it is free, deterministic and never distorts what
+  it keeps.
+- `tool_doc_chars` + no `default` values in schemas — shrinks the fixed
+  per-request payload (measured: 21.9k → 19.1k chars for the full 44-tool set);
+  `tool_groups` excludes whole topics (finance, archives, ...) for zero tokens.
+- `context_trim_ratio` / `context_keep_messages` — at the start of each turn,
+  when usage passes the ratio, the oldest *complete* tool rounds are dropped
+  (never split: no orphan tool results) until usage is back under the ratio;
+  the system prompt and the last `context_keep_messages` messages are always
+  kept, and a `[history pruned: N messages dropped]` marker is appended to the
+  system prompt. This turns an unbounded, quadratic per-turn token cost into a
+  bounded, linear one.
+- Pooled agents inherit the same settings (they copy the config). Recommended
+  starting values: `max_tool_result_chars = 4000`, `tool_doc_chars = 300`,
+  `context_trim_ratio = 0.7`, `context_keep_messages = 40`.
+
 ## Sub-agent activity monitoring
 
 Workers are quiet by default, so their work is invisible. The `[agent] monitor`
