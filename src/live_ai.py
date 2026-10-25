@@ -147,7 +147,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     """
     return [
         agent.model_info,
-        ask_agent, run_parallel_agents, agent_activity,
+        agent_activity,
         recall_memory, store_memory, clear_chat,
         image_response, allow_speech,
         schedule_task, list_scheduled_tasks, cancel_scheduled_task,
@@ -209,7 +209,7 @@ def _select_tools(tools: list[Callable], groups) -> list[Callable]:
 # or test doubles) fall under "other", listed last.
 _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
     "model": ("model_info",),
-    "delegation": ("ask_agent", "run_parallel_agents", "agent_activity"),
+    "monitoring": ("agent_activity",),
     "memory": ("recall_memory", "store_memory", "clear_chat"),
     "speech": ("allow_speech",),
     "scheduling": ("schedule_task", "list_scheduled_tasks",
@@ -506,12 +506,12 @@ def bind_monitor(monitor: AgentMonitor | None) -> None:
 
 ## background results waiting for the main agent (task 1) ##
 
-# Results produced by background workers (scheduled tasks, async delegations)
-# and waiting to be injected into the main agent's history. Entries are
-# (kind, id, text) with kind in {"scheduled", "delegation"}; the session
-# drains the queue at the start of every turn. Background threads only append
-# under the lock; the main thread is the sole consumer (atomic swap), so
-# history writes never race an in-flight tool-call round.
+# Results produced by background workers (scheduled tasks) and waiting to be
+# injected into the main agent's history. Entries are (kind, id, text) with
+# kind "scheduled"; the session drains the queue at the start of every turn.
+# Background threads only append under the lock; the main thread is the sole
+# consumer (atomic swap), so history writes never race an in-flight tool-call
+# round.
 _BACKGROUND_RESULTS: list[tuple[str, str, str]] = []
 _BACKGROUND_RESULTS_LOCK = threading.Lock()
 
@@ -538,81 +538,23 @@ def drain_agent_results_of_kind(kind: str) -> list[tuple[str, str]]:
     return [(result_id, text) for _, result_id, text in matching]
 
 
-## delegation tools (agent-as-tool) ##
-
-# The pool is injected by main.py via bind_agent_pool (same seam pattern as
-# src.tools.configure); the tools below are no-ops until it is bound.
-_POOL: "AgentPool | None" = None
-
-
-def bind_agent_pool(pool) -> None:
-    """Bind the AgentPool built in main.py so the delegation tools can use it."""
-    global _POOL
-    _POOL = pool
-
-
 # Per-thread name of the agent currently running a tool call ('' = main agent).
-# Thread-local because ask_parallel fans out on worker threads.
+# The scheduler sets it to 'scheduler' so its executor agent's tool calls are
+# reported to the activity monitor.
 _TOOL_CONTEXT = threading.local()
 
 
 def _current_agent_name() -> str:
-    """Name of the pooled agent currently executing a tool call ('' when main)."""
+    """Name of the agent currently executing a tool call ('' when main)."""
     return getattr(_TOOL_CONTEXT, "agent_name", "") or ""
-
-
-@dump_func_call
-def ask_agent(agent: str, prompt: str) -> str:
-    """
-    Delegate a task to a named sub-agent and return its final answer.
-    The sub-agent runs its own tool loop to accomplish the task.
-    Valid agent names are the [agent] agent_models entry names from the
-    configuration (e.g. "ternary-bonsai"); the error message lists them
-    when a name is unknown.
-    """
-    if _POOL is None:
-        return "Error: no agent pool configured (set [agent] parallel_agents)"
-    try:
-        return _POOL.ask(agent, prompt, caller=_current_agent_name())
-    except (KeyError, ValueError) as exc:
-        return f"Error: {exc}"
-
-
-@dump_func_call
-def run_parallel_agents(tasks: list[dict]) -> str:
-    """
-    Run several sub-agents concurrently. Each task is an object with
-    "agent" (name) and "prompt" (text) keys. Valid agent names are the
-    [agent] agent_models entry names from the configuration (e.g.
-    "ternary-bonsai"); the error message lists them when a name is
-    unknown. Returns a JSON list of {"agent", "prompt", "answer"} entries
-    for aggregation.
-    """
-    if _POOL is None:
-        return "Error: no agent pool configured (set [agent] parallel_agents)"
-    if not isinstance(tasks, list) or not tasks:
-        return "Error: tasks must be a non-empty list of {agent, prompt} objects"
-    normalized: list[tuple[str, str]] = []
-    for index, task in enumerate(tasks):
-        if not isinstance(task, dict) or not task.get("agent") or not task.get("prompt"):
-            return f"Error: task[{index}] needs 'agent' and 'prompt' keys"
-        normalized.append((str(task["agent"]), str(task["prompt"])))
-    try:
-        results = _POOL.ask_parallel(normalized, caller=_current_agent_name())
-    except (KeyError, ValueError) as exc:
-        return f"Error: {exc}"
-    return json.dumps([
-        {"agent": agent, "prompt": prompt, "answer": answer}
-        for (agent, prompt), answer in zip(normalized, results)
-    ])
 
 
 def agent_activity(last: int = 20) -> str:
     """
     Report the recent sub-agent activity: the last `last` events
-    (delegations, tool calls, answers) as human-readable one-line strings,
-    oldest first. Useful when the user asks what the sub-agents did or
-    what is currently running in the agent pool.
+    (scheduled-task runs, tool calls, answers) as human-readable one-line
+    strings, oldest first. Useful when the user asks what the scheduled tasks
+    did or what is currently running.
     """
     monitor = get_monitor()
     if monitor is None:
@@ -1233,7 +1175,7 @@ class OpenAICore:
         if annotation is dict or origin is dict:
             # A bare ``dict`` annotation has no origin (get_origin(dict) is
             # None); without this check it fell through to {"type": "string"},
-            # telling models that e.g. run_parallel_agents' task objects were
+            # telling models that e.g. schedule_task's task objects were
             # plain strings.
             return {"type": "object"}
         if origin is Union or origin is types.UnionType:
@@ -2206,12 +2148,9 @@ class AgentPool:
         if monitor is not None:
             monitor.record(agent, event, **fields)
 
-    def ask(self, agent_name: str, prompt: str, caller: str = "") -> str:
+    def ask(self, agent_name: str, prompt: str) -> str:
         """Delegate a prompt to one pooled agent; return its final answer.
 
-        ``caller`` is the name of the agent currently running the tool call
-        ('' = the main agent). A pooled agent delegating to itself (or to any
-        pooled agent) is refused: nested delegation would deadlock the pool.
         The call blocks until the worker finishes and returns the answer.
         """
         name = str(agent_name or "").strip()
@@ -2219,10 +2158,6 @@ class AgentPool:
         if agent is None:
             raise KeyError(
                 f"Unknown agent {name!r}. Available: " + ", ".join(self.agents))
-        if caller:
-            raise ValueError(
-                f"Nested delegation refused: pooled agent {caller!r} cannot call "
-                "ask_agent/run_parallel_agents (would deadlock the pool)")
         return self._run_delegation_blocking(name, prompt)
 
     def _run_delegation_blocking(self, name: str, prompt: str) -> str:
@@ -2239,22 +2174,17 @@ class AgentPool:
             set_subagent_dump(True)
         return agent.messages[-1]["content"]
 
-    def ask_parallel(self, tasks: list[tuple[str, str]],
-                     caller: str = "") -> list[str]:
+    def ask_parallel(self, tasks: list[tuple[str, str]]) -> list[str]:
         """Run (agent_name, prompt) tasks concurrently; results in task order.
 
         Tasks on *distinct* agents fan out on a thread pool; tasks naming the
         *same* agent run sequentially on one worker: a single ``Agent`` must
         never run ``act()`` concurrently (shared history/stream state would
         corrupt tool-call groups -> server-side "incomplete parallel
-        tool-call group" errors). See ``ask`` for the ``caller`` rule.
+        tool-call group" errors).
         """
         if not tasks:
             return []
-        if caller:
-            raise ValueError(
-                f"Nested delegation refused: pooled agent {caller!r} cannot call "
-                "ask_agent/run_parallel_agents (would deadlock the pool)")
         # Group tasks by agent, preserving task order within each group.
         by_agent: dict[str, list[tuple[int, str]]] = {}
         for index, (name, prompt) in enumerate(tasks):
@@ -2263,7 +2193,6 @@ class AgentPool:
 
         def run_one_agent(name: str, items: list[tuple[int, str]]) -> None:
             for index, prompt in items:
-                # caller is always "" here (nested delegation raised above).
                 results[index] = self.ask(name, prompt)
 
         with ThreadPoolExecutor(max_workers=len(by_agent) or 1) as executor:

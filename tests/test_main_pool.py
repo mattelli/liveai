@@ -15,17 +15,18 @@ class _FakeAgent:
 
 @pytest.fixture
 def pool_env(monkeypatch):
-    """Patch AgentPool + bind_agent_pool; return the captured bindings."""
+    """Patch AgentPool; return the captured pool instances."""
     import src.live_ai as live_ai
 
     _FakeAgent.instances = []
     captured = []
-    monkeypatch.setattr(
-        live_ai, "AgentPool",
-        lambda config, settings: types.SimpleNamespace(config=config, settings=settings))
-    monkeypatch.setattr(
-        live_ai, "bind_agent_pool",
-        lambda pool: captured.append(pool))
+
+    def _fake_pool(config, settings):
+        pool = types.SimpleNamespace(config=config, settings=settings)
+        captured.append(pool)
+        return pool
+
+    monkeypatch.setattr(live_ai, "AgentPool", _fake_pool)
     return captured
 
 

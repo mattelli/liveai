@@ -123,7 +123,7 @@ def _setup_agent_pool(config) -> None:
     untouched. Failures raise: a misconfigured pool must not start silently.
     """
     global _AGENT_POOL
-    from src.live_ai import AgentPool, agent_pool_settings, bind_agent_pool
+    from src.live_ai import AgentPool, agent_pool_settings
 
     agent_cfg = getattr(config, "agent", None)
     n = getattr(agent_cfg, "parallel_agents", 0) or 0
@@ -136,7 +136,6 @@ def _setup_agent_pool(config) -> None:
             f"{len(settings['models'])} entries: add one models.json entry "
             "name per worker agent")
     _AGENT_POOL = AgentPool(config, settings)
-    bind_agent_pool(_AGENT_POOL)
 
 
 def _setup_monitor(config) -> None:

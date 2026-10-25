@@ -456,115 +456,25 @@ def test_agent_pool_per_agent_system_prompt(monkeypatch, tmp_path):
     assert pool.agents["glm"]._messages[0]["content"] == "You research the web."
 
 
-# ------------------------------------------- task 5: delegation tools
+# ------------------------------------------- delegation tools removed
 
 
-def test_default_tools_include_delegation_tools():
+def test_delegation_tools_removed():
+    """ask_agent / run_parallel_agents are gone; agent_activity stays."""
+    import src.live_ai as live_ai_mod
+
+    assert not hasattr(live_ai_mod, "ask_agent")
+    assert not hasattr(live_ai_mod, "run_parallel_agents")
+    assert not hasattr(live_ai_mod, "bind_agent_pool")
+    assert not hasattr(live_ai_mod, "_POOL")
+    assert hasattr(live_ai_mod, "agent_activity")  # kept for the scheduler
+
+    # ... and from the default tool set of a fresh agent.
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     names = [tool.__name__ for tool in agent._build_tools()]
-    assert "ask_agent" in names and "run_parallel_agents" in names
-
-
-def test_ask_agent_without_pool_returns_error():
-    monkeypatch_state = live_ai_mod._POOL
-    try:
-        live_ai_mod._POOL = None
-        assert "no agent pool configured" in live_ai_mod.ask_agent("glm", "hi")
-        assert "no agent pool configured" in live_ai_mod.run_parallel_agents(
-            [{"agent": "glm", "prompt": "hi"}])
-    finally:
-        live_ai_mod._POOL = monkeypatch_state
-
-
-def test_ask_agent_delegates_to_pool(monkeypatch, tmp_path):
-    calls = []
-
-    class _FakePool:
-        def ask(self, agent_name, prompt, caller=""):
-            calls.append((agent_name, prompt, caller))
-            return f"answer from {agent_name}"
-
-    monkeypatch.setattr(live_ai_mod, "_POOL", _FakePool())
-    assert live_ai_mod.ask_agent("glm", "do research") == "answer from glm"
-    assert calls == [("glm", "do research", "")]  # main agent: no caller name
-
-
-def test_run_parallel_agents_delegates_to_pool(monkeypatch, tmp_path):
-    captured = {}
-
-    class _FakePool:
-        def ask_parallel(self, tasks, caller=""):
-            captured["tasks"], captured["caller"] = tasks, caller
-            return ["a1", "a2"]
-
-    monkeypatch.setattr(live_ai_mod, "_POOL", _FakePool())
-    result = live_ai_mod.run_parallel_agents(
-        [{"agent": "glm", "prompt": "t1"}, {"agent": "qwen", "prompt": "t2"}])
-    assert captured["tasks"] == [("glm", "t1"), ("qwen", "t2")]
-    assert captured["caller"] == ""
-    assert json.loads(result) == [
-        {"agent": "glm", "prompt": "t1", "answer": "a1"},
-        {"agent": "qwen", "prompt": "t2", "answer": "a2"},
-    ]
-
-
-def test_run_parallel_agents_validates_tasks(monkeypatch, tmp_path):
-    class _FakePool:
-        def ask_parallel(self, tasks, caller=""):
-            return []
-
-    monkeypatch.setattr(live_ai_mod, "_POOL", _FakePool())
-    assert "must be a non-empty list" in live_ai_mod.run_parallel_agents([])
-    assert "needs 'agent' and 'prompt'" in live_ai_mod.run_parallel_agents(
-        [{"agent": "glm"}])
-    assert "needs 'agent' and 'prompt'" in live_ai_mod.run_parallel_agents(
-        ["not a dict"])
-
-
-def test_nested_delegation_is_refused(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    agent = pool.agents["glm"]
-    agent._stream = _QuietRoundStream()
-    agent._context_window = 1024
-    agent.tool_definitions = []
-    agent._tool_impls = {}
-    scripted = iter([("trying to delegate", [])])
-    agent._stream_round = lambda tools: next(scripted)
-
-    # A pooled agent (caller set via thread-local) must be refused
-    live_ai_mod._TOOL_CONTEXT.agent_name = "glm"
-    try:
-        with pytest.raises(ValueError, match="Nested delegation refused"):
-            pool.ask("glm", "delegate?", caller="glm")
-        monkeypatch.setattr(live_ai_mod, "_POOL", pool)
-        assert "Nested delegation refused" in live_ai_mod.ask_agent("glm", "hi")
-    finally:
-        live_ai_mod._TOOL_CONTEXT.agent_name = ""
-
-
-def test_pooled_agent_act_sets_thread_local_name(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"])
-    agent = pool.agents["glm"]
-    agent._stream = _QuietRoundStream()
-    agent._context_window = 1024
-    agent.tool_definitions = []
-    agent._tool_impls = {}
-    seen = {}
-
-    def scripted(tools):
-        seen["name"] = live_ai_mod._current_agent_name()
-        return ("done", [])
-
-    agent._stream_round = scripted
-    pool.ask("glm", "hi")
-    assert seen["name"] == "glm"
-    assert live_ai_mod._current_agent_name() == ""  # cleared afterwards
+    assert "ask_agent" not in names
+    assert "run_parallel_agents" not in names
+    assert "agent_activity" in names
 
 
 # ------------------------------------------- max_act_rounds from [agent] config

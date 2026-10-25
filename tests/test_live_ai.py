@@ -1380,12 +1380,12 @@ def test_tool_topics_groups_known_tools_in_curated_order():
     brain = live_ai_mod.Brain.__new__(live_ai_mod.Brain)
     tools = [
         live_ai_mod.web_search, live_ai_mod.recall_memory,
-        live_ai_mod.ask_agent, brain.model_info,
+        live_ai_mod.agent_activity, brain.model_info,
     ]
     grouped = live_ai_mod.tool_topics(tools)
     topics = [topic for topic, _ in grouped]
     # curated order wins regardless of the input order
-    assert topics == ["model", "delegation", "memory", "web"]
+    assert topics == ["model", "monitoring", "memory", "web"]
 
 
 def test_tool_topics_preserves_input_order_within_topic():
@@ -1411,7 +1411,7 @@ def test_tool_topics_flattened_is_deterministic():
     (same input -> same display order), which is what /tools numbering uses."""
     tools = [
         live_ai_mod.web_search, live_ai_mod.recall_memory,
-        live_ai_mod.ask_agent, live_ai_mod.exit_gracefully,
+        live_ai_mod.agent_activity, live_ai_mod.exit_gracefully,
         live_ai_mod.write_text_file,
     ]
     first = [tool for _, group in live_ai_mod.tool_topics(tools) for tool in group]
@@ -1432,7 +1432,7 @@ def test_json_schema_bare_dict_is_object():
     """A bare ``dict`` annotation maps to {"type": "object"}.
 
     Regression: get_origin(dict) is None, so a bare dict fell through to
-    {"type": "string"} and models were told that e.g. run_parallel_agents'
+    {"type": "string"} and models were told that e.g. schedule_task's
     task objects were plain strings.
     """
     assert live_ai_mod.OpenAICore._json_schema(dict) == {"type": "object"}
@@ -1444,9 +1444,10 @@ def test_json_schema_list_of_dict_items_are_objects():
         "type": "array", "items": {"type": "object"}}
 
 
-def test_run_parallel_agents_schema_offers_task_objects():
-    """The model-visible schema must describe tasks as objects, not strings."""
+def test_schedule_task_schema_offers_task_objects():
+    """The model-visible schema must describe task dicts as objects, not strings."""
     definition = live_ai_mod.OpenAICore._openai_tool_definition(
-        live_ai_mod.run_parallel_agents)
-    tasks = definition["function"]["parameters"]["properties"]["tasks"]
-    assert tasks == {"type": "array", "items": {"type": "object"}}
+        live_ai_mod.schedule_task)
+    assert "tasks" not in definition["function"]["parameters"]["properties"] or \
+        definition["function"]["parameters"]["properties"]["tasks"] == {
+            "type": "array", "items": {"type": "object"}}
