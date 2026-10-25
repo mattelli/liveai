@@ -67,6 +67,57 @@ def test_read_text_file_missing_returns_error(tmp_path):
     assert "Unable to read" in tools.read_text_file(str(tmp_path / "nope.txt"))
 
 
+def test_read_text_file_window(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
+    out = tools.read_text_file(str(target), start_line=3, line_count=2)
+    assert out.startswith("line3\nline4")
+    assert "windowed" in out  # more lines remain -> marker guides the re-read
+
+
+def test_read_text_file_window_exactly_to_end_has_no_marker(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
+    out = tools.read_text_file(str(target), start_line=9, line_count=2)
+    assert out == "line9\nline10"  # window reaches EOF -> no marker
+
+
+def test_read_text_file_window_to_end(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("\n".join(f"line{i}" for i in range(1, 6)), encoding="utf-8")
+    out = tools.read_text_file(str(target), start_line=4)
+    assert out == "line4\nline5"
+
+
+def test_read_text_file_window_past_eof_clamps(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("one\ntwo", encoding="utf-8")
+    assert tools.read_text_file(str(target), start_line=5, line_count=10) == ""
+
+
+def test_read_text_file_window_marker_when_more_remain(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
+    out = tools.read_text_file(str(target), start_line=1, line_count=3)
+    assert "line1\nline2\nline3" in out
+    assert "windowed" in out and "10 total" in out
+
+
+def test_read_text_file_number_lines(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
+    out = tools.read_text_file(str(target), number_lines=True)
+    assert out == "1: alpha\n2: beta\n3: gamma"
+
+
+def test_read_text_file_number_lines_with_window(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("\n".join(f"line{i}" for i in range(1, 13)), encoding="utf-8")
+    out = tools.read_text_file(str(target), start_line=10, line_count=3,
+                               number_lines=True)
+    assert out == "10: line10\n11: line11\n12: line12"
+
+
 # ------------------------------------------------------------------ T2 write_text_file
 
 
@@ -93,6 +144,35 @@ def test_write_text_file_overwrite_true(tmp_path):
 
 def test_write_text_file_rejects_directory(tmp_path):
     assert "is a directory" in tools.write_text_file(str(tmp_path), "x")
+
+
+def test_write_text_file_append_creates_missing_file(tmp_path):
+    target = tmp_path / "a.txt"
+    out = tools.write_text_file(str(target), "first", append=True)
+    assert target.read_text(encoding="utf-8") == "first"
+    assert "File created" in out
+
+
+def test_write_text_file_append_adds_to_end(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old", encoding="utf-8")
+    out = tools.write_text_file(str(target), "new", append=True)
+    assert target.read_text(encoding="utf-8") == "oldnew"
+    assert "Appended" in out
+
+
+def test_write_text_file_append_twice(tmp_path):
+    target = tmp_path / "a.txt"
+    tools.write_text_file(str(target), "a\n", append=True)
+    tools.write_text_file(str(target), "b\n", append=True)
+    assert target.read_text(encoding="utf-8") == "a\nb\n"
+
+
+def test_write_text_file_append_ignores_overwrite_flag(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("old", encoding="utf-8")
+    tools.write_text_file(str(target), "new", overwrite=True, append=True)
+    assert target.read_text(encoding="utf-8") == "oldnew"
 
 
 # ------------------------------------------------------------------ T3 search/replace

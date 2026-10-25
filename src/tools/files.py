@@ -12,31 +12,62 @@ __all__ = [
 
 
 @dump_func_call
-def read_text_file(file: str) -> str:
+def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
+                   number_lines: bool = False) -> str:
     """
     Read a text file and return its contents as a string.
     Useful when user asks for content description.
+    Optional start_line (1-based) and line_count read only a window of the
+    file, e.g. after search_in_file / search_pattern_in_files report line
+    numbers. number_lines prefixes each line with its number ("12: text"),
+    useful to cite exact positions for replace_string_in_file.
     """
     file_path = Path(file).resolve()
-    if file_path.exists() and file_path.is_file():
-        try:
-            return file_path.read_text(encoding="utf-8")
-        except Exception as exc:
-            return f"Error: {exc!r}"
-    return f"Unable to read '{file}'"
+    if not (file_path.exists() and file_path.is_file()):
+        return f"Unable to read '{file}'"
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except Exception as exc:
+        return f"Error: {exc!r}"
+    if start_line > 0 or line_count > 0 or number_lines:
+        lines = text.splitlines()
+        start = max(start_line - 1, 0) if start_line > 0 else 0
+        window = lines[start:start + line_count] if line_count > 0 else lines[start:]
+        if number_lines:
+            width = len(str(start + len(window)))
+            window = [f"{start + i + 1:>{width}}: {line}"
+                      for i, line in enumerate(window)]
+        if line_count > 0 and start + line_count < len(lines):
+            window.append(
+                f"… [windowed: lines {start + 1}-{start + line_count} of "
+                f"{len(lines)} total — raise line_count or re-read for more]")
+        return "\n".join(window)
+    return text
 
 
 @dump_func_call
-def write_text_file(file: str, content: str, overwrite: bool = False) -> str:
+def write_text_file(file: str, content: str, overwrite: bool = False,
+                    append: bool = False) -> str:
     """
     Write a text file with the given its path and string content.
     Useful when user asks for content generation, e.g. code generation.
-    Existing files are only replaced when ``overwrite`` is True.
+    Existing files are only replaced when ``overwrite`` is True; with
+    ``append`` the content is added to the end of an existing file instead
+    (cheaper than resending the whole file for incremental updates).
+    For modifying existing files prefer replace_string_in_file: it sends
+    only the changed fragment, not the whole file.
     """
     dest_path = Path(file).resolve()
     if dest_path.exists():
         if dest_path.is_dir():
             return f"Error: '{dest_path}' is a directory."
+        if append:
+            try:
+                with open(dest_path, "a", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception as exc:
+                return f"Error: {exc!r}"
+            return f"Appended to '{dest_path.resolve()}'"
         if not overwrite:
             return "File already exists."
     try:
