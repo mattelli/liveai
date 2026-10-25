@@ -8,7 +8,7 @@ from types import SimpleNamespace
 def _drain_background_results():
     """Keep background results from leaking between tests.
 
-    Background workers (scheduler tasks, async delegations) queue answers
+    Background workers (scheduler tasks) queue answers
     into a module-level list consumed by the session on its next turn; a
     leftover entry from one test would crash or pollute an unrelated test's
     fake agent.

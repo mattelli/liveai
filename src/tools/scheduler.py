@@ -453,11 +453,11 @@ _AGENT_FACTORY = None
 
 
 def _default_agent_factory():
-    """Build the dedicated isolated execution agent (AgentPool recipe).
+    """Build the dedicated isolated execution agent.
 
-    Same pattern as pooled agents: quiet, tool-isolated, built from the app
-    config kept by ``configure()``. Returns ``None`` when the config is
-    missing or agent construction fails (the executor then only logs).
+    Quiet, tool-isolated, built from the app config kept by ``configure()``.
+    Returns ``None`` when the config is missing or agent construction fails
+    (the executor then only logs).
     """
     config = _CONFIG.get("config")
     if config is None:
@@ -505,11 +505,11 @@ def _agent_executor(task: ScheduledTask) -> None:
     thread-safe). Agent failures are logged, never raised: the scheduler
     thread must survive a broken model endpoint.
 
-    The run is monitored like pooled-agent delegations when ``[agent] monitor``
-    is enabled: a ``start`` event before ``act()``, an ``answer`` event with
-    the final message afterwards, and per-tool ``tool_call``/``tool_result``
-    events (via the 'scheduler' thread-local agent name). With monitoring off
-    the monitor is None and nothing is recorded.
+    The run is monitored when ``[agent] monitor`` is enabled: a ``start``
+    event before ``act()``, an ``answer`` event with the final message
+    afterwards, and per-tool ``tool_call``/``tool_result`` events (via the
+    'scheduler' thread-local agent name). With monitoring off the monitor is
+    None and nothing is recorded.
     """
     global _EXECUTOR_AGENT
     agent = _EXECUTOR_AGENT
@@ -559,7 +559,7 @@ def drain_scheduled_results() -> list[tuple[str, str]]:
     """Return and clear the scheduled-task results pending main-agent delivery.
 
     Thin wrapper over the shared background-results queue in ``src.live_ai``
-    (one delivery mechanism for scheduled tasks and async delegations).
+    (one delivery mechanism for background results).
     """
     from src.live_ai import drain_agent_results_of_kind  # lazy: circular at import
     return drain_agent_results_of_kind("scheduled")

@@ -613,104 +613,20 @@ Notes:
 - The same validation applies at startup for the first entry: a missing file,
   invalid JSON or a non-resolvable API key aborts the launch with a clear
   message.
+## Multi-agent pool (removed)
 
-## Multi-agent pool (delegation + parallel sub-agents)
-
-The assistant can run extra **worker agents** beside the main one (agent-1,
-the one the user talks to). The main agent delegates tasks to them through two
-tools, and each worker runs its own tool loop with its own model, history and
-tool instances (the agent-as-tool pattern):
-
-| Tool | Behavior |
-|---|---|
-| `ask_agent(agent, prompt)` | Delegates one task to a named sub-agent; the worker runs its own `act()` round loop (using its own tools, e.g. `web_search`) and its **final answer** is returned to the main agent as a normal tool result. |
-| `run_parallel_agents(tasks)` | Fans out several independent tasks concurrently (thread pool; LLM calls are I/O-bound). Each task is `{"agent": name, "prompt": text}`; returns a JSON list of `{"agent", "prompt", "answer"}` in task order for aggregation. |
-
-The pool is declared in `config.toml` under `[agent]`:
-
-```toml
-[agent]
-bootstrap_prompt = "..."            # unchanged
-parallel_agents = 1                 # extra agents beside the running one (0 = off)
-agent_models = ["ollama-llama32"]   # models.json entry names, one per worker
-# agent_system_prompts = []         # optional per-agent system prompts
-# agent_quiet = true                # workers don't print/speak (default true)
-```
-
-- `agent_models` entries are **models.json entry names** (see
-  [Model switching (`/model`)](#model-switching-model)); each worker boots from
-  its entry, so a worker can use a different provider or a local server than
-  the main agent. Missing keys default to `parallel_agents = 0` → the app
-  behaves exactly as the single-agent setup.
-- With `parallel_agents = 0` nothing is built at startup.
-- Workers are **quiet**: they never print to the console and never speak, so
-  only agent-1's output and voice reach the user.
-- Each worker owns **its own tool instances** (memory/vision state is
-  per-agent, never shared module state), so parallel workers cannot read or
-  clear each other's history.
-- **Nested delegation is refused**: a worker calling `ask_agent` /
-  `run_parallel_agents` gets an error instead of deadlocking the pool.
-- Unknown model entry names or a missing `models_file` fail fast at startup
-  with a clear message; `ask_agent` with an unknown agent name returns an
-  error string to the model (never raises).
-
-Example flow: the user asks about the weather; agent-1 calls
-`ask_agent(agent="ollama-llama32", prompt="Get current weather in Torino")`,
-the worker runs `web_search` on its own and returns its summary, and agent-1
-merges it into its reply. Several research questions can be answered at once
-with `run_parallel_agents`.
-
-Notes:
-
-- Only final answers cross the agent boundary (no partial streaming), which
-  keeps each agent's context small.
-- Ctrl+C cancels the main agent's turn; running workers finish their current
-  round.
-- On local servers (LM Studio/Ollama) workers share the server's capacity —
-  point workers at cloud endpoints in models.json for true parallelism, or
-  keep `parallel_agents = 1` on constrained machines.
-
-### Async delegation (non-blocking)
-
-By default delegation is **synchronous**: the main agent's turn blocks until
-the worker(s) finish, then the answer(s) come back as the tool result. With
-
-```toml
-[agent]
-async_delegation = true
-```
-
-the delegation tools return **immediately** with a receipt and the workers
-keep running in the background, so the user can keep chatting:
-
-- `ask_agent(agent="glm", prompt="research X")` →
-  `Delegated task d-1 to glm (async): results will be delivered when the
-  worker finishes.`
-- `run_parallel_agents(tasks=[...])` →
-  `Delegated 2 tasks (d-1, d-2) to glm, qwen (async): results will be
-  delivered as the workers finish.`
-
-When a worker finishes, its answer is injected into the main agent's history
-at the start of the next turn as an assistant message:
-
-```
-Worker glm finished delegated task d-1. Result:
-<answer>
-```
-
-Worker failures are delivered too (`Worker glm failed delegated task d-1:
-<error>`), so nothing hangs silently. The main agent can report pending work
-via `agent_activity()` (a delegation with a `start` but no `answer` event is
-still running) and the receipts in its history let it correlate ids with
-tasks. Results arrive in completion order, each carrying its receipt id.
-Monitoring (`[agent] monitor`, `/monitor`) records async runs exactly like
-synchronous ones.
+The multi-agent pool (delegation tools `ask_agent`/`run_parallel_agents`,
+async delegation receipts and the `[agent]` pool keys `parallel_agents`,
+`agent_models`, `agent_system_prompts`, `async_delegation`) has been removed:
+the app is single-agent again. Leftover pool keys in a `config.toml` are
+inert (nothing reads them anymore). The sub-agent activity monitor is kept and
+now tracks **scheduled-task runs** (see [Sub-agent activity monitoring](#sub-agent-activity-monitoring)).
 
 ## Reducing token consumption
 
 Every request re-sends the system prompt, the tool schemas and the whole chat
-history — the agents defined in `src/live_ai.py` register 44 tools (~22k chars
-of JSON schemas ≈ 5.5k tokens) and a single big tool output is re-sent on every
+history — the agents defined in `src/live_ai.py` register 42 tools (~21k chars
+of JSON schemas ≈ 5.3k tokens) and a single big tool output is re-sent on every
 round of a turn. Four config keys (all default to the historical behavior when
 unset) keep that cost bounded:
 
@@ -722,7 +638,7 @@ unset) keep that cost bounded:
 
 [agent]
 # tool_doc_chars = 300                # cap tool descriptions in the JSON schemas (0 = full docstrings)
-# tool_groups = "model, delegation, memory, files, web, documents, images, system, mcp"  # keep only these tool topics (default "all")
+# tool_groups = "model, monitoring, memory, files, web, documents, images, system, mcp"  # keep only these tool topics (default "all")
 ```
 
 - `max_tool_result_chars` — oversized tool results keep the first 75% and the
@@ -733,7 +649,7 @@ unset) keep that cost bounded:
   over eager summarization: it is free, deterministic and never distorts what
   it keeps.
 - `tool_doc_chars` + no `default` values in schemas — shrinks the fixed
-  per-request payload (measured: 21.9k → 19.1k chars for the full 44-tool set);
+  per-request payload (measured: 21.9k → 19.1k chars for the full 42-tool set);
   `tool_groups` excludes whole topics (finance, archives, ...) for zero tokens.
 - `context_trim_ratio` / `context_keep_messages` — at the start of each turn,
   when usage passes the ratio, the oldest *complete* tool rounds are dropped
@@ -742,7 +658,8 @@ unset) keep that cost bounded:
   kept, and a `[history pruned: N messages dropped]` marker is appended to the
   system prompt. This turns an unbounded, quadratic per-turn token cost into a
   bounded, linear one.
-- Pooled agents inherit the same settings (they copy the config). Recommended
+- The scheduler execution agent inherits the same settings (it copies the
+  config). Recommended
   starting values: `max_tool_result_chars = 4000`, `tool_doc_chars = 300`,
   `context_trim_ratio = 0.7`, `context_keep_messages = 40`.
 - Runtime toggling: `/tools off <tool|topic>` drops a tool's schema from every
@@ -754,8 +671,9 @@ unset) keep that cost bounded:
 
 ## Sub-agent activity monitoring
 
-Workers are quiet by default, so their work is invisible. The `[agent] monitor`
-setting makes their activity visible through independent, combinable flags
+Background agents (the scheduler's execution agent) are quiet by default, so
+their work is invisible. The `[agent] monitor` setting makes their activity
+visible through independent, combinable flags
 (comma-separated; unset/empty/`"none"` = fully quiet, as always):
 
 ```toml
@@ -765,14 +683,14 @@ monitor = "calls,log"                 # "calls" and/or "log"; empty = quiet
 # monitor_buffer = 100                # in-memory events kept for the agent_activity tool
 ```
 
-- `calls` — while a worker runs, its tool executions print the usual `[CALL]`
-  blocks live on the console, each labeled with the worker name
-  (e.g. `[CALL] web_search (ollama-llama32)(...`). The main agent's own
+- `calls` — while a scheduled task runs, its tool executions print the usual
+  `[CALL]` blocks live on the console, each labeled with the agent name
+  (e.g. `[CALL] web_search (scheduler)(...`). The main agent's own
   `[CALL]` blocks are unchanged.
-- `log` — every sub-agent event is appended as one JSON object per line to
-  `monitor_log_file` (default `agents.jsonl`): delegation `start`/`done`
+- `log` — every agent event is appended as one JSON object per line to
+  `monitor_log_file` (default `agents.jsonl`): run `start`/`answer`
   (with prompt/answer and duration) and per-tool-call `tool_call`/`tool_result`
-  events. Lines are written atomically under a lock, so parallel workers never
+  events. Lines are written atomically under a lock, so worker threads never
   interleave half-lines; the file is created lazily and a write failure
   disables the file sink without breaking the agents.
 - Both channels feed a bounded **in-memory ring buffer** (`monitor_buffer`,
@@ -781,7 +699,7 @@ monitor = "calls,log"                 # "calls" and/or "log"; empty = quiet
 The main agent can consult this buffer through the **`agent_activity(last=20)`**
 tool: it returns the recent events as human-readable one-liners (or
 `No sub-agent activity recorded.` when the buffer is empty), so you can simply
-ask *"what did the sub-agents do?"*.
+ask *"what did the scheduled tasks do?"*.
 
 In the console you can also type **`/monitor [N|clear]`** to print the last N
 events (default 20), or empty the buffer (the JSONL file is not touched).

@@ -351,11 +351,11 @@ def build_monitor(config: SimpleNamespace) -> "AgentMonitor | None":
 
 ## sub-agent activity monitor (task 2) ##
 
-# Thread-safe ring buffer of sub-agent activity events, filled by AgentPool
-# and drained by the UI (session poll / console tail / JSONL file). Kept at
-# module level so the session and any watcher see the same stream even when
-# the pool is rebuilt; a module-level lock serializes appends from the
-# parallel worker threads.
+# Thread-safe ring buffer of sub-agent activity events, filled by background
+# agents (the scheduler executor) and drained by the UI (session poll /
+# console tail / JSONL file). Kept at module level so the session and any
+# watcher see the same stream; a module-level lock serializes appends from
+# worker threads.
 MONITOR_BUFFER_DEFAULT = 100
 
 
@@ -1972,7 +1972,7 @@ class Agent(Brain):
         result = result if isinstance(result, str) else str(result)
         # Sub-agent tool activity: isolated agents report their tool
         # calls/results to the process-wide monitor (agent name comes from
-        # the thread-local set by AgentPool.ask).
+        # the thread-local set by the scheduler executor).
         monitor = get_monitor()
         if monitor is not None and _current_agent_name():
             monitor.record(_current_agent_name(), "tool_call",

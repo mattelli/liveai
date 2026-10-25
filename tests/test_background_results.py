@@ -1,4 +1,8 @@
-"""Tests for the shared background-results queue (PLAN_IMPROVE_PARALLEL task 1)."""
+"""Tests for the shared background-results queue (scheduled tasks).
+
+The queue is generic (kind, id, text); only the "scheduled" kind is produced
+by the app after the agent-pool removal.
+"""
 
 import threading
 
@@ -6,11 +10,11 @@ import src.live_ai as live_ai_mod
 
 
 def test_queue_then_drain_returns_and_empties():
-    live_ai_mod.queue_agent_result("delegation", "d-1", "answer one")
-    live_ai_mod.queue_agent_result("scheduled", "t-1", "answer two")
+    live_ai_mod.queue_agent_result("scheduled", "t-1", "answer one")
+    live_ai_mod.queue_agent_result("scheduled", "t-2", "answer two")
     pending = live_ai_mod.drain_agent_results()
-    assert pending == [("delegation", "d-1", "answer one"),
-                       ("scheduled", "t-1", "answer two")]
+    assert pending == [("scheduled", "t-1", "answer one"),
+                       ("scheduled", "t-2", "answer two")]
     assert live_ai_mod.drain_agent_results() == []  # emptied
 
 
@@ -19,14 +23,14 @@ def test_drain_on_empty_returns_empty_list():
 
 
 def test_drain_of_kind_filters_and_keeps_other_kinds():
-    live_ai_mod.queue_agent_result("delegation", "d-1", "a")
-    live_ai_mod.queue_agent_result("scheduled", "t-1", "b")
-    live_ai_mod.queue_agent_result("delegation", "d-2", "c")
+    live_ai_mod.queue_agent_result("scheduled", "t-1", "a")
+    live_ai_mod.queue_agent_result("other", "x-1", "b")
+    live_ai_mod.queue_agent_result("scheduled", "t-2", "c")
 
-    assert live_ai_mod.drain_agent_results_of_kind("delegation") == [
-        ("d-1", "a"), ("d-2", "c")]
-    # the scheduled entry survives the kind-filtered drain
-    assert live_ai_mod.drain_agent_results() == [("scheduled", "t-1", "b")]
+    assert live_ai_mod.drain_agent_results_of_kind("scheduled") == [
+        ("t-1", "a"), ("t-2", "c")]
+    # the other-kind entry survives the kind-filtered drain
+    assert live_ai_mod.drain_agent_results() == [("other", "x-1", "b")]
 
 
 def test_queue_is_thread_safe_no_loss():
@@ -34,7 +38,7 @@ def test_queue_is_thread_safe_no_loss():
 
     def worker(worker_id):
         for i in range(per_thread):
-            live_ai_mod.queue_agent_result("delegation", f"d-{worker_id}-{i}", "x")
+            live_ai_mod.queue_agent_result("scheduled", f"t-{worker_id}-{i}", "x")
 
     runners = [threading.Thread(target=worker, args=(w,)) for w in range(threads)]
     for runner in runners:
@@ -52,7 +56,7 @@ def test_scheduler_drain_uses_shared_queue():
     from src.tools.scheduler import drain_scheduled_results
 
     live_ai_mod.queue_agent_result("scheduled", "t-9", "scheduled answer")
-    live_ai_mod.queue_agent_result("delegation", "d-9", "delegation answer")
+    live_ai_mod.queue_agent_result("other", "x-9", "other answer")
     assert drain_scheduled_results() == [("t-9", "scheduled answer")]
-    # the delegation entry is untouched by the scheduled-only drain
-    assert live_ai_mod.drain_agent_results() == [("delegation", "d-9", "delegation answer")]
+    # the other-kind entry is untouched by the scheduled-only drain
+    assert live_ai_mod.drain_agent_results() == [("other", "x-9", "other answer")]
