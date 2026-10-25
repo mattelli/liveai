@@ -165,6 +165,45 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     ]
 
 
+def _select_tools(tools: list[Callable], groups) -> list[Callable]:
+    """Filter a tool list down to the configured ``[agent] tool_groups``.
+
+    ``groups`` accepts ``"all"`` (also empty/None: unfiltered, the historical
+    behavior), a comma-separated string or a list of topic names from
+    ``_TOOL_TOPICS`` (e.g. ``"files, web"`` or ``["files", "web"]``). Only the
+    tools of the listed topics are kept; tools outside every topic fall under
+    ``"other"`` and are kept only when ``"other"`` is listed. Unknown topic
+    names are logged once and ignored (a typo must not silently disable
+    everything). Excluded tools cost zero tokens: no schema, no description.
+    """
+    if groups is None:
+        return tools
+    if isinstance(groups, str):
+        names = _split_list(groups)
+    else:
+        names = [str(g).strip() for g in groups if str(g).strip()]
+    if not names:
+        return tools
+    wanted = {name.lower() for name in names}
+    if "all" in wanted:
+        return tools
+    unknown = wanted - set(_TOOL_TOPICS) - {"other"}
+    if unknown:
+        getLogger("Agent").info(
+            "Unknown [agent] tool_groups entries ignored: %s",
+            ", ".join(sorted(unknown)))
+    name_to_topic = {
+        name: topic
+        for topic, topic_names in _TOOL_TOPICS.items() for name in topic_names
+    }
+    return [
+        tool for tool in tools
+        if name_to_topic.get(
+            getattr(tool, "__name__", tool.__class__.__name__), "other")
+        in wanted
+    ]
+
+
 # Topic grouping for the /tools launcher (session.py): tool name -> topic.
 # Curated order = display order; tools missing from the map (e.g. MCP-injected
 # or test doubles) fall under "other", listed last.
@@ -1635,7 +1674,11 @@ class Agent(Brain):
         main agent keeps the module-default instances bound by
         ``Brain.__init__`` — existing behavior unchanged.
         """
-        tools = _default_tools(self)
+        tools = _select_tools(
+            _default_tools(self),
+            getattr(getattr(getattr(self, "config", None), "agent", None),
+                    "tool_groups", "all"),
+        )
         if not getattr(self, "isolated_tools", False):
             return tools
         from src.tools import memory as memory_mod, vision as vision_mod

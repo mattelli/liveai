@@ -31,6 +31,7 @@ bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. As
 max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
 parallel_agents = 0        # extra agents beside the running one (0 = off)
 # tool_doc_chars = 300     # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
+# tool_groups = "model, delegation, memory, files, web, documents, images, system, mcp"  # keep only these tool topics (default "all")
 agent_models = [           # models.json entry names, one per agent
     "ternary-bonsai", 
     "ternary-bonsai"

@@ -199,3 +199,71 @@ def test_tool_definitions_payload_budget_with_doc_cap():
     )
     # Measured baseline: 21_942 (full docs + defaults) -> 19_126 (doc300).
     assert total < 20_000
+
+
+# ------------------------------------------------------- tool group filtering
+
+
+def _bare_build_agent(tool_groups):
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    agent.config = SimpleNamespace(
+        agent=SimpleNamespace(tool_groups=tool_groups),
+        brain=SimpleNamespace(model="m"),
+    )
+    agent.isolated_tools = False
+    return agent
+
+
+def test_select_tools_all_and_empty_keep_everything():
+    tools = live_ai_mod._default_tools(
+        SimpleNamespace(model_info=live_ai_mod.Brain.model_info))
+    assert live_ai_mod._select_tools(tools, None) == tools
+    assert live_ai_mod._select_tools(tools, "all") == tools
+    assert live_ai_mod._select_tools(tools, "") == tools
+    assert live_ai_mod._select_tools(tools, []) == tools
+
+
+def test_select_tools_keeps_only_listed_topics():
+    tools = live_ai_mod._default_tools(
+        SimpleNamespace(model_info=live_ai_mod.Brain.model_info))
+    selected = live_ai_mod._select_tools(tools, "files, web")
+    names = [t.__name__ for t in selected]
+    assert "read_text_file" in names and "web_search" in names
+    assert "fetch_financial_data" not in names
+    assert "recall_memory" not in names
+    assert len(selected) < len(tools)
+
+
+def test_select_tools_list_and_string_forms_equivalent():
+    tools = live_ai_mod._default_tools(
+        SimpleNamespace(model_info=live_ai_mod.Brain.model_info))
+    as_string = live_ai_mod._select_tools(tools, "finance, images")
+    as_list = live_ai_mod._select_tools(tools, ["finance", "images"])
+    assert [t.__name__ for t in as_string] == [t.__name__ for t in as_list]
+    names = [t.__name__ for t in as_string]
+    assert "fetch_financial_data" in names and "generate_image" in names
+    assert "run_command" not in names
+
+
+def test_select_tools_unknown_group_ignored_without_crash():
+    tools = live_ai_mod._default_tools(
+        SimpleNamespace(model_info=live_ai_mod.Brain.model_info))
+    selected = live_ai_mod._select_tools(tools, "files, banana")
+    names = [t.__name__ for t in selected]
+    assert "read_text_file" in names  # known group still honored
+    assert "web_search" not in names
+
+
+def test_agent_build_tools_honors_tool_groups():
+    names = [t.__name__ for t in _bare_build_agent("finance")._build_tools()]
+    assert "fetch_financial_data" in names
+    assert "read_text_file" not in names
+
+
+def test_agent_build_tools_default_keeps_all_tools():
+    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
+    agent.config = SimpleNamespace(brain=SimpleNamespace(model="m"))
+    agent.isolated_tools = False
+    names = [t.__name__ for t in agent._build_tools()]
+    assert len(names) == 44
+    assert "summarize_doc" in names and "exit_gracefully" in names
