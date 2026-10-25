@@ -98,6 +98,29 @@ def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
     return max(1, int(context_window * ratio))
 
 
+def _truncate_tool_result(text: str, limit: int) -> str:
+    """Cap a tool result before it is stored in the chat history.
+
+    ``limit <= 0`` (unset) or a short-enough result is returned unchanged.
+    Oversized results keep the **head and the tail** — ``head = limit * 3 // 4``
+    chars, ``tail = limit // 4`` chars — joined by an explicit truncation
+    marker carrying the original length. Head+tail matters for append-ordered
+    files read whole by tools (e.g. ``recall_memory`` returns the entire
+    ``memory.log``, oldest entries first): head-only truncation would
+    silently drop the *most recent* entries, so the tail must survive too.
+    The marker tells the model the result was cut so it can re-query with a
+    targeted tool (``search_in_file``, ``query_document``, ``summarize_doc``)
+    instead of re-reading everything. Truncation is preferred over eager
+    summarization: it is free, deterministic and never distorts what it keeps.
+    """
+    if limit <= 0 or len(text) <= limit:
+        return text
+    head = limit * 3 // 4
+    tail = limit // 4
+    marker = f"\n… [truncated, {len(text)} chars total] …\n"
+    return text[:head] + marker + text[-tail:]
+
+
 def _thinking_token_cap(value) -> int:
     """Resolve ``[brain] max_thinking_tokens`` into a visualization cap.
 
@@ -1630,6 +1653,13 @@ class Agent(Brain):
         # Per-agent round limit from [agent] max_act_rounds (0/unset -> class default).
         rounds = int(getattr(getattr(config, "agent", None), "max_act_rounds", 0) or 0)
         self.MAX_ACT_ROUNDS = rounds if rounds > 0 else type(self).MAX_ACT_ROUNDS
+        # [brain] max_tool_result_chars: cap tool results stored in the history
+        # (0/unset/invalid = uncapped, the historical behavior).
+        try:
+            result_chars = int(getattr(config.brain, "max_tool_result_chars", 0) or 0)
+        except (TypeError, ValueError):
+            result_chars = 0
+        self._max_tool_result_chars = max(0, result_chars)
         self._fragments_buffer: list[str] = []
         self.logger.info(
             "✅ Agent with Model '%s' initialized. Setting up tools ...",
@@ -1819,7 +1849,8 @@ class Agent(Brain):
                         self._messages.append({
                             "role": "tool",
                             "tool_call_id": call["id"] or f"call_{index}",
-                            "content": result,
+                            "content": _truncate_tool_result(
+                                result, getattr(self, "_max_tool_result_chars", 0)),
                         })
                     self._handle_round_end(round_index)
                     continue
