@@ -8,7 +8,7 @@ level = "WARNING"
 # api_key_env = "OPENROUTER_API_KEY"
 # model = "z-ai/glm-5.3-flash"
 
-system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
+system_prompt = "You are a helpful coding agent, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 memory_path = "memory.log"
 sessions_dir = ".sessions"         # folder for /session store|list|load chat session files (JSON)
 models_file = "models.json"        # models: first entry boots, /model switches (JSON: name -> {api_key_env, base_url, model})
@@ -25,7 +25,7 @@ auto_compaction = false            # run compact_chat (summary) instead of plain
 # context_window = 8192
 
 [agent] # agent configuration
-bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
+bootstrap_prompt = "Read the AGENT.md file in the current folder, or in the parent folders, and follow its instructions. If no AGENT.md is found, respond with 'No agent instructions found.'"
 max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
 tool_doc_chars = 300       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
 tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
@@ -34,7 +34,7 @@ monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor
 monitor_buffer = 200                             # in-memory events kept for the agent_activity tool
 
 [scheduler] # schedule agent prompts for a future time (all keys optional)
-enabled = false                       # false (or missing section) -> tools are no-ops
+enabled = false                      # false (or missing section) -> tools are no-ops
 persist_file = ".res/schedule.json"  # task persistence (survives restarts)
 on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 
@@ -44,7 +44,7 @@ prompt_color = "yellow"     # label color: black/red/green/yellow/blue/magenta/c
 assistant_color = "cyan"    # streamed assistant text color (any rich style: bright_blue, #5fd7ff, ...)
 code_theme = "monokai"      # Pygments theme for fenced code blocks (ansi_dark, dracula, github-dark, ...)
 banner = true               # false -> single-line "Agent ready." startup banner
-banner_logo = true          # false -> hide the ASCII-art logo inside the banner panel
+banner_logo = false         # false -> hide the ASCII-art logo inside the banner panel
 call_lines_max = 5          # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
 line_width = 120            # max width of each parameter value line; max limit is 240
 show_thinking = true        # Chain-of-thought visualization, reasoning is display-only it never enters the chat history or the spoken/returned answer.

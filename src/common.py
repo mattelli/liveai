@@ -4,6 +4,7 @@ import tomllib
 import json
 import inspect
 import re
+import sys
 from functools import wraps
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,16 @@ from rich.console import Console
 from rich.syntax import Syntax
 
 Colors = Literal['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', "grey", 'white', 'reset']
+
+# Windows consoles often default to a legacy codepage (e.g. cp1252) that cannot
+# encode emoji/braille used across the UI. Reconfigure std streams to UTF-8 with
+# a safe fallback so printing never crashes (Python >= 3.7).
+if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass  # never let stream setup break the app
 
 # Activity spinner: braille dots, redrawn every _SPIN_INTERVAL seconds
 # while a generation produces no visible output.

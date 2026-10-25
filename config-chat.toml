@@ -1,0 +1,157 @@
+[logging]
+level = "WARNING"
+
+[brain] # LLM configuration: the model connection (model, base_url, api_key_env) lives in the models JSON file ([brain] models_file); 
+
+# Legacy, models-file-less setup (used only when models_file is unset):
+# base_url = "https://openrouter.ai/api/v1"
+# api_key_env = "OPENROUTER_API_KEY"
+# model = "z-ai/glm-5.3-flash"
+
+system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
+memory_path = "memory.log"
+sessions_dir = ".sessions"         # folder for /session store|list|load chat session files (JSON)
+models_file = "models.json"        # models: first entry boots, /model switches (JSON: name -> {api_key_env, base_url, model})
+max_response_tokens = 0.1          # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
+temperature = 0.6                  # randomness (0 = deterministic, 1 = random)
+max_tool_result_chars = 4000       # cap tool results stored in the history, head+tail kept (0 = uncapped)
+context_trim_ratio = 0.7           # prune oldest complete tool rounds when context usage exceeds this ratio (0 = never prune)
+context_keep_messages = 40         # recent messages never pruned (used when context_trim_ratio > 0)
+auto_compaction = false            # run compact_chat (summary) instead of plain pruning when context_trim_ratio is exceeded (false = legacy pruning only)
+# compact_keep_messages = 4        # recent turns kept by auto-compaction (default: context_keep_messages)
+# Vision support and the context window are auto-detected from the model metadata reported by the server (OpenAI /models endpoint, e.g. LMStudio max_context_length). 
+# Only set the optional overrides below for servers that do not report them:
+# vision = true
+# context_window = 8192
+
+[agent] # agent configuration
+bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
+max_act_rounds = 100       # max tool-loop rounds per agent turn (default 100)
+tool_doc_chars = 200       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
+# tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
+monitor = "log"                                  # scheduled-task monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
+monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
+monitor_buffer = 100                             # in-memory events kept for the agent_activity tool
+
+[scheduler] # schedule agent prompts for a future time (all keys optional)
+enabled = true                       # false (or missing section) -> tools are no-ops
+persist_file = ".res/schedule.json"  # task persistence (survives restarts)
+on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
+
+[ui] # chat appearance (all keys optional)
+prompt = "You (hint '/') ›"      # chat-mode input label
+prompt_color = "yellow"     # label color: black/red/green/yellow/blue/magenta/cyan/grey/white (prompt_toolkit path only)
+assistant_color = "cyan"    # streamed assistant text color (any rich style: bright_blue, #5fd7ff, ...)
+code_theme = "monokai"      # Pygments theme for fenced code blocks (ansi_dark, dracula, github-dark, ...)
+banner = true               # false -> single-line "Agent ready." startup banner
+banner_logo = true          # false -> hide the ASCII-art logo inside the banner panel
+call_lines_max = 0          # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
+line_width = 120            # max width of each parameter value line; max limit is 240
+show_thinking = false        # Chain-of-thought visualization, reasoning is display-only it never enters the chat history or the spoken/returned answer.
+max_thinking_tokens = 100   # max tokens of thinking to visualize (0 = unlimited)
+
+[input] # Interactive chat input (prompt_toolkit). All keys optional.
+history_file = "input.log"       # resolved relative to this config file; "." or empty disables persistence
+prompt_toolkit = true            # false -> builtin input() fallback
+auto_suggest = true              # inline history suggestions
+completion = true                # complete /slash commands with Tab
+explicit_paste = true            # /paste ... . fallback for terminals without bracketed paste
+multiline = false                # true -> Esc+Enter to accept (advanced)
+
+[speech_det] # speech detection and transcription (faster-whisper)
+model_path= ".res/faster-whisper-medium"
+silence_timeout_s = 2.0
+language = "en" # ISO 639-1 code, e.g. "en", "fr", "de", "it", "es", "zh", etc.
+beam_size = 5
+show_levels = true
+device = "auto"
+compute_type = "int8"
+calibration_chunks = 20
+guard_factor = 1.0
+
+[speech_gen] # speech synthesis (TTS)
+model_path = ".res/voices/en_US-hfc_female-medium.onnx"
+# model_path = ".res/voices/it_IT-serena-high.onnx"
+samplerate = 22050
+volume = 1.0
+speech_speed = 1.0
+# speaker_id = 0          # Optional synthesis knobs (single-speaker voices can leave speaker_id commented out)
+noise_scale = 1.0
+noise_w_scale = 1.0
+normalize_audio = false
+
+[summarization] # extractive text summarization (LexRank + sentence embeddings)
+model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to this config file
+device = "cpu"            # "cpu" or "cuda"
+ratio = 0.1               # fraction of sentences to keep (0 < ratio <= 1)
+threshold = 0.5           # LexRank similarity threshold in [0, 1)
+max_sentences = 0         # 0 -> derive from ratio; >0 -> hard cap
+
+[document_query] # in-document search with a CrossEncoder
+model_path = ".res/crossencoder/ms-marco-TinyBERT-L2"  # resolved relative to this config file
+device = "cpu"            # "cpu" or "cuda"
+chunk_size = 3            # consecutive sentences per passage
+top_k = 5                 # default number of results returned by query_document
+
+[image_search] # search images in a folder with a CLIP model
+model_path = ".res/embedding/clip-ViT-B-32"  # same CLIP model as the multimodal embedding mode
+device = "cpu"            # "cpu" or "cuda"
+top_k = 3                 # default number of results returned by image_search
+
+[image_gen] # local image generation with Stable Diffusion
+t2i_model = "UnfilteredAI/NSFW-GEN-ANIME"     # text-to-image model (HuggingFace id or local path)
+i2i_model = "runwayml/stable-diffusion-v1-5"  # image-to-image / inpaint model
+device = "auto"         # "auto" (cuda when available), "cpu" or "cuda"
+negative_prompt = ""    # default img2img/inpaint negative prompt (empty = none)
+width = 512             # default image width in pixels (multiple of 8)
+height = 512            # default image height in pixels (multiple of 8)
+steps = 50              # default diffusion steps (higher = slower, more refined)
+seed = -1               # default seed; negative -> random seed for every image
+guidance = 5.0          # default img2img/inpaint prompt guidance (3-12)
+denoise = 0.5           # default img2img/inpaint denoise strength (0-1)
+out_dir = ".out_images" # folder for generated images (resolved relative to this file)
+
+[embedding] # semantic search over one or more named local corpora
+model_path = ".res/embedding/all-MiniLM-L6-v2"     # text-only-mode encoder
+image_model_path = ".res/embedding/clip-ViT-B-32"  # shared text+image encoder (multimodal)
+multimodal = true          # true -> use image_model_path for BOTH text and images
+device = "cpu"             # "cpu" or "cuda"
+corpora_dir = ".res/corpora"  # resolved relative to this config file
+extensions = "txt, md, markdown, tex, rst, log, csv, html, htm, pdf, docx, xlsx, png, jpg, jpeg, webp, bmp, tiff"
+image_extensions = "png, jpg, jpeg, webp, bmp, tiff"
+chunk_size = 5             # sentences per indexed passage
+top_k = 5                  # default number of results returned by query_corpus
+
+[mcp] # MCP (Model Context Protocol) servers as agent tools (optional; pip install mcp)
+# Every server tool becomes a native agent tool (mcp_<server>_<tool>); the
+# mcp_list_tools/mcp_call_tool bridge tools always exist for runtime discovery.
+# A server entry needs 'command' (+ optional 'args' list) or 'url'.
+# Windows note: if spawning npx directly fails, use command = "cmd",
+# args = ["/c", "npx", "-y", ...]. Inspect with /mcp, reconnect with /mcp refresh.
+# Auth: 'env' passes environment variables to a stdio server process, 'headers'
+# adds HTTP headers to a url server, 'token_env' names an env variable holding
+# a token (bearer header for url servers, env entry for stdio servers). Values
+# may reference other variables with ${VAR} - secrets stay in the env/.env file,
+# never in config.toml.
+connect_timeout_s = 5.0   # per-server connect + tools/list budget
+call_timeout_s    = 20.0  # per-tool-call budget
+
+# [mcp.servers.finance]         # finance server: local process
+# command = "npx"
+# args = ["-y", "@pipeworx/mcp-finance-feeds"]
+
+# [mcp.servers.filesystem]      # stdio server: local process
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "./"]
+
+# [mcp.servers.deepwiki]        # HTTP server: streamable HTTP endpoint
+# url = "https://mcp.deepwiki.com/mcp"
+
+# [mcp.servers.telegram]        # stdio server with a bot token (from .env)
+# command = "python"
+# args = ["-m", "telegram_bot_mcp"]
+# env = { TELEGRAM_BOT_TOKEN = "${TELEGRAM_BOT_TOKEN}" }
+
+# [mcp.servers.github]          # HTTP server with a bearer token
+# url = "https://api.githubcopilot.com/mcp"
+# token_env = "GITHUB_MCP_TOKEN"
