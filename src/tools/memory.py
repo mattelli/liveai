@@ -239,8 +239,9 @@ class MemoryTools:
             old = messages[:-keep]
             recent = list(messages[-keep:])
             summarizer = self._summarizer or self._fallback_summary
-            summary = summarizer(old)
-            summary = summary.strip() or "(empty summary)"
+            summary = (summarizer(old) or "").strip()
+            if not summary:
+                summary = self._fallback_summary(old) or "(empty summary)"
 
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             new_history = self._reseeded_head(messages)

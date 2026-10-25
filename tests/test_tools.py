@@ -1835,6 +1835,21 @@ def test_module_default_compact_chat(monkeypatch, tmp_path):
     assert len(messages) == 7
 
 
+def test_compact_chat_falls_back_when_llm_summarizer_fails(memory_seam):
+    """An LLM summarizer returning '' (failed call) falls back to extractive."""
+    messages = (
+        [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "")
+
+    memory_seam.compact_chat()
+
+    assert "old 0" in messages[2]["content"]
+    assert "[Compacted context on " in messages[2]["content"]
+
+
 # ------------------------------------------------------------------ T16 speech
 
 

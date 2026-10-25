@@ -610,6 +610,7 @@ class OpenAICore:
         from src.tools import memory as memory_tools, vision as vision_tools
         if not getattr(self, "isolated_tools", False):
             memory_tools.bind_history(lambda: self._messages)
+            memory_tools.bind_summarizer(self._summarize_messages)
             vision_tools.bind_session(self)
         self.logger.info("✅ Remote model '%s' connected.", self._model_name)
 
@@ -1365,6 +1366,37 @@ class Brain(OpenAICore):
         if tools:
             kwargs["tools"] = tools
         return self._client.chat.completions.create(**kwargs)
+
+    ## LLM-backed summarization for history compaction (src.tools.memory) ##
+
+    _SUMMARIZER_SYSTEM_PROMPT = (
+        "Summarize this conversation concisely: key facts, decisions, user "
+        "preferences, open tasks, and any file paths or resources mentioned. "
+        "Write only the summary."
+    )
+
+    def _summarize_messages(self, messages: list[dict]) -> str:
+        """Summarize messages via the chat model (for history compaction).
+
+        Non-interactive one-shot call with tool use disabled. Returns an empty
+        string on any failure so the caller falls back to the extractive
+        summary instead of failing the turn.
+        """
+        try:
+            resp = self._client.chat.completions.create(
+                model=self._model_name,
+                messages=[
+                    {"role": "system",
+                     "content": self._SUMMARIZER_SYSTEM_PROMPT},
+                    *messages,
+                ],
+                temperature=0.2,
+                max_tokens=500,
+            )
+            return str(resp.choices[0].message.content or "")
+        except Exception as e:
+            self.logger.warning("Compaction summarizer failed: %s", e)
+            return ""
 
     ## chain-of-thought visualization ([ui] show_thinking) ##
 
