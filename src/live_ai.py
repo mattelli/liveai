@@ -1802,6 +1802,9 @@ class Agent(Brain):
             keep_messages = 40
         self._context_keep_messages = keep_messages if keep_messages >= 4 else 40
         self._fragments_buffer: list[str] = []
+        # Runtime tool toggling (/tools on|off): names here are excluded from
+        # the schemas sent with every request (session-only, main agent).
+        self._disabled_tools: set[str] = set()
         self.logger.info(
             "✅ Agent with Model '%s' initialized. Setting up tools ...",
             self._model_name
@@ -1871,6 +1874,19 @@ class Agent(Brain):
             self.tools.extend(extra_impls.values())
             self.tool_definitions.extend(extra_defs)
             self._tool_impls.update(extra_impls)
+        # Runtime toggles survive a refresh: re-disable MCP tools the user
+        # turned off via /tools off (they were just re-injected above).
+        disabled = getattr(self, "_disabled_tools", None) or set()
+        for name in [n for n in self._mcp_tool_names if n in disabled]:
+            self._tool_impls.pop(name, None)
+            self.tools = [
+                tool for tool in self.tools
+                if getattr(tool, "__name__", "") != name
+            ]
+            self.tool_definitions = [
+                definition for definition in self.tool_definitions
+                if definition.get("function", {}).get("name") != name
+            ]
         connected = ", ".join(results) if results else "none"
         tools = ", ".join(extra_impls) if extra_impls else "none"
         return (f"MCP refreshed ({connected}): "
@@ -1880,6 +1896,72 @@ class Agent(Brain):
         """Run the configured bootstrap prompt (called by the session, not on init)."""
         if self.config.agent.bootstrap_prompt:
             self.act(self.config.agent.bootstrap_prompt)
+
+    ## runtime tool toggling (/tools on|off) ##
+
+    def enabled_tool_definitions(self) -> list[dict]:
+        """Tool schemas of the currently enabled tools (toggle-aware).
+
+        ``_stream_round`` sends these instead of the raw ``tool_definitions``,
+        so a disabled tool stops costing tokens on the very next request.
+        """
+        disabled = getattr(self, "_disabled_tools", None) or set()
+        if not disabled:
+            return self.tool_definitions
+        return [
+            definition for definition in self.tool_definitions
+            if definition.get("function", {}).get("name") not in disabled
+        ]
+
+    def set_tool_enabled(self, name: str, enabled: bool) -> str:
+        """Enable/disable one tool at runtime; returns a confirmation line.
+
+        A disabled tool is dropped from every subsequent request (token
+        saving) and its execution is refused with a clear error, so a stale
+        model reference fails loudly instead of silently running. Unknown
+        names return an error string (never raise).
+        """
+        name = str(name or "").strip()
+        known = {getattr(tool, "__name__", "") for tool in self.tools}
+        if name not in known:
+            return (f"Error: unknown tool '{name}'. Available: "
+                    + ", ".join(sorted(n for n in known if n)))
+        disabled = getattr(self, "_disabled_tools", None)
+        if disabled is None:
+            disabled = self._disabled_tools = set()
+        if enabled:
+            disabled.discard(name)
+            return f"Tool '{name}' enabled ({len(self.tools) - len(disabled)} of {len(self.tools)} tools active)."
+        disabled.add(name)
+        return f"Tool '{name}' disabled ({len(self.tools) - len(disabled)} of {len(self.tools)} tools active)."
+
+    def toggle_tools(self, names: list[str], enabled: bool) -> str:
+        """Enable/disable several tools (or whole topics) at once.
+
+        A name matching a ``_TOOL_TOPICS`` topic toggles every tool of that
+        topic (e.g. ``finance`` covers ``fetch_financial_data`` and
+        ``save_financial_chart``); otherwise it must be a tool name. Returns
+        a multi-line confirmation.
+        """
+        name_to_topic = {
+            name: topic
+            for topic, topic_names in _TOOL_TOPICS.items() for name in topic_names
+        }
+        tool_names = [getattr(tool, "__name__", "") for tool in self.tools]
+        topics = {name_to_topic[n] for n in tool_names if n in name_to_topic}
+        lines: list[str] = []
+        for raw in names:
+            name = str(raw or "").strip()
+            if not name:
+                continue
+            if name.lower() in {t.lower() for t in topics}:
+                topic = next(t for t in topics if t.lower() == name.lower())
+                members = [n for n in tool_names if name_to_topic.get(n) == topic]
+                for member in members:
+                    lines.append(self.set_tool_enabled(member, enabled))
+                continue
+            lines.append(self.set_tool_enabled(name, enabled))
+        return "\n".join(lines) if lines else "Error: nothing to toggle."
 
     def _handle_fragment(self, content: str) -> None:
         self._fragments_buffer.append(content)
@@ -1907,7 +1989,7 @@ class Agent(Brain):
         # Fresh thinking-display budget per round: a multi-round act() turn
         # would otherwise exhaust the cap in round 1 and show nothing later.
         self._reset_thinking()
-        stream = self._stream_completion(tools)
+        stream = self._stream_completion(self.enabled_tool_definitions())
         self._active_stream = stream
         parts: list[str] = []
         calls: dict[int, dict] = {}
@@ -1941,6 +2023,9 @@ class Agent(Brain):
         tool = self._tool_impls.get(call["name"])
         if tool is None:
             return f"Error: unknown tool '{call['name']}'"
+        if call["name"] in (getattr(self, "_disabled_tools", None) or set()):
+            return (f"Error: tool '{call['name']}' is disabled "
+                    "(re-enable it with /tools on)")
         try:
             args = json.loads(call["arguments"] or "{}")
         except json.JSONDecodeError as exc:

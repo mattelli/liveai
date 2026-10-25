@@ -934,3 +934,48 @@ def test_session_skips_unknown_background_kind():
     ConversationSession(agent, lambda: next(it)).run()  # must not raise
     contents = [m["content"] for m in agent.messages if m["role"] == "assistant"]
     assert not any("odd payload" in c for c in contents)
+
+
+# ---------------------------------------------------- runtime tool toggling
+
+
+class ToggleAgent(FakeAgent):
+    """FakeAgent exposing the real Agent toggle API (recorded calls)."""
+
+    def __init__(self):
+        super().__init__()
+        self.toggles = []
+
+    def toggle_tools(self, names, enabled):
+        self.toggles.append((list(names), enabled))
+        return f"toggled {names} -> {enabled}"
+
+
+def test_cmd_tools_off_calls_agent_toggle(capsys):
+    agent = ToggleAgent()
+    it = iter(["/tools off web_search", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.toggles == [(["web_search"], False)]
+    assert "toggled" in capsys.readouterr().out
+
+
+def test_cmd_tools_on_multiple_names(capsys):
+    agent = ToggleAgent()
+    it = iter(["/tools on finance, zip_files", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.toggles == [(["finance", "zip_files"], True)]
+
+
+def test_cmd_tools_bad_usage_shows_hint(capsys):
+    agent = ToggleAgent()
+    it = iter(["/tools frobnicate", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert agent.toggles == []
+    assert "usage" in capsys.readouterr().out.lower()
+
+
+def test_cmd_tools_without_agent_support(capsys):
+    it = iter(["/tools off web_search", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    out = capsys.readouterr().out.lower()
+    assert "does not support" in out

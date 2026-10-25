@@ -257,7 +257,8 @@ class ConversationSession:
             ("/quit", "exit the session (alias: exit)"),
             ("/clear", "clear the conversation history"),
             ("/voice on|off", "toggle speech output"),
-            ("/tools", "list and run an available tool"),
+            ("/tools [on|off <tool|topic>]",
+             "list/run a tool; on|off toggles tools at runtime"),
             ("/info", "show model/context info"),
             ("/model [name]", "switch to a model from the models JSON file"),
             ("/session store|list|load", "save/list/restore chat sessions (JSON)"),
@@ -299,10 +300,29 @@ class ConversationSession:
             cprint("Usage: /voice on|off", "yellow")
 
     def _cmd_tools(self, arg: str) -> None:
-        if arg.strip():
-            cprint("Usage: /tools", "yellow")
+        arg = arg.strip()
+        if not arg:
+            self._launch_tool()
             return
-        self._launch_tool()
+        parts = arg.split(maxsplit=1)
+        action = parts[0].lower()
+        if action not in ("on", "off") or len(parts) < 2 or not parts[1].strip():
+            cprint("Usage: /tools [on|off <tool|topic>]", "yellow")
+            return
+        toggle = getattr(self.agent, "toggle_tools", None)
+        if not callable(toggle):
+            cprint("This agent does not support tool toggling.", "yellow")
+            return
+        names = [n for n in parts[1].replace(" ", ",").split(",") if n.strip()]
+        if not names:
+            cprint("Usage: /tools [on|off <tool|topic>]", "yellow")
+            return
+        cprint(str(toggle(names, enabled=(action == "on"))), "green")
+
+    def _tool_toggle_state(self, tool) -> str:
+        """`[off]` marker for tools disabled at runtime (``/tools`` listing)."""
+        disabled = getattr(self.agent, "_disabled_tools", None) or set()
+        return " [off]" if self._tool_name(tool) in disabled else ""
 
     @staticmethod
     def _tool_name(tool) -> str:
@@ -343,7 +363,7 @@ class ConversationSession:
                 index += 1
                 doc = (getattr(tool, "__doc__", "") or "").strip().splitlines()
                 summary = doc[0].strip() if doc else ""
-                line = f"  {index:>2}. {self._tool_name(tool)}"
+                line = f"  {index:>2}. {self._tool_name(tool)}{self._tool_toggle_state(tool)}"
                 if summary:
                     line += f" - {summary}"
                 cprint(line, "cyan")

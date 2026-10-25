@@ -454,3 +454,121 @@ def test_config_round_trip_missing_keys_use_defaults():
     assert float(getattr(agent.config.brain, "context_trim_ratio", 0) or 0) == 0.0
     assert int(getattr(agent.config.agent, "tool_doc_chars", 0) or 0) == 0
     assert getattr(agent.config.agent, "tool_groups", "all") == "all"
+
+
+# ---------------------------------------------------- runtime tool toggling
+
+
+def _toggle_agent():
+    """Bare agent with a small fake tool set for toggle tests."""
+    agent = _BareAgent()
+    agent._disabled_tools = set()
+
+    def tool_a() -> str:
+        return "a"
+
+    def tool_b() -> str:
+        return "b"
+
+    agent.tools = [tool_a, tool_b]
+    agent.tool_definitions = [
+        live_ai_mod.Brain._openai_tool_definition(t) for t in agent.tools
+    ]
+    agent._tool_impls = {t.__name__: t for t in agent.tools}
+    return agent
+
+
+def test_set_tool_enabled_disables_and_restores():
+    agent = _toggle_agent()
+    message = agent.set_tool_enabled("tool_a", False)
+    assert "disabled" in message
+    names = [d["function"]["name"] for d in agent.enabled_tool_definitions()]
+    assert names == ["tool_b"]
+    message = agent.set_tool_enabled("tool_a", True)
+    assert "enabled" in message
+    names = [d["function"]["name"] for d in agent.enabled_tool_definitions()]
+    assert names == ["tool_a", "tool_b"]
+
+
+def test_set_tool_enabled_unknown_name_returns_error():
+    agent = _toggle_agent()
+    message = agent.set_tool_enabled("nope", False)
+    assert message.startswith("Error:")
+    assert agent.enabled_tool_definitions() == agent.tool_definitions
+
+
+def test_disabled_tool_execution_refused():
+    agent = _toggle_agent()
+    agent.set_tool_enabled("tool_a", False)
+    result = agent._execute_tool({"name": "tool_a", "arguments": "{}"})
+    assert result.startswith("Error:") and "disabled" in result
+    # Enabled tools still run.
+    assert agent._execute_tool({"name": "tool_b", "arguments": "{}"}) == "b"
+
+
+def test_toggle_tools_by_topic():
+    import types as _types
+    dummy = _types.SimpleNamespace(model_info=live_ai_mod.Brain.model_info)
+    agent = _toggle_agent()
+    agent.tools = live_ai_mod._default_tools(dummy)
+    agent.tool_definitions = [
+        live_ai_mod.Brain._openai_tool_definition(t) for t in agent.tools]
+    agent._tool_impls = {t.__name__: t for t in agent.tools}
+    agent.toggle_tools(["finance"], enabled=False)
+    names = [d["function"]["name"] for d in agent.enabled_tool_definitions()]
+    assert "fetch_financial_data" not in names
+    assert "save_financial_chart" not in names
+    assert "web_search" in names
+    agent.toggle_tools(["finance"], enabled=True)
+    names = [d["function"]["name"] for d in agent.enabled_tool_definitions()]
+    assert "fetch_financial_data" in names
+
+
+def test_stream_round_sends_filtered_definitions():
+    agent = _toggle_agent()
+    agent._context_window = 4096
+    agent._turn_started = None
+    agent._show_thinking = False
+    agent._reset_thinking()
+    agent._stream = _FakeStream()
+    sent = {}
+
+    def fake_completion(tools=None):
+        sent["tools"] = tools
+        return iter(())
+
+    agent._stream_completion = fake_completion
+    agent.set_tool_enabled("tool_a", False)
+    agent._stream_round(agent.tool_definitions)
+    names = [d["function"]["name"] for d in sent["tools"]]
+    assert names == ["tool_b"]
+
+
+def test_mcp_refresh_keeps_disabled_mcp_tools(monkeypatch):
+    import sys, types as _types
+    agent = _toggle_agent()
+    agent._context_window = 4096
+    agent._mcp_tool_names = []
+    fake_mcp = _types.ModuleType("src.tools.mcp")
+
+    def mcp_tool_bindings(existing_names, manager=None):
+        def mcp_x() -> str:
+            return "x"
+        return ([live_ai_mod.Brain._openai_tool_definition(mcp_x)], {"mcp_x": mcp_x})
+
+    def get_manager():
+        return _types.SimpleNamespace(refresh=lambda: [])
+
+    fake_mcp.mcp_tool_bindings = mcp_tool_bindings
+    fake_mcp.get_manager = get_manager
+    monkeypatch.setitem(sys.modules, "src.tools.mcp", fake_mcp)
+    import src.tools.mcp as real_mcp  # the agent imports the package module
+    monkeypatch.setattr(real_mcp, "mcp_tool_bindings", mcp_tool_bindings)
+    monkeypatch.setattr(real_mcp, "get_manager", get_manager)
+    agent.refresh_mcp_tools()  # injects mcp_x
+    assert "mcp_x" in agent._tool_impls
+    agent.set_tool_enabled("mcp_x", False)
+    agent.refresh_mcp_tools()  # re-injection must keep it disabled
+    assert "mcp_x" not in agent._tool_impls
+    names = [d["function"]["name"] for d in agent.enabled_tool_definitions()]
+    assert "mcp_x" not in names
