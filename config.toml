@@ -45,7 +45,7 @@ assistant_color = "cyan"    # streamed assistant text color (any rich style: bri
 code_theme = "monokai"      # Pygments theme for fenced code blocks (ansi_dark, dracula, github-dark, ...)
 banner = true               # false -> single-line "Agent ready." startup banner
 banner_logo = false         # false -> hide the ASCII-art logo inside the banner panel
-call_lines_max = 5          # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
+call_lines_max = 6          # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
 line_width = 120            # max width of each parameter value line; max limit is 240
 show_thinking = true        # Chain-of-thought visualization, reasoning is display-only it never enters the chat history or the spoken/returned answer.
 max_thinking_tokens = 0     # max tokens of thinking to visualize (0 = unlimited)
