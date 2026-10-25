@@ -635,6 +635,8 @@ unset) keep that cost bounded:
 # max_tool_result_chars = 4000        # cap tool results stored in the history (head+tail kept with a truncation marker; 0 = uncapped)
 # context_trim_ratio = 0.7            # prune the oldest history when context usage exceeds this ratio (0 = never prune)
 # context_keep_messages = 40          # most recent messages never touched by pruning
+# auto_compaction = false             # run compact_chat (summary) instead of plain pruning when context_trim_ratio is exceeded
+# compact_keep_messages = 4           # recent turns kept by auto-compaction (default: context_keep_messages)
 
 [agent]
 # tool_doc_chars = 300                # cap tool descriptions in the JSON schemas (0 = full docstrings)
@@ -658,6 +660,15 @@ unset) keep that cost bounded:
   kept, and a `[history pruned: N messages dropped]` marker is appended to the
   system prompt. This turns an unbounded, quadratic per-turn token cost into a
   bounded, linear one.
+- `auto_compaction` (default `false`) / `compact_keep_messages` — with
+  `auto_compaction = true`, the same usage checkpoint runs a full compaction
+  instead of the plain drop: the oldest messages are summarized into a single
+  `[Compacted context ...]` message (via the chat model, with a built-in
+  extractive fallback) while the system prompt, the recalled personal data and
+  the last `compact_keep_messages` turns stay verbatim. Legacy pruning still
+  runs afterwards if usage remains above the ratio. You can also compact
+  manually with the `/compact [keep_last]` command or let the model call the
+  `compact_chat` tool.
 - The scheduler execution agent inherits the same settings (it copies the
   config). Recommended
   starting values: `max_tool_result_chars = 4000`, `tool_doc_chars = 300`,

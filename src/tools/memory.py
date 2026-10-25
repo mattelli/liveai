@@ -1,8 +1,13 @@
 """Personal-memory and conversation-history tools.
 
 ``store_memory`` appends personal notes from the conversation to a history
-file, ``recall_memory`` reads them back, and ``clear_chat`` resets the live
-conversation (re-seeded with the recalled personal data).
+file, ``recall_memory`` reads them back, ``clear_chat`` resets the live
+conversation (re-seeded with the recalled personal data), and
+``compact_chat`` shrinks it in place: the oldest messages are summarized
+into a single ``[Compacted context ...]`` message while the system prompt,
+the recalled personal data and the most recent turns stay verbatim. The
+summary comes from a bound LLM summarizer (``bind_summarizer``) when
+available, otherwise from a built-in extractive fallback.
 
 Follows the ``src.tools.image_gen`` pattern: ``main.py`` injects the
 application config via :func:`configure` (``[brain]`` history path/system

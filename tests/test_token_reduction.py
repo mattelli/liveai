@@ -441,7 +441,9 @@ def test_auto_compact_swallows_errors(monkeypatch):
     assert agent._auto_compact() == ""  # never raises
 
 
-def test_auto_compact_error_result_is_empty():
+def test_auto_compact_error_result_is_empty(monkeypatch):
+    import src.tools.memory as memory_mod
+    monkeypatch.setattr(memory_mod, "_history_provider", None)
     agent = _BareAgent()
     agent._compact_keep_messages = 4
     # no history bound -> compact_chat returns "Error: ..." -> mapped to ""

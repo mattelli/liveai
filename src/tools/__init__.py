@@ -12,7 +12,7 @@
 - ``docquery``  : in-document search with a CrossEncoder
 - ``imgsearch`` : folder image search with a CLIP model
 - ``corpora``   : named FAISS corpora (store + semantic text/image search)
-- ``memory``    : personal memory + conversation history (recall/store/clear)
+- ``memory``    : personal memory + conversation history (recall/store/clear/compact)
 - ``scheduler`` : schedule agent prompts for a future time (one-shot/recurring)
 - ``speech``    : Piper text-to-speech toggle
 - ``vision``    : image description through the multimodal chat model
