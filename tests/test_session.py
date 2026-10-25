@@ -966,3 +966,77 @@ def test_cmd_tools_without_agent_support(capsys):
     ConversationSession(FakeAgent(), lambda: next(it)).run()
     out = capsys.readouterr().out.lower()
     assert "does not support" in out
+
+
+# ------------------------------------------------------------- /tools list
+
+
+class ListToolsAgent(FakeAgent):
+    """FakeAgent with a real-shaped tool set for the /tools list tests."""
+
+    def __init__(self):
+        super().__init__()
+        self._disabled_tools = set()
+
+        def web_search(query: str):
+            """Search web pages based on the query."""
+            return "results"
+
+        def schedule_task(prompt: str, at: str):
+            """Schedule a prompt to run at a future time."""
+            return "ok"
+
+        self.tools = [web_search, schedule_task]
+
+
+def test_tools_list_shows_all_tools_with_state(capsys):
+    agent = ListToolsAgent()
+    it = iter(["/tools list", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    # the agent's own tools are enabled (no marker); the default-set entries
+    # of the same names win the display (module-default implementations)
+    assert "  web_search - Search web pages" in out
+    assert "  schedule_task - Schedule a prompt to run at a future time" in out
+    # summary line with counts
+    import re
+
+    match = re.search(r"(\d+) of (\d+) tools enabled", out)
+    assert match and int(match.group(1)) == 2
+
+
+def test_tools_list_marks_runtime_disabled_tools(capsys):
+    agent = ListToolsAgent()
+    agent._disabled_tools = {"web_search"}
+    it = iter(["/tools list", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "web_search [off]" in out
+    assert "schedule_task - Schedule" in out  # still enabled
+    import re
+
+    match = re.search(r"(\d+) of (\d+) tools enabled", out)
+    assert match and int(match.group(1)) == 1
+
+
+def test_tools_list_includes_default_tools_not_in_agent(capsys):
+    """Tools excluded by [agent] tool_groups show up with an [off] marker."""
+    agent = ListToolsAgent()
+    it = iter(["/tools list", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    out = capsys.readouterr().out
+    # recall_memory is in the default set but not in the fake agent's tools
+    assert "recall_memory [off]" in out
+    assert "generate_image [off]" in out
+    import re
+
+    match = re.search(r"(\d+) of (\d+) tools enabled", out)
+    assert match and int(match.group(1)) == 2 and int(match.group(2)) > 2
+
+
+def test_tools_list_usage_hint_in_help(capsys):
+    it = iter(["/help", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    out = capsys.readouterr().out
+    # the rich table wraps the command cell; check both parts
+    assert "/tools" in out and "list shows all tools + state" in out

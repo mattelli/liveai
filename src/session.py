@@ -252,8 +252,8 @@ class ConversationSession:
             ("/quit", "exit the session (alias: exit)"),
             ("/clear", "clear the conversation history"),
             ("/voice on|off", "toggle speech output"),
-            ("/tools [on|off <tool|topic>]",
-             "list/run a tool; on|off toggles tools at runtime"),
+            ("/tools [list|on|off <tool|topic>]",
+             "list/run enabled tools; list shows all tools + state; on|off toggles"),
             ("/info", "show model/context info"),
             ("/model [name]", "switch to a model from the models JSON file"),
             ("/session store|list|load", "save/list/restore chat sessions (JSON)"),
@@ -301,8 +301,11 @@ class ConversationSession:
             return
         parts = arg.split(maxsplit=1)
         action = parts[0].lower()
+        if action == "list":
+            self._list_tools()
+            return
         if action not in ("on", "off") or len(parts) < 2 or not parts[1].strip():
-            cprint("Usage: /tools [on|off <tool|topic>]", "yellow")
+            cprint("Usage: /tools [list|on|off <tool|topic>]", "yellow")
             return
         toggle = getattr(self.agent, "toggle_tools", None)
         if not callable(toggle):
@@ -310,9 +313,59 @@ class ConversationSession:
             return
         names = [n for n in parts[1].replace(" ", ",").split(",") if n.strip()]
         if not names:
-            cprint("Usage: /tools [on|off <tool|topic>]", "yellow")
+            cprint("Usage: /tools [list|on|off <tool|topic>]", "yellow")
             return
         cprint(str(toggle(names, enabled=(action == "on"))), "green")
+
+    def _list_tools(self) -> None:
+        """List every available tool with its enabled/disabled state.
+
+        Unlike ``/tools`` (the interactive launcher, which only lists the
+        currently enabled tools for selection), ``/tools list`` shows the
+        full known set: tools disabled at runtime (``/tools off``) or
+        excluded by ``[agent] tool_groups`` carry an ``[off]`` marker.
+        """
+        import src.live_ai as live_ai
+
+        agent = self.agent
+        enabled = {self._tool_name(tool)
+                   for tool in getattr(agent, "tools", []) or []}
+        disabled = getattr(agent, "_disabled_tools", None) or set()
+        # Full known set: the default tool set minus tool_groups exclusions,
+        # plus any runtime-toggled tools (they stay in agent.tools).
+        try:
+            known = live_ai._default_tools(agent)
+        except Exception:  # pragma: no cover - FakeAgent in tests
+            known = list(getattr(agent, "tools", []) or [])
+        # MCP-injected tools are not part of _default_tools; append them so
+        # the listing also shows their runtime state.
+        known_names = {self._tool_name(tool) for tool in known}
+        known += [tool for tool in getattr(agent, "tools", []) or []
+                  if self._tool_name(tool) not in known_names]
+
+        cprint("Available tools:", "cyan", bold=True)
+        for topic, topic_tools in live_ai.tool_topics(known):
+            cprint(f"{topic}:", "yellow", bold=True)
+            for tool in topic_tools:
+                name = self._tool_name(tool)
+                doc = (getattr(tool, "__doc__", "") or "").strip().splitlines()
+                summary = doc[0].strip() if doc else ""
+                if name in disabled:
+                    state = " [off]"       # runtime-toggled off
+                elif name in enabled:
+                    state = ""             # enabled (in agent.tools)
+                else:
+                    state = " [off]"       # excluded by tool_groups
+                line = f"  {name}{state}"
+                if summary:
+                    line += f" - {summary}"
+                cprint(line, "cyan")
+        active = sum(1 for tool in known
+                     if self._tool_name(tool) in enabled
+                     and self._tool_name(tool) not in disabled)
+        cprint(f"{active} of {len(known)} tools enabled "
+               "([off] = disabled by /tools off or [agent] tool_groups).",
+               "grey")
 
     def _tool_toggle_state(self, tool) -> str:
         """`[off]` marker for tools disabled at runtime (``/tools`` listing)."""
