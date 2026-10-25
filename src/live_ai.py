@@ -209,11 +209,10 @@ def _select_tools(tools: list[Callable], groups) -> list[Callable]:
 # or test doubles) fall under "other", listed last.
 _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
     "model": ("model_info",),
-    "monitoring": ("agent_activity",),
     "memory": ("recall_memory", "store_memory", "clear_chat"),
     "speech": ("allow_speech",),
     "scheduling": ("schedule_task", "list_scheduled_tasks",
-                   "cancel_scheduled_task"),
+                   "cancel_scheduled_task", "agent_activity"),
     "documents": ("summarize_doc", "query_document", "list_corpora",
                   "store_corpus", "query_corpus"),
     "images": ("image_response", "capture_image", "image_search",

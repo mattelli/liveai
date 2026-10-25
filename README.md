@@ -638,7 +638,7 @@ unset) keep that cost bounded:
 
 [agent]
 # tool_doc_chars = 300                # cap tool descriptions in the JSON schemas (0 = full docstrings)
-# tool_groups = "model, monitoring, memory, files, web, documents, images, system, mcp"  # keep only these tool topics (default "all")
+# tool_groups = "model, memory, scheduling, files, web, documents, images, system, mcp"  # keep only these tool topics (default "all")
 ```
 
 - `max_tool_result_chars` — oversized tool results keep the first 75% and the
@@ -795,6 +795,10 @@ recurring jobs. Three tools are exposed to the model:
   `hourly`, `every 30m`, or a 5-field cron expression like `0 9 * * MON`.
 - `list_scheduled_tasks()` — pending tasks with ids and next run times.
 - `cancel_scheduled_task(task_id)` — cancel a task by id.
+
+All three belong to the `scheduling` tool topic, together with
+`agent_activity(last=20)` — the tool that reports what the scheduled runs did
+(see [Sub-agent activity monitoring](#sub-agent-activity-monitoring)).
 
 Scheduled prompts run on a **dedicated isolated agent** (quiet, own tool
 state), never on the main session agent, so the live conversation is never
