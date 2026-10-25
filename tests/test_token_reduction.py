@@ -265,7 +265,7 @@ def test_agent_build_tools_default_keeps_all_tools():
     agent.config = SimpleNamespace(brain=SimpleNamespace(model="m"))
     agent.isolated_tools = False
     names = [t.__name__ for t in agent._build_tools()]
-    assert len(names) == 43  # two delegation tools removed, spawn_process added
+    assert len(names) == 44  # two delegation tools removed, spawn_process + compact_chat added
     assert "summarize_doc" in names and "exit_gracefully" in names
 
 
@@ -372,6 +372,88 @@ def test_prune_history_skips_group_crossing_keep_window():
             assert roles[i - 1] == "assistant"  # never an orphan tool result
 
 
+# ----------------------------------------------------- auto-compaction trigger
+
+
+def test_auto_compaction_disabled_by_default():
+    """Missing flag -> the historical pruning path runs, no compaction."""
+    agent = _BareAgent()
+    assert getattr(agent, "_auto_compaction", False) is False
+
+
+def test_auto_compaction_flag_parsing():
+    agent_true = _BareAgent()
+    agent_true._auto_compaction = True
+    agent_false = _BareAgent()
+    agent_false._auto_compaction = False
+    assert agent_true._auto_compaction is True
+    assert agent_false._auto_compaction is False
+
+
+def test_prune_history_triggers_compaction_when_enabled(monkeypatch):
+    messages = (
+        [{"role": "system", "content": "s"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    agent = _prune_agent(messages, window=5, ratio=0.7, keep=40)
+    agent._auto_compaction = True
+    agent._compact_keep_messages = 2
+    compacted = []
+    monkeypatch.setattr(agent, "_auto_compact",
+                        lambda: compacted.append(1) or "Chat compacted: ok")
+    agent._prune_history()
+    assert compacted == [1]  # compaction ran once before pruning
+
+
+def test_prune_history_skips_compaction_when_under_ratio():
+    messages = [{"role": "system", "content": "s"},
+                {"role": "user", "content": "recent"}]
+    agent = _prune_agent(messages, window=100_000, ratio=0.7, keep=40)
+    agent._auto_compaction = True
+    agent._compact_keep_messages = 2
+    agent._auto_compact = lambda: (_ for _ in ()).throw(
+        AssertionError("compaction must not run under the ratio"))
+    agent._prune_history()  # no compaction, no pruning
+
+
+def test_auto_compact_calls_module_compact_chat(monkeypatch):
+    import src.tools.memory as memory_mod
+    seen = {}
+    monkeypatch.setattr(memory_mod, "compact_chat",
+                        lambda keep_last=4: seen.update(keep=keep_last)
+                        or "Chat compacted: ok")
+    agent = _BareAgent()
+    agent._compact_keep_messages = 6
+    result = agent._auto_compact()
+    assert result == "Chat compacted: ok"
+    assert seen == {"keep": 6}
+
+
+def test_auto_compact_swallows_errors(monkeypatch):
+    import src.tools.memory as memory_mod
+
+    def boom(keep_last=4):
+        raise RuntimeError("no session")
+
+    monkeypatch.setattr(memory_mod, "compact_chat", boom)
+    agent = _BareAgent()
+    assert agent._auto_compact() == ""  # never raises
+
+
+def test_auto_compact_error_result_is_empty():
+    agent = _BareAgent()
+    agent._compact_keep_messages = 4
+    # no history bound -> compact_chat returns "Error: ..." -> mapped to ""
+    assert agent._auto_compact() == ""
+
+
+def test_compact_keep_messages_defaults_to_context_keep():
+    agent = _BareAgent()
+    agent._compact_keep_messages = 40
+    assert agent._compact_keep_messages == 40
+
+
 def test_act_calls_prune_history_once_per_turn(monkeypatch):
     agent = _agent_with_tool_result("ok", limit=0)
     agent._context_trim_ratio = 0.7
@@ -428,6 +510,8 @@ system_prompt = "s"
 max_tool_result_chars = 4000
 context_trim_ratio = 0.7
 context_keep_messages = 50
+auto_compaction = true
+compact_keep_messages = 6
 
 [agent]
 tool_doc_chars = 300
@@ -439,6 +523,8 @@ tool_groups = "files, web"
     assert config.brain.max_tool_result_chars == 4000
     assert config.brain.context_trim_ratio == 0.7
     assert config.brain.context_keep_messages == 50
+    assert config.brain.auto_compaction is True
+    assert config.brain.compact_keep_messages == 6
     assert config.agent.tool_doc_chars == 300
     assert config.agent.tool_groups == "files, web"
 

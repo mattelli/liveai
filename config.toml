@@ -17,6 +17,8 @@ temperature = 0.6                  # randomness (0 = deterministic, 1 = random)
 max_tool_result_chars = 4000       # cap tool results stored in the history, head+tail kept (0 = uncapped)
 context_trim_ratio = 0.7           # prune oldest complete tool rounds when context usage exceeds this ratio (0 = never prune)
 context_keep_messages = 40         # recent messages never pruned (used when context_trim_ratio > 0)
+auto_compaction = false            # run compact_chat (summary) instead of plain pruning when context_trim_ratio is exceeded (false = legacy pruning only)
+# compact_keep_messages = 4        # recent turns kept by auto-compaction (default: context_keep_messages)
 # Vision support and the context window are auto-detected from the model metadata reported by the server (OpenAI /models endpoint, e.g. LMStudio max_context_length). 
 # Only set the optional overrides below for servers that do not report them:
 # vision = true

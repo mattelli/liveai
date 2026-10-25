@@ -1287,6 +1287,12 @@ class Brain(OpenAICore):
         prompt (never a mid-history system message) so the model knows
         earlier context was compacted. Returns the dropped message count
         (0 = nothing pruned). 0/unset ratio disables pruning entirely.
+
+        With ``[brain] auto_compaction = true``, the same usage checkpoint
+        first runs a summarizing compaction (``src.tools.memory.compact_chat``
+        keeping ``[brain] compact_keep_messages`` recent turns) instead of the
+        plain drop; legacy pruning still runs afterwards if usage remains
+        above the ratio, so the loop cannot spin.
         """
         ratio = getattr(self, "_context_trim_ratio", 0.0)
         if not ratio:
@@ -1294,6 +1300,14 @@ class Brain(OpenAICore):
         keep = getattr(self, "_context_keep_messages", 40)
         messages = self._messages
         dropped_total = 0
+        if getattr(self, "_auto_compaction", False):
+            usage_pct, _window = self._context_usage()
+            if usage_pct > ratio * 100:
+                compacted = self._auto_compact()
+                if compacted:
+                    self.logger.info(
+                        "Context auto-compacted: %s", compacted)
+                    usage_pct, _window = self._context_usage()
         while True:
             usage_pct, _window = self._context_usage()
             if usage_pct <= ratio * 100:
@@ -1314,6 +1328,22 @@ class Brain(OpenAICore):
                 system["content"] = (
                     base + f"\n[history pruned: {dropped_total} messages dropped]")
         return dropped_total
+
+    def _auto_compact(self) -> str:
+        """One automatic compaction via the memory tool (auto_compaction).
+
+        Calls the module-default ``compact_chat`` with the configured
+        ``[brain] compact_keep_messages``. Never raises: any failure returns
+        an empty string so the caller falls back to the plain pruning path.
+        """
+        try:
+            from src.tools import memory as memory_tools
+            keep = getattr(self, "_compact_keep_messages", 40)
+            result = memory_tools.compact_chat(keep)
+            return result if not result.startswith("Error:") else ""
+        except Exception as e:
+            self.logger.warning("Auto-compaction failed: %s", e)
+            return ""
 
     ## session view for the session-bound tool modules (src.tools.vision) ##
 
@@ -1768,6 +1798,21 @@ class Agent(Brain):
         except (TypeError, ValueError):
             keep_messages = 40
         self._context_keep_messages = keep_messages if keep_messages >= 4 else 40
+        # [brain] compact_keep_messages: recent turns kept by auto-compaction
+        # (Task 5); missing/invalid falls back to context_keep_messages.
+        try:
+            compact_keep = int(
+                getattr(config.brain, "compact_keep_messages", 0) or 0)
+        except (TypeError, ValueError):
+            compact_keep = 0
+        self._compact_keep_messages = (
+            compact_keep if compact_keep >= 2 else self._context_keep_messages)
+        # [brain] auto_compaction: when true, trigger compact_chat at the
+        # context-usage checkpoint instead of the plain oldest-round pruning
+        # (missing/anything falsy = the historical behavior).
+        self._auto_compaction = str(
+            getattr(config.brain, "auto_compaction", False)).strip().lower() \
+            in ("true", "1", "yes", "on")
         self._fragments_buffer: list[str] = []
         # Runtime tool toggling (/tools on|off): names here are excluded from
         # the schemas sent with every request (session-only, main agent).
