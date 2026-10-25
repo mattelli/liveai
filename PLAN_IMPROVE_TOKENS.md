@@ -304,18 +304,18 @@ behavior** (backward compatible): existing tests must stay green untouched.
 
 ## 6. Verification checklist (definition of done)
 
-- [ ] `python -m pytest tests/` passes with the new tests from all tasks.
-- [ ] With the new keys unset/0, all existing tests pass untouched and
+- [x] `python -m pytest tests/` passes with the new tests from all tasks.
+- [x] With the new keys unset/0, all existing tests pass untouched and
       runtime behavior is byte-identical (full tool set, full docstrings,
       uncapped results, no pruning).
-- [ ] With the recommended values: schema payload < 20k chars (~5k tokens,
+- [x] With the recommended values: schema payload < 20k chars (~5k tokens,
       measured 19.1k vs 21.9k baseline), tool results capped at 4000 chars,
       long turns pruned before hitting the context window.
-- [ ] No orphan tool messages / split tool-call groups after pruning
+- [x] No orphan tool messages / split tool-call groups after pruning
       (servers must never see an incomplete parallel tool-call group).
-- [ ] Monitor events, delegation, MCP injection and Ctrl+C cancellation
+- [x] Monitor events, delegation, MCP injection and Ctrl+C cancellation
       behave exactly as before.
-- [ ] `/tools on|off` toggles take effect on the next request (disabled
+- [x] `/tools on|off` toggles take effect on the next request (disabled
       tool schemas are not sent) and survive `/mcp refresh`; pooled agents
       are unaffected.
-- [ ] One commit per task, in order, with the messages above.
+- [x] One commit per task, in order, with the messages above.

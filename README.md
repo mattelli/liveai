@@ -745,6 +745,12 @@ unset) keep that cost bounded:
 - Pooled agents inherit the same settings (they copy the config). Recommended
   starting values: `max_tool_result_chars = 4000`, `tool_doc_chars = 300`,
   `context_trim_ratio = 0.7`, `context_keep_messages = 40`.
+- Runtime toggling: `/tools off <tool|topic>` drops a tool's schema from every
+  subsequent request for the rest of the session (e.g. `/tools off finance`
+  removes both finance tools; `/tools on finance` restores them), and
+  `/tools` lists the tools with `[off]` markers. Toggles are session-only —
+  `[agent] tool_groups` remains the boot-time default — and survive
+  `/mcp refresh`.
 
 ## Sub-agent activity monitoring
 
