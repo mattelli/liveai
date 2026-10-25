@@ -18,7 +18,7 @@ models_file = "models.json"  # models: first entry boots, /model switches (JSON:
 # Only set the optional overrides below for servers that do not report them:
 # vision = true
 # context_window = 8192
-max_response_tokens = 0.2                   # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
+max_response_tokens = 0.1                 # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
 temperature = 0.6
 
 # Chain-of-thought visualization: stream the model's reasoning while it thinks
@@ -28,8 +28,8 @@ max_thinking_tokens = 0                   # max tokens of thinking to visualize 
 
 [agent] # multi-agent configuration
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
-max_act_rounds = 500       # max tool-loop rounds per agent turn (default 100)
-parallel_agents = 2        # extra agents beside the running one (0 = off)
+max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
+parallel_agents = 0        # extra agents beside the running one (0 = off)
 agent_models = [           # models.json entry names, one per agent
     "ternary-bonsai", 
     "ternary-bonsai"
@@ -40,7 +40,7 @@ agent_system_prompts = [   # optional per-agent system prompts
     ]
 monitor = "log"                                  # sub-agent monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
 monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
-monitor_buffer = 1000                            # in-memory events kept for the agent_activity tool
+monitor_buffer = 200                             # in-memory events kept for the agent_activity tool
 
 [scheduler] # schedule agent prompts for a future time (all keys optional)
 enabled = false                       # false (or missing section) -> tools are no-ops
