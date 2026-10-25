@@ -267,3 +267,118 @@ def test_agent_build_tools_default_keeps_all_tools():
     names = [t.__name__ for t in agent._build_tools()]
     assert len(names) == 44
     assert "summarize_doc" in names and "exit_gracefully" in names
+
+
+# ------------------------------------------------------- context pruning
+
+
+def _prune_agent(messages, window, ratio, keep=40):
+    agent = _BareAgent()
+    agent._messages = messages
+    agent._context_window = window
+    agent._context_trim_ratio = ratio
+    agent._context_keep_messages = keep
+    return agent
+
+
+def _tool_round(ids, result="r"):
+    return [
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": i, "type": "function",
+                         "function": {"name": "t", "arguments": "{}"}} for i in ids]},
+        *[{"role": "tool", "tool_call_id": i, "content": result} for i in ids],
+    ]
+
+
+def test_prune_history_disabled_when_ratio_zero():
+    messages = [{"role": "system", "content": "s"}] + _tool_round(["c1"]) * 50
+    agent = _prune_agent(messages, window=1000, ratio=0.0)
+    assert agent._prune_history() == 0
+    assert len(agent._messages) == 101
+
+
+def test_prune_history_untouched_under_ratio():
+    messages = [{"role": "system", "content": "s"}] + _tool_round(["c1"]) * 3
+    agent = _prune_agent(messages, window=100_000, ratio=0.7)
+    assert agent._prune_history() == 0
+    assert len(agent._messages) == 7
+
+
+def test_prune_history_drops_complete_tool_rounds():
+    # 20 tool rounds of ~1500 chars each in a 8k window -> ~75% usage.
+    messages = [{"role": "system", "content": "s"}]
+    for n in range(20):
+        messages += _tool_round([f"c{n}"], result="r" * 1500)
+    total = len(messages)  # 41
+    agent = _prune_agent(messages, window=8000, ratio=0.7, keep=4)
+    dropped = agent._prune_history()
+    assert dropped > 0
+    assert len(agent._messages) < total
+    roles = [m["role"] for m in agent._messages]
+    # No orphan tool messages: every tool follows its assistant(tool_calls).
+    for i, role in enumerate(roles):
+        if role == "tool":
+            assert roles[i - 1] == "assistant"
+    # System prompt untouched (except the prune marker), recent messages kept.
+    assert agent._messages[0]["role"] == "system"
+    assert agent._messages[0]["content"].startswith("s")
+    assert agent._messages[-1]["role"] == "tool"
+
+
+def test_prune_history_never_enters_keep_window():
+    messages = [{"role": "system", "content": "s"}]
+    for n in range(30):
+        messages += _tool_round([f"c{n}"], result="r" * 1500)
+    agent = _prune_agent(messages, window=8000, ratio=0.5, keep=10)
+    agent._prune_history()
+    assert len(agent._messages) >= 11  # system + keep window intact
+    assert agent._messages[0]["role"] == "system"
+
+
+def test_prune_history_appends_marker_once():
+    messages = [{"role": "system", "content": "s"}]
+    for n in range(20):
+        messages += _tool_round([f"c{n}"], result="r" * 1500)
+    agent = _prune_agent(messages, window=8000, ratio=0.7, keep=4)
+    agent._prune_history()
+    assert "[history pruned:" in agent._messages[0]["content"]
+    agent._prune_history()  # second call: usage already low, marker replaced
+    assert agent._messages[0]["content"].count("[history pruned:") <= 1
+
+
+def test_prune_history_stops_when_under_ratio():
+    messages = [{"role": "system", "content": "s"}]
+    for n in range(20):
+        messages += _tool_round([f"c{n}"], result="r" * 1500)
+    agent = _prune_agent(messages, window=8000, ratio=0.7, keep=4)
+    agent._prune_history()
+    usage, _ = agent._context_usage()
+    assert usage <= 70.0
+
+
+def test_prune_history_skips_group_crossing_keep_window():
+    # A tool round whose tool result would cross into the keep window must
+    # not be split: pruning stops instead of creating an orphan tool message.
+    messages = [{"role": "system", "content": "s"}]
+    for n in range(10):
+        messages += _tool_round([f"c{n}"], result="r" * 1500)
+    messages.append({"role": "user", "content": "recent question"})
+    keep = 3  # keep-window starts inside the last tool round
+    agent = _prune_agent(messages, window=8000, ratio=0.1, keep=keep)
+    agent._prune_history()
+    roles = [m["role"] for m in agent._messages]
+    for i, role in enumerate(roles):
+        if role == "tool":
+            assert roles[i - 1] == "assistant"  # never an orphan tool result
+
+
+def test_act_calls_prune_history_once_per_turn(monkeypatch):
+    agent = _agent_with_tool_result("ok", limit=0)
+    agent._context_trim_ratio = 0.7
+    agent._context_keep_messages = 40
+    calls = []
+    monkeypatch.setattr(
+        type(agent), "_prune_history",
+        lambda self: calls.append(1) or 0)
+    agent.act("do it")
+    assert len(calls) == 1

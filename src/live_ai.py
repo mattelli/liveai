@@ -1303,6 +1303,82 @@ class Brain(OpenAICore):
                 continue
             break
 
+    ## context pruning ([brain] context_trim_ratio) ##
+
+    @staticmethod
+    def _next_prunable_group_end(messages: list[dict], start: int,
+                                 keep: int) -> int | None:
+        """End index (exclusive) of the oldest prunable group from ``start``.
+
+        A group is either a *complete* tool round (one assistant message
+        carrying ``tool_calls`` plus every following ``role == "tool"``
+        message with a matching ``tool_call_id`` - never split, servers
+        reject orphan tool results) or a single plain user/assistant
+        message. Nothing at or after ``len(messages) - keep`` (the
+        keep-window) may be dropped. A leading orphan ``tool`` message
+        (already template-invalid on its own) is dropped alone to unblock
+        pruning. Returns None when nothing can be dropped.
+        """
+        limit = len(messages) - keep  # exclusive droppable boundary
+        if start >= limit:
+            return None
+        first = messages[start]
+        role = first.get("role")
+        if role == "assistant" and first.get("tool_calls"):
+            call_ids = {tc.get("id") for tc in first["tool_calls"]}
+            end = start + 1
+            while (end < len(messages)
+                   and messages[end].get("role") == "tool"
+                   and messages[end].get("tool_call_id") in call_ids):
+                end += 1
+            return end if end <= limit else None
+        if role == "tool":
+            return start + 1  # orphan tool result: drop it to unblock
+        if role in ("user", "assistant", "system"):
+            return start + 1
+        return None
+
+    def _prune_history(self) -> int:
+        """Drop the oldest history when context usage exceeds the ratio.
+
+        Called at the start of every ``act()`` turn. ``[brain]
+        context_trim_ratio`` triggers pruning when the approximate usage
+        (``_context_usage``) passes it; oldest complete groups are dropped
+        (see ``_next_prunable_group_end``) until usage is back under the
+        ratio. The system prompt (index 0) and the last ``[brain]
+        context_keep_messages`` messages are never touched, so the live
+        exchange stays intact. A one-line marker is appended to the system
+        prompt (never a mid-history system message) so the model knows
+        earlier context was compacted. Returns the dropped message count
+        (0 = nothing pruned). 0/unset ratio disables pruning entirely.
+        """
+        ratio = getattr(self, "_context_trim_ratio", 0.0)
+        if not ratio:
+            return 0
+        keep = getattr(self, "_context_keep_messages", 40)
+        messages = self._messages
+        dropped_total = 0
+        while True:
+            usage_pct, _window = self._context_usage()
+            if usage_pct <= ratio * 100:
+                break
+            end = self._next_prunable_group_end(messages, 1, keep)
+            if end is None:
+                break
+            del messages[1:end]
+            dropped_total += end - 1
+        if dropped_total:
+            system = next(
+                (m for m in messages if m.get("role") == "system"), None)
+            if system is not None:
+                base = str(system.get("content") or "")
+                cut = base.find("\n[history pruned:")
+                if cut != -1:  # replace a marker from an earlier prune
+                    base = base[:cut]
+                system["content"] = (
+                    base + f"\n[history pruned: {dropped_total} messages dropped]")
+        return dropped_total
+
     ## session view for the session-bound tool modules (src.tools.vision) ##
 
     @property
@@ -1711,6 +1787,20 @@ class Agent(Brain):
         except (TypeError, ValueError):
             result_chars = 0
         self._max_tool_result_chars = max(0, result_chars)
+        # [brain] context_trim_ratio / context_keep_messages: prune the oldest
+        # history when the approximate context usage exceeds the ratio
+        # (0/unset/invalid = never prune, the historical behavior).
+        try:
+            trim_ratio = float(getattr(config.brain, "context_trim_ratio", 0) or 0)
+        except (TypeError, ValueError):
+            trim_ratio = 0.0
+        self._context_trim_ratio = trim_ratio if 0 < trim_ratio < 1 else 0.0
+        try:
+            keep_messages = int(
+                getattr(config.brain, "context_keep_messages", 40) or 40)
+        except (TypeError, ValueError):
+            keep_messages = 40
+        self._context_keep_messages = keep_messages if keep_messages >= 4 else 40
         self._fragments_buffer: list[str] = []
         self.logger.info(
             "✅ Agent with Model '%s' initialized. Setting up tools ...",
@@ -1880,6 +1970,7 @@ class Agent(Brain):
             cprint(f"\n🤖 [{self._model_name}]", "grey")
         self.logger.info("Sending to Agent [🤖: %s] ...", self._model_name)
         self._add_user_prompt(prompt)
+        self._prune_history()
         self._cancel_requested = False  # fresh turn
         self._reset_thinking()
         self._turn_started = time.monotonic()
