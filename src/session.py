@@ -85,8 +85,8 @@ class ConversationSession:
     shutdown. All collaborators are injected, so no heavy module is imported.
     """
 
-    COMMANDS = ("/help", "/quit", "/clear", "/voice", "/tools", "/info",
-                "/model", "/session", "/mcp", "/monitor")
+    COMMANDS = ("/help", "/quit", "/clear", "/compact", "/voice", "/tools",
+                "/info", "/model", "/session", "/mcp", "/monitor")
 
     def __init__(self, agent, read_prompt: Callable[[], str | None], use_tools: bool = True,
                  quit_on_prompt_interrupt: bool = False):
@@ -221,6 +221,9 @@ class ConversationSession:
         if cmd == "/clear":
             self._cmd_clear()
             return True
+        if cmd == "/compact":
+            self._cmd_compact(arg)
+            return True
         if cmd == "/voice":
             self._cmd_voice(arg)
             return True
@@ -251,6 +254,8 @@ class ConversationSession:
             ("/help", "show this help"),
             ("/quit", "exit the session (alias: exit)"),
             ("/clear", "clear the conversation history"),
+            ("/compact [keep_last]",
+             "compact old history into a summary, keeping the last N messages"),
             ("/voice on|off", "toggle speech output"),
             ("/tools [list|on|off <tool|topic>]",
              "list/run enabled tools; list shows all tools + state; on|off toggles"),
@@ -280,6 +285,20 @@ class ConversationSession:
     def _cmd_clear(self) -> None:
         clear_chat()
         cprint("Chat cleared", "green")
+
+    def _cmd_compact(self, arg: str) -> None:
+        """``/compact [keep_last]``: summarize old history, keep recent turns."""
+        from src.tools import compact_chat
+        arg = (arg or "").strip()
+        keep_last = 4
+        if arg:
+            try:
+                keep_last = int(arg)
+            except ValueError:
+                cprint(f"Invalid keep_last: {arg}, using default 4.", "yellow")
+        result = compact_chat(keep_last)
+        color = "red" if result.startswith("Error:") else "green"
+        cprint(result, color)
 
     def _cmd_voice(self, arg: str) -> None:
         arg = arg.strip().lower()

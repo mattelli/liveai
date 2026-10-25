@@ -70,6 +70,54 @@ def test_clear_calls_tool(monkeypatch):
     assert calls == [1]
 
 
+# ------------------------------------------------------------- T5b compact
+
+
+def test_compact_default_calls_tool(monkeypatch):
+    calls = []
+    monkeypatch.setattr("src.tools.compact_chat",
+                        lambda keep_last=4: calls.append(keep_last) or "ok")
+    it = iter(["/compact", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert calls == [4]
+
+
+def test_compact_with_keep_last_argument(monkeypatch):
+    calls = []
+    monkeypatch.setattr("src.tools.compact_chat",
+                        lambda keep_last=4: calls.append(keep_last) or "ok")
+    it = iter(["/compact 2", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert calls == [2]
+
+
+def test_compact_invalid_argument_falls_back_to_default(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr("src.tools.compact_chat",
+                        lambda keep_last=4: calls.append(keep_last) or "ok")
+    it = iter(["/compact abc", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert calls == [4]
+    assert "Invalid keep_last" in capsys.readouterr().out
+
+
+def test_compact_error_is_reported_in_red(monkeypatch, capsys):
+    monkeypatch.setattr("src.tools.compact_chat",
+                        lambda keep_last=4: "Error: no chat session is bound.")
+    it = iter(["/compact", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "Error: no chat session is bound." in out
+
+
+def test_help_lists_compact(capsys):
+    s = make(["/help", "/quit"])
+    s.run()
+    out = capsys.readouterr().out
+    assert "/compact" in out
+    assert "compact old history" in out
+
+
 # ------------------------------------------------------------------- T6 voice
 
 
