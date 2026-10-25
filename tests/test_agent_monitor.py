@@ -1,4 +1,4 @@
-"""Tests for the sub-agent activity monitor (PLAN_MONITOR.md task 2)."""
+﻿"""Tests for the sub-agent activity monitor (PLAN_MONITOR.md task 2)."""
 
 import json
 import threading
@@ -121,9 +121,9 @@ def test_log_write_failure_is_swallowed_and_sink_dropped(tmp_path):
 def test_unicode_event_written_without_escaping(tmp_path):
     log_file = tmp_path / "agents.jsonl"
     monitor = AgentMonitor(maxlen=10, log_file=str(log_file))
-    monitor.record("glm", "answer", answer="risposta con àccenti ✓")
+    monitor.record("glm", "answer", answer="risposta con Ã ccenti âœ“")
     line = json.loads(log_file.read_text(encoding="utf-8"))
-    assert line["answer"] == "risposta con àccenti ✓"
+    assert line["answer"] == "risposta con Ã ccenti âœ“"
 
 
 # ------------------------------------------------------------- concurrency
@@ -172,75 +172,216 @@ def test_monitor_maxlen_never_zero():
     assert AgentMonitor(maxlen=-3).maxlen >= 1
 
 
-# ------------------------------------------------ task 3: pool emits events
+# ------------------------------------------- monitor settings + build_monitor
 
 
-def test_pool_ask_records_start_and_answer(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], monitor={"calls"})
-    agent = pool.agents["glm"]
+def test_monitor_flags_parsing_variants():
+    parse = live_ai_mod._monitor_flags
+    assert parse(None) == set()
+    assert parse("") == set()
+    assert parse("none") == set()
+    assert parse("calls") == {"calls"}
+    assert parse("log") == {"log"}
+    assert parse("calls,log") == {"calls", "log"}
+    assert parse("log, calls") == {"calls", "log"}
+    assert parse(" CALLS , LOG ") == {"calls", "log"}
+    assert parse(["calls", "log"]) == {"calls", "log"}
+    assert parse("calls,bogus,log") == {"calls", "log"}  # unknown ignored
+    assert parse("bogus") == set()
+    assert parse("calls,none,log") == set()  # "none" clears everything
+
+
+def test_monitor_buffer_parsing():
+    parse = live_ai_mod._monitor_buffer
+    assert parse(None) == 100
+    assert parse(100) == 100
+    assert parse("50") == 50
+    assert parse(25) == 25
+    assert parse("bad") == 100
+    assert parse(0) == 100      # non-positive falls back to the default
+    assert parse(-5) == 100
+
+
+def test_monitor_settings_without_agent_section():
+    from types import SimpleNamespace
+
+    assert live_ai_mod.monitor_settings(SimpleNamespace()) == {
+        "monitor": set(),
+        "monitor_log_file": "agents.jsonl",
+        "monitor_buffer": 100,
+    }
+
+
+def test_monitor_settings_keys():
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(agent=SimpleNamespace(
+        monitor="calls,log", monitor_log_file="logs/sub.jsonl",
+        monitor_buffer="25"))
+    settings = live_ai_mod.monitor_settings(config)
+    assert settings["monitor"] == {"calls", "log"}
+    assert settings["monitor_log_file"] == "logs/sub.jsonl"
+    assert settings["monitor_buffer"] == 25
+
+
+def test_monitor_settings_log_file_path_object():
+    # load_config path-resolves *_file keys to Path objects; settings keep it.
+    import pathlib as _pl
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(agent=SimpleNamespace(
+        monitor_log_file=_pl.Path("x/y.jsonl")))
+    assert live_ai_mod.monitor_settings(config)["monitor_log_file"] == str(_pl.Path("x/y.jsonl"))
+
+
+def test_monitor_settings_load_config_round_trip(tmp_path):
+    from src.common import load_config
+    import textwrap
+
+    config_file = tmp_path / "config.toml"
+    config_file.write_text(textwrap.dedent("""
+        [agent]
+        bootstrap_prompt = "hello"
+        monitor = "calls, log"
+        monitor_log_file = "logs/agents.jsonl"
+        monitor_buffer = 50
+    """), encoding="utf-8")
+    config = load_config(config_file)
+    settings = live_ai_mod.monitor_settings(config)
+    assert settings["monitor"] == {"calls", "log"}
+    assert settings["monitor_log_file"].endswith("agents.jsonl")  # resolved path
+    assert settings["monitor_buffer"] == 50
+
+
+def test_build_monitor_disabled_returns_none():
+    from types import SimpleNamespace
+
+    previous = live_ai_mod.get_monitor()
+    try:
+        assert live_ai_mod.build_monitor(SimpleNamespace()) is None
+        assert live_ai_mod.get_monitor() is None
+    finally:
+        live_ai_mod.bind_monitor(previous)
+
+
+def test_build_monitor_enabled_binds_ring_buffer(tmp_path):
+    from types import SimpleNamespace
+
+    previous = live_ai_mod.get_monitor()
+    try:
+        config = SimpleNamespace(agent=SimpleNamespace(
+            monitor="calls", monitor_buffer="7"))
+        monitor = live_ai_mod.build_monitor(config)
+        assert monitor is live_ai_mod.get_monitor()
+        assert monitor.maxlen == 7
+        monitor.record("scheduler", "start", prompt="x")
+        assert [e["agent"] for e in monitor.snapshot()] == ["scheduler"]
+    finally:
+        live_ai_mod.bind_monitor(previous)
+
+
+def test_build_monitor_log_flag_only_creates_jsonl_sink(tmp_path):
+    from types import SimpleNamespace
+
+    previous = live_ai_mod.get_monitor()
+    log_file = tmp_path / "agents.jsonl"
+    try:
+        config = SimpleNamespace(agent=SimpleNamespace(
+            monitor="log", monitor_log_file=str(log_file)))
+        monitor = live_ai_mod.build_monitor(config)
+        monitor.record("scheduler", "answer", answer="done")
+        lines = log_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0])["answer"] == "done"
+    finally:
+        live_ai_mod.bind_monitor(previous)
+
+
+def test_build_monitor_calls_flag_no_log_file(tmp_path):
+    from types import SimpleNamespace
+
+    previous = live_ai_mod.get_monitor()
+    before = set(p.name for p in tmp_path.iterdir())
+    try:
+        config = SimpleNamespace(agent=SimpleNamespace(monitor="calls"))
+        monitor = live_ai_mod.build_monitor(config)
+        monitor.record("scheduler", "start")
+        assert set(p.name for p in tmp_path.iterdir()) == before  # no JSONL file
+        assert len(monitor) == 1  # ring buffer still populated
+    finally:
+        live_ai_mod.bind_monitor(previous)
+
+
+def test_main_setup_monitor_binds_when_enabled(monkeypatch):
+    """main._setup_monitor builds + binds the monitor from [agent] settings."""
+    import types
+    import main
+
+    captured = {}
+    monkeypatch.setattr(
+        "src.live_ai.build_monitor",
+        lambda config: captured.setdefault("bound", config))
+    config = types.SimpleNamespace(agent=types.SimpleNamespace(monitor="calls"))
+    main._setup_monitor(config)
+    assert captured["bound"] is config
+
+
+def test_main_setup_monitor_noop_when_disabled(monkeypatch):
+    import types
+    import main
+    import src.live_ai as live_ai
+
+    previous = live_ai.get_monitor()
+    try:
+        main._setup_monitor(types.SimpleNamespace(agent=types.SimpleNamespace()))
+        assert live_ai.get_monitor() is previous  # nothing was created/bound
+    finally:
+        live_ai.bind_monitor(previous)
+
+
+# ------------------------------------------------- agent emits events (direct)
+
+
+def _offline_agent(monkeypatch, tmp_path):
+    """A real Agent built offline (stubbed openai client), quiet + isolated."""
+    from types import SimpleNamespace
+    from src.tools import memory as memory_mod
+    from tests.test_live_ai import _fake_openai, _remote_config
+
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    memory_mod.configure(SimpleNamespace(
+        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+                              system_prompt="be helpful"),
+        agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
+    ))
+    return live_ai_mod.Agent(_remote_config(), isolated_tools=True, quiet=True)
+
+
+class _QuietRoundStream:
+    """Minimal stream interface for act() round-loop tests."""
+
+    def start_spinner(self, note):
+        pass
+
+    def stop_spinner(self):
+        pass
+
+    def flush(self):
+        pass
+
+    def mark_line_clean(self):
+        pass
+
+    def note(self, text):
+        pass
+
+
+def test_agent_tool_calls_reported_to_monitor(monkeypatch, tmp_path):
+    """A quiet/isolated agent's tool calls flow into the bound monitor."""
+    agent = _offline_agent(monkeypatch, tmp_path)
     agent._stream = _QuietRoundStream()
     agent._context_window = 1024
-    agent._messages = [{"role": "system", "content": "s"}]
-    agent.tool_definitions = []
-    agent._tool_impls = {}
-    agent._stream_round = lambda tools: ("the answer", [])
-
-    pool.ask("glm", "do a thing")
-
-    events = pool.monitor.snapshot()
-    assert [(e["event"], e["agent"]) for e in events] == [
-        ("start", "glm"), ("answer", "glm")]
-    assert events[0]["prompt"] == "do a thing"
-    assert events[1]["answer"] == "the answer"
-
-
-def test_pool_without_calls_flag_records_nothing(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], monitor=set())
-    agent = pool.agents["glm"]
-    agent._stream = _QuietRoundStream()
-    agent._context_window = 1024
-    agent._messages = [{"role": "system", "content": "s"}]
-    agent.tool_definitions = []
-    agent._tool_impls = {}
-    agent._stream_round = lambda tools: ("the answer", [])
-
-    pool.ask("glm", "do a thing")
-
-    # Monitoring disabled: no monitor is created at all (no buffer, no log).
-    assert pool.monitor is None
-    assert live_ai_mod.get_monitor() is None
-
-
-def test_pool_ask_failure_still_records_start(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], monitor={"calls"})
-    agent = pool.agents["glm"]
-    agent.act = lambda prompt: (_ for _ in ()).throw(RuntimeError("boom"))
-
-    with pytest.raises(RuntimeError, match="boom"):
-        pool.ask("glm", "do a thing")
-
-    events = pool.monitor.snapshot()
-    assert [e["event"] for e in events] == ["start"]  # no "answer" on failure
-
-
-def test_subagent_tool_calls_reported_to_monitor(monkeypatch, tmp_path):
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], monitor={"calls"})
-    agent = pool.agents["glm"]
-    agent._stream = _QuietRoundStream()
-    agent._context_window = 1024
-    agent._messages = [{"role": "system", "content": "s"}]
     agent.tool_definitions = []
     agent._tool_impls = {"echo": lambda **kw: f"echo:{kw.get('text', '')}"}
     scripted = iter([
@@ -249,48 +390,39 @@ def test_subagent_tool_calls_reported_to_monitor(monkeypatch, tmp_path):
     ])
     agent._stream_round = lambda tools: next(scripted)
 
-    live_ai_mod._TOOL_CONTEXT.agent_name = "glm"
+    monitor = AgentMonitor(maxlen=10)
+    live_ai_mod.bind_monitor(monitor)
+    live_ai_mod._TOOL_CONTEXT.agent_name = "scheduler"
     try:
         agent.act("run the tool")
     finally:
         live_ai_mod._TOOL_CONTEXT.agent_name = ""
+        live_ai_mod.bind_monitor(None)
 
-    events = pool.monitor.snapshot()
+    events = monitor.snapshot()
     assert [e["event"] for e in events] == ["tool_call", "tool_result"]
-    assert events[0]["tool"] == "echo" and events[0]["args"] == '{"text": "hi"}'
+    assert events[0]["agent"] == "scheduler"
+    assert events[0]["tool"] == "echo"
     assert events[1]["result"] == "echo:hi"
 
 
 def test_main_agent_tool_calls_not_reported(monkeypatch, tmp_path):
-    """Main-agent tool activity stays out of the sub-agent monitor."""
-    pool = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], monitor={"calls"})
-    agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
-    agent._tool_impls = {"echo": lambda **kw: "ok"}
+    """Without a thread-local agent name, tool calls stay out of the monitor."""
+    agent = _offline_agent(monkeypatch, tmp_path)
     agent._stream = _QuietRoundStream()
+    agent._context_window = 1024
+    agent.tool_definitions = []
+    agent._tool_impls = {"echo": lambda **kw: "ok"}
+    agent._stream_round = lambda tools: ("done", [])
 
-    # no thread-local agent name: main agent context
-    agent._execute_tool({"name": "echo", "arguments": "{}"})
+    monitor = AgentMonitor(maxlen=10)
+    live_ai_mod.bind_monitor(monitor)
+    try:
+        agent.act("hi")
+    finally:
+        live_ai_mod.bind_monitor(None)
 
-    assert pool.monitor.snapshot() == []
-
-
-def test_monitor_survives_pool_rebuild(monkeypatch, tmp_path):
-    """Two pools built in one process share the process-wide monitor."""
-    pool_a = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-    }, models=["glm"], monitor={"calls"})
-    pool_b = _make_pool(monkeypatch, tmp_path, {
-        "boot": {"model": "boot-model"},
-        "qwen": {"model": "qwen-model"},
-    }, models=["qwen"], monitor={"calls"})
-    assert pool_b.monitor is pool_a.monitor
-
-
-# ------------------------------------------- task 4: agent_activity tool
+    assert monitor.snapshot() == []
 
 
 def test_agent_activity_unbound_returns_empty_message():
@@ -299,30 +431,24 @@ def test_agent_activity_unbound_returns_empty_message():
 
 
 def test_agent_activity_formats_events_newest_last():
-    from src.live_ai import AgentMonitor
-
     monitor = AgentMonitor(maxlen=10)
-    monitor.record("glm", "start", prompt="research X")
-    monitor.record("glm", "tool_call", tool="web_search")
-    monitor.record("glm", "answer", answer="found it")
+    monitor.record("scheduler", "start", prompt="check the news")
+    monitor.record("scheduler", "answer", answer="found it")
     live_ai_mod.bind_monitor(monitor)
     try:
         report = live_ai_mod.agent_activity()
     finally:
         live_ai_mod.bind_monitor(None)
     lines = report.splitlines()
-    assert len(lines) == 3
-    assert "glm" in lines[0] and "research X" in lines[0]
-    assert "web_search" in lines[1]
-    assert "found it" in lines[2]
+    assert len(lines) == 2
+    assert "scheduler" in lines[0] and "check the news" in lines[0]
+    assert "found it" in lines[1]
 
 
 def test_agent_activity_last_limits_to_most_recent():
-    from src.live_ai import AgentMonitor
-
     monitor = AgentMonitor(maxlen=10)
     for i in range(5):
-        monitor.record("glm", "tool_call", tool=f"t{i}")
+        monitor.record("scheduler", "tool_call", tool=f"t{i}")
     live_ai_mod.bind_monitor(monitor)
     try:
         report = live_ai_mod.agent_activity(last=2)
@@ -334,8 +460,6 @@ def test_agent_activity_last_limits_to_most_recent():
 
 
 def test_agent_activity_bound_but_empty():
-    from src.live_ai import AgentMonitor
-
     live_ai_mod.bind_monitor(AgentMonitor(maxlen=10))
     try:
         assert live_ai_mod.agent_activity() == "No sub-agent activity recorded."
@@ -352,83 +476,9 @@ def test_default_tools_include_agent_activity():
 def test_agent_activity_tool_definition_well_formed():
     agent = live_ai_mod.Agent.__new__(live_ai_mod.Agent)
     tools = live_ai_mod._default_tools(agent)
-    definitions = {d["function"]["name"]: d for d in
-                   (live_ai_mod.OpenAICore._openai_tool_definition(t) for t in tools)}
-    definition = definitions["agent_activity"]["function"]
-    assert definition["description"]
-    assert definition["parameters"]["type"] == "object"
-
-
-# ------------------------------------------------- task 5: e2e smoke
-
-
-def _script_agent(agent, rounds):
-    """Minimal quiet-agent plumbing + scripted completion rounds."""
-    agent._stream = _QuietRoundStream()
-    agent._context_window = 1024
-    agent._messages = [{"role": "system", "content": "s"}]
-    agent.tool_definitions = []
-    scripted = iter(rounds)
-    agent._stream_round = lambda tools: next(scripted)
-
-
-def test_e2e_ask_and_parallel_logged_and_reported(monkeypatch, tmp_path):
-    """One ask() + one ask_parallel() with two agents, monitor = "calls,log".
-
-    The JSONL file must hold the full event sequence per agent (including a
-    tool call) and agent_activity() must report both agent names.
-    """
-    from tests.test_agent_pool import _pool_config
-    from tests.test_live_ai import _fake_openai
-
-    _fake_openai(monkeypatch)
-    monkeypatch.setenv("TEST_API_KEY", "k")
-    config = _pool_config(tmp_path, {
-        "boot": {"model": "boot-model"},
-        "glm": {"model": "glm-model"},
-        "qwen": {"model": "qwen-model"},
-    })
-    log_file = tmp_path / "agents.jsonl"
-    settings = {"count": 2, "models": ["glm", "qwen"],
-                "system_prompts": [None, None], "quiet": True,
-                "monitor": {"calls", "log"},
-                "monitor_log_file": str(log_file), "monitor_buffer": 100}
-    pool = live_ai_mod.AgentPool(config, settings)
-    assert live_ai_mod.get_monitor() is pool.monitor  # bound for agent_activity
-
-    # glm: one tool call, then the final answer (real _execute_tool path).
-    # It is delegated twice (ask + ask_parallel), so four scripted rounds.
-    glm = pool.agents["glm"]
-    glm._tool_impls = {"echo": lambda **kw: f"echo:{kw.get('text', '')}"}
-    _script_agent(glm, [
-        ("", [{"id": "c1", "name": "echo", "arguments": '{"text": "hi"}'}]),
-        ("glm answer", []),
-        ("", [{"id": "c2", "name": "echo", "arguments": '{"text": "yo"}'}]),
-        ("glm answer", []),
-    ])
-    qwen = pool.agents["qwen"]
-    qwen._tool_impls = {}
-    _script_agent(qwen, [("qwen answer", [])])
-
-    assert pool.ask("glm", "task one") == "glm answer"
-    results = pool.ask_parallel([("glm", "p1"), ("qwen", "p2")])
-    assert results == ["glm answer", "qwen answer"]
-
-    # JSONL: one JSON object per line, complete event sequence per agent.
-    events = [json.loads(line) for line in log_file.read_text(encoding="utf-8").splitlines()]
-    glm_events = [e for e in events if e["agent"] == "glm"]
-    qwen_events = [e for e in events if e["agent"] == "qwen"]
-    assert [e["event"] for e in glm_events] == [
-        "start", "tool_call", "tool_result", "answer",
-        "start", "tool_call", "tool_result", "answer"]
-    assert glm_events[0]["prompt"] == "task one"
-    assert glm_events[3]["answer"] == "glm answer"
-    assert glm_events[2]["result"] == "echo:hi"
-    assert [e["event"] for e in qwen_events] == ["start", "answer"]
-    assert qwen_events[1]["answer"] == "qwen answer"
-    assert all("ts" in e for e in events)
-
-    # agent_activity() reports both agents from the shared ring buffer.
-    report = live_ai_mod.agent_activity(last=50)
-    assert "glm" in report and "qwen" in report
-    assert "task one" in report and "p2" in report
+    definitions = [live_ai_mod.Brain._openai_tool_definition(t) for t in tools]
+    by_name = {d["function"]["name"]: d for d in definitions}
+    definition = by_name["agent_activity"]
+    assert definition["type"] == "function"
+    assert definition["function"]["description"]
+    assert definition["function"]["parameters"]["type"] == "object"

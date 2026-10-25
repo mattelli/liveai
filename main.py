@@ -39,6 +39,7 @@ def main(argv=None) -> int:
     from src.live_ai import Agent  # lazy import: keeps `import main` side-effect free
 
     agent = Agent(config=config)
+    _setup_monitor(config)    # bind the activity monitor when [agent] monitor is set
     _setup_agent_pool(config)  # no-op when [agent] parallel_agents = 0
     _setup_scheduler(config)   # no-op when [scheduler] enabled is false/missing
     reader = None
@@ -136,6 +137,18 @@ def _setup_agent_pool(config) -> None:
             "name per worker agent")
     _AGENT_POOL = AgentPool(config, settings)
     bind_agent_pool(_AGENT_POOL)
+
+
+def _setup_monitor(config) -> None:
+    """Create and bind the process-wide activity monitor from ``[agent]``.
+
+    No-op when ``[agent] monitor`` is unset/empty: nothing is recorded and no
+    log file is written. The monitor is owned by main.py (not the pool) so it
+    also tracks scheduled-task runs.
+    """
+    from src.live_ai import build_monitor
+
+    build_monitor(config)
 
 
 def _stop_agent_pool() -> None:

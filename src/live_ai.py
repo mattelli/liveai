@@ -351,6 +351,47 @@ def agent_pool_settings(config: SimpleNamespace) -> dict:
     }
 
 
+def monitor_settings(config: SimpleNamespace) -> dict:
+    """Resolve the ``[agent]`` activity-monitor settings (kept for the scheduler).
+
+    Returns ``{"monitor", "monitor_log_file", "monitor_buffer"}``:
+    ``monitor`` is the set of monitoring flags (``"calls"``: labeled [CALL]
+    blocks for sub-agent tool calls; ``"log"``: JSONL event log),
+    ``monitor_log_file`` the JSONL log path and ``monitor_buffer`` the
+    in-memory event ring size. Missing keys or a missing ``[agent]`` section
+    keep the unmonitored behavior (``monitor = set()``).
+    """
+    agent = getattr(config, "agent", None)
+    # load_config path-resolves keys ending in "_file" (relative to the config
+    # dir); keep whatever arrives (str or Path) and default when unset.
+    log_file = getattr(agent, "monitor_log_file", None)
+    return {
+        "monitor": _monitor_flags(getattr(agent, "monitor", None)),
+        "monitor_log_file": str(log_file) if log_file else _DEFAULT_MONITOR_LOG_FILE,
+        "monitor_buffer": _monitor_buffer(getattr(agent, "monitor_buffer", None)),
+    }
+
+
+def build_monitor(config: SimpleNamespace) -> "AgentMonitor | None":
+    """Create and bind the process-wide monitor when monitoring is enabled.
+
+    Called by ``main.py`` at startup (the pool no longer owns this). The JSONL
+    sink only exists when ``"log"`` is among the flags; the ring buffer is
+    always populated when monitoring is enabled. Returns the bound monitor, or
+    ``None`` when monitoring is off (nothing is recorded, no log file written).
+    """
+    settings = monitor_settings(config)
+    flags = settings["monitor"]
+    if not flags:
+        return None
+    monitor = AgentMonitor(
+        maxlen=settings["monitor_buffer"] or MONITOR_BUFFER_DEFAULT,
+        log_file=settings["monitor_log_file"] if "log" in flags else None,
+    )
+    bind_monitor(monitor)
+    return monitor
+
+
 ## sub-agent activity monitor (task 2) ##
 
 # Thread-safe ring buffer of sub-agent activity events, filled by AgentPool
@@ -2111,20 +2152,6 @@ class AgentPool:
     def __init__(self, config: SimpleNamespace, settings: dict):
         self.agents: dict[str, Agent] = {}
         self.logger = getLogger("AgentPool")
-        # Monitoring (task 3): the monitor (ring buffer + JSONL sink) is only
-        # created and bound when [agent] monitor is enabled; with monitoring
-        # off nothing is recorded and no log file is ever written.
-        self.monitor_flags = settings.get("monitor") or set()
-        self.monitor = get_monitor() if self.monitor_flags else None
-        if self.monitor_flags and not isinstance(self.monitor, AgentMonitor):
-            # The JSONL sink only exists when "log" is among the flags; the
-            # ring buffer is always populated when monitoring is enabled.
-            self.monitor = AgentMonitor(
-                maxlen=settings.get("monitor_buffer") or MONITOR_BUFFER_DEFAULT,
-                log_file=(settings.get("monitor_log_file") or None)
-                if "log" in self.monitor_flags else None,
-            )
-            bind_monitor(self.monitor)
         if not getattr(config.brain, "models_file", None):
             raise ValueError(
                 "Agent pool requires [brain] models_file: the agent_models "
@@ -2175,8 +2202,9 @@ class AgentPool:
 
     def _monitor_record(self, agent: str, event: str, **fields) -> None:
         """Emit one activity event when 'calls' monitoring is enabled."""
-        if self.monitor is not None and "calls" in self.monitor_flags:
-            self.monitor.record(agent, event, **fields)
+        monitor = get_monitor()
+        if monitor is not None:
+            monitor.record(agent, event, **fields)
 
     def ask(self, agent_name: str, prompt: str, caller: str = "") -> str:
         """Delegate a prompt to one pooled agent; return its final answer.
