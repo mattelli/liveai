@@ -14,6 +14,9 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--no-tools", action="store_true", help="Disable tool usage")
     parser.add_argument("--config", type=Path, default=CONFIG_FILE, help="Path to config.toml")
     parser.add_argument("--prompt", type=str, default=None, help="Run a single prompt and exit")
+    parser.add_argument("--tools-list", action="store_true",
+                        help="List all available tools and exit "
+                             "([off] = disabled by [agent] tool_groups)")
     return parser.parse_args(argv)
 
 
@@ -31,6 +34,8 @@ def main(argv=None) -> int:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         datefmt="%H:%M:%S",
     )
+    if args.tools_list:
+        return _print_tools_list(config)
     from src.session import ConversationSession
     from src.live_ai import Agent  # lazy import: keeps `import main` side-effect free
 
@@ -119,6 +124,52 @@ def _setup_monitor(config) -> None:
     from src.live_ai import build_monitor
 
     build_monitor(config)
+
+
+def _print_tools_list(config) -> int:
+    """Print every available tool grouped by topic and exit.
+
+    All tools known to the agent (the full default set, before any
+    ``[agent] tool_groups`` filtering) are listed; tools excluded by
+    ``tool_groups`` carry an ``[off]`` marker, so the listing shows both what
+    exists and what the running session would actually enable.
+    """
+    import types as _types
+
+    from src.live_ai import Agent, _default_tools, _select_tools, tool_topics
+
+    # Offline stand-in for the session-bound model_info tool: the listing only
+    # needs the tool's name/docstring, never a live model connection. The
+    # stand-in is renamed to model_info so the listing shows the real name.
+    def _offline_model_info() -> str:
+        """Returns detailed info about the loaded model: endpoint, provider and"""
+        return ""
+
+    _offline_model_info.__name__ = "model_info"
+    offline_agent = _types.SimpleNamespace(
+        model_info=_offline_model_info, _messages=[], _context_window=1,
+        _temperature=0.0, _max_tokens=0, _vision=False,
+        _vision_source="", config=config)
+    all_tools = _default_tools(offline_agent)  # unfiltered: the full known set
+    groups = getattr(getattr(config, "agent", None), "tool_groups", "all")
+    enabled_names = {getattr(tool, "__name__", "")
+                     for tool in _select_tools(all_tools, groups)}
+
+    cprint("Available tools:", "cyan", bold=True)
+    for topic, topic_tools in tool_topics(all_tools):
+        cprint(f"{topic}:", "yellow", bold=True)
+        for tool in topic_tools:
+            name = getattr(tool, "__name__", tool.__class__.__name__)
+            doc = (getattr(tool, "__doc__", "") or "").strip().splitlines()
+            summary = doc[0].strip() if doc else ""
+            marker = "" if name in enabled_names else " [off]"
+            line = f"  {name}{marker}"
+            if summary:
+                line += f" - {summary}"
+            cprint(line, "cyan")
+    cprint(f"{len(enabled_names)} of {len(all_tools)} tools enabled "
+           "([off] = excluded by [agent] tool_groups).", "grey")
+    return 0
 
 
 def _chat_label(config) -> str:

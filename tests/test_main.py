@@ -12,11 +12,76 @@ def test_parse_args_defaults():
     a = main_mod.parse_args([])
     assert a.chat is False and a.no_tools is False
     assert a.config == main_mod.CONFIG_FILE and a.prompt is None
+    assert a.tools_list is False
 
 
 def test_parse_args_flags():
     a = main_mod.parse_args(["--chat", "--no-tools", "--config", "x.toml"])
     assert a.chat and a.no_tools and str(a.config).endswith("x.toml")
+
+
+def test_parse_args_tools_list():
+    assert main_mod.parse_args(["--tools-list"]).tools_list is True
+
+
+def test_print_tools_list_shows_all_tools_and_off_markers(capsys):
+    """--tools-list lists every known tool; tool_groups exclusions get [off]."""
+    import re
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(agent=SimpleNamespace(
+        tool_groups="model, memory, files, web, system"))
+    assert main_mod._print_tools_list(config) == 0
+    out = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+
+    # every known tool is listed (unfiltered set)
+    assert "model_info" in out
+    assert "schedule_task" in out
+    assert "generate_image" in out
+    assert "mcp_list_tools" in out
+    # enabled tools have no marker; excluded ones are marked [off]
+    assert "  web_search -" in out
+    assert "  schedule_task [off]" in out
+    assert "  agent_activity [off]" in out
+    # summary line with counts
+    match = re.search(r"(\d+) of (\d+) tools enabled", out)
+    assert match and int(match.group(2)) > int(match.group(1)) > 0
+
+
+def test_print_tools_list_all_groups_enabled(capsys):
+    """tool_groups = 'all': every tool is enabled, no [off] tool markers."""
+    import re
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(agent=SimpleNamespace(tool_groups="all"))
+    assert main_mod._print_tools_list(config) == 0
+    out = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+    # no per-tool [off] marker (the summary line's legend is not a marker)
+    assert " [off] -" not in out and " [off]\n" not in out
+    match = re.search(r"(\d+) of (\d+) tools enabled", out)
+    assert match and match.group(1) == match.group(2)
+
+
+def test_main_tools_list_exits_without_session(monkeypatch, capsys):
+    """--tools-list prints the listing and returns 0 without building a session."""
+    import re
+
+    called = {"session": False}
+
+    class Boom:
+        def __init__(self, *a, **k):
+            called["session"] = True
+
+    monkeypatch.setattr(session_mod, "ConversationSession", Boom)
+    monkeypatch.setattr(live_ai_mod, "Agent", Boom)
+    monkeypatch.setattr(main_mod, "load_config",
+                        lambda p: types.SimpleNamespace(
+                            agent=types.SimpleNamespace(tool_groups="all")))
+
+    assert main_mod.main(["--tools-list"]) == 0
+    assert called["session"] is False  # no agent/session was ever built
+    out = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+    assert "Available tools:" in out
 
 
 def test_import_main_has_no_side_effects():
