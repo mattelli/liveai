@@ -30,6 +30,7 @@ max_thinking_tokens = 0                   # max tokens of thinking to visualize 
 bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
 max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
 parallel_agents = 0        # extra agents beside the running one (0 = off)
+# tool_doc_chars = 300     # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
 agent_models = [           # models.json entry names, one per agent
     "ternary-bonsai", 
     "ternary-bonsai"

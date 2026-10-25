@@ -1167,18 +1167,28 @@ class OpenAICore:
         return {"type": json_type} if json_type else {"type": "string"}
 
     @staticmethod
-    def _openai_tool_definition(tool: Callable) -> dict:
+    def _openai_tool_definition(tool: Callable, max_doc_chars: int = 0) -> dict:
         """Describe ``tool`` in OpenAI function-calling (JSON Schema) format.
 
         Parameter names keep their snake_case spelling: OpenAI-compatible models
         handle it natively, and the arguments come back as a JSON blob that can be
         passed to the implementation directly.
+
+        ``max_doc_chars > 0`` truncates the tool description to that many chars
+        (token-reduction: the full docstring is sent with every request).
+        ``default`` values are never included in the schemas: they are
+        informational only (models never need them) and 74 defaults across the
+        default tool set cost ~1.5k chars per request.
         """
         signature = inspect.signature(tool)
         try:
             hints = get_type_hints(tool, include_extras=True)
         except Exception:
             hints = getattr(tool, "__annotations__", {}) or {}
+
+        description = (getattr(tool, "__doc__", "") or "").strip()
+        if max_doc_chars and max_doc_chars > 0:
+            description = description[:max_doc_chars]
 
         properties: dict = {}
         required: list[str] = []
@@ -1188,14 +1198,12 @@ class OpenAICore:
             schema = OpenAICore._json_schema(hints.get(name, str))
             if param.default is inspect.Parameter.empty:
                 required.append(name)
-            else:
-                schema.setdefault("default", param.default)
             properties[name] = schema
         return {
             "type": "function",
             "function": {
                 "name": getattr(tool, "__name__", "tool"),
-                "description": (getattr(tool, "__doc__", "") or "").strip(),
+                "description": description,
                 "parameters": {"type": "object", "properties": properties, "required": required},
             },
         }
@@ -1666,7 +1674,17 @@ class Agent(Brain):
             self._model_name
         )
         self.tools: list[Callable] = self._build_tools()
-        self.tool_definitions: list[dict] = [self._openai_tool_definition(tool) for tool in self.tools]
+        # [agent] tool_doc_chars: cap tool descriptions in the JSON schemas
+        # (0/unset/invalid = full docstring, the historical behavior).
+        try:
+            doc_chars = int(getattr(
+                getattr(config, "agent", None), "tool_doc_chars", 0) or 0)
+        except (TypeError, ValueError):
+            doc_chars = 0
+        self.tool_definitions: list[dict] = [
+            self._openai_tool_definition(tool, max_doc_chars=max(0, doc_chars))
+            for tool in self.tools
+        ]
         self._tool_impls = {tool.__name__: tool for tool in self.tools}
         # MCP server tools (PLAN.md task 5): injected after the built-in tool
         # setup, for the main agent and pooled agents alike (the manager is

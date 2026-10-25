@@ -193,7 +193,8 @@ behavior** (backward compatible): existing tests must stay green untouched.
     truncates every description to ≤300 chars; definitions stay valid
     (`function.name` non-empty, `parameters.type == "object"`).
   - payload budget: with `tool_doc_chars=300` the total JSON size of all
-    44 definitions is < 14_000 chars (guards regressions; today ~21.9k).
+    44 definitions is < 20_000 chars (guards regressions; measured baseline:
+    21_942 with full docstrings + defaults, 19_126 with doc300 + no defaults).
 - **Commit**: `feat(tokens): lean tool schemas (no defaults, doc cap)`
 
 ### Task 3 — Configurable tool groups
@@ -307,9 +308,9 @@ behavior** (backward compatible): existing tests must stay green untouched.
 - [ ] With the new keys unset/0, all existing tests pass untouched and
       runtime behavior is byte-identical (full tool set, full docstrings,
       uncapped results, no pruning).
-- [ ] With the recommended values: schema payload < 14k chars (~3.5k
-      tokens), tool results capped at 4000 chars, long turns pruned before
-      hitting the context window.
+- [ ] With the recommended values: schema payload < 20k chars (~5k tokens,
+      measured 19.1k vs 21.9k baseline), tool results capped at 4000 chars,
+      long turns pruned before hitting the context window.
 - [ ] No orphan tool messages / split tool-call groups after pruning
       (servers must never see an incomplete parallel tool-call group).
 - [ ] Monitor events, delegation, MCP injection and Ctrl+C cancellation

@@ -140,3 +140,62 @@ def test_act_monitor_event_still_gets_first_200_chars():
     results = [kw.get("result", "") for kw in recorded if "result" in kw]
     assert results and results[0].startswith("R" * 200)
     assert len(results[0]) == 200
+
+
+# -------------------------------------------------------- lean tool schemas
+
+
+def _default_tool_definitions():
+    import types as _types
+    dummy = _types.SimpleNamespace(model_info=live_ai_mod.Brain.model_info)
+    tools = live_ai_mod._default_tools(dummy)
+    return tools, [live_ai_mod.Brain._openai_tool_definition(t) for t in tools]
+
+
+def test_tool_definitions_contain_no_default_keys():
+    _, defs = _default_tool_definitions()
+    for definition in defs:
+        assert '"default"' not in json.dumps(definition)
+
+
+def test_tool_definition_preserves_properties_and_required():
+    # generate_image has many optional (defaulted) params; agent_activity one.
+    tools, _ = _default_tool_definitions()
+    by_name = {t.__name__: t for t in tools}
+    definition = live_ai_mod.Brain._openai_tool_definition(by_name["generate_image"])
+    props = definition["function"]["parameters"]["properties"]
+    assert "prompt" in props and props["prompt"]["type"] == "string"
+    assert "prompt" in definition["function"]["parameters"]["required"]
+    assert "seed" in props  # optional param still documented, no default value
+
+    definition = live_ai_mod.Brain._openai_tool_definition(by_name["agent_activity"])
+    assert definition["function"]["parameters"]["required"] == []
+    assert "last" in definition["function"]["parameters"]["properties"]
+
+
+def test_tool_definition_doc_cap_zero_keeps_full_docstring():
+    tools, _ = _default_tool_definitions()
+    tool = tools[0]
+    full_doc = (tool.__doc__ or "").strip()
+    definition = live_ai_mod.Brain._openai_tool_definition(tool)
+    assert definition["function"]["description"] == full_doc
+
+
+def test_tool_definition_doc_cap_truncates_descriptions():
+    tools, _ = _default_tool_definitions()
+    for tool in tools:
+        definition = live_ai_mod.Brain._openai_tool_definition(tool, max_doc_chars=300)
+        description = definition["function"]["description"]
+        assert len(description) <= 300
+        assert definition["function"]["name"] == tool.__name__
+        assert definition["function"]["parameters"]["type"] == "object"
+
+
+def test_tool_definitions_payload_budget_with_doc_cap():
+    tools, _ = _default_tool_definitions()
+    total = sum(
+        len(json.dumps(live_ai_mod.Brain._openai_tool_definition(t, max_doc_chars=300)))
+        for t in tools
+    )
+    # Measured baseline: 21_942 (full docs + defaults) -> 19_126 (doc300).
+    assert total < 20_000
