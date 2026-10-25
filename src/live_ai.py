@@ -20,7 +20,7 @@ from src.tools import (
     generate_image, unload_image_generator,
     summarize_doc, query_document, image_search,
     list_corpora, store_corpus, query_corpus,
-    recall_memory, store_memory, clear_chat, allow_speech, image_response,
+    recall_memory, store_memory, clear_chat, compact_chat, allow_speech, image_response,
     schedule_task, list_scheduled_tasks, cancel_scheduled_task,
     download_file, extract_archive, zip_files,
     search_pattern_in_files, replace_string_in_file, search_in_file,
@@ -148,7 +148,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
     return [
         agent.model_info,
         agent_activity,
-        recall_memory, store_memory, clear_chat,
+        recall_memory, store_memory, clear_chat, compact_chat,
         image_response, allow_speech,
         schedule_task, list_scheduled_tasks, cancel_scheduled_task,
         summarize_doc, query_document, image_search,
@@ -209,7 +209,7 @@ def _select_tools(tools: list[Callable], groups) -> list[Callable]:
 # or test doubles) fall under "other", listed last.
 _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
     "model": ("model_info",),
-    "memory": ("recall_memory", "store_memory", "clear_chat"),
+    "memory": ("recall_memory", "store_memory", "clear_chat", "compact_chat"),
     "speech": ("allow_speech",),
     "scheduling": ("schedule_task", "list_scheduled_tasks",
                    "cancel_scheduled_task", "agent_activity"),
@@ -1700,6 +1700,7 @@ class Agent(Brain):
             memory_mod.recall_memory: memory.recall_memory,
             memory_mod.store_memory: memory.store_memory,
             memory_mod.clear_chat: memory.clear_chat,
+            memory_mod.compact_chat: memory.compact_chat,
             vision_mod.image_response: vision.image_response,
         }
         return [per_agent.get(tool, tool) for tool in tools]

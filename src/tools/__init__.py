@@ -53,7 +53,7 @@ from .summarize import summarize_doc
 from .docquery import query_document
 from .imgsearch import image_search
 from .corpora import list_corpora, query_corpus, store_corpus
-from .memory import clear_chat, recall_memory, store_memory
+from .memory import bind_summarizer, clear_chat, compact_chat, recall_memory, store_memory
 from .scheduler import (
     cancel_scheduled_task, list_scheduled_tasks, schedule_task,
 )
@@ -63,7 +63,7 @@ from .mcp import mcp_call_tool, mcp_list_tools
 
 __all__ = [
     "CAPTURED_IMAGE", "GENERATED_IMAGE", "ValidYF", "allow_speech",
-    "cancel_scheduled_task", "capture_image", "clear_chat",
+    "cancel_scheduled_task", "capture_image", "clear_chat", "compact_chat",
     "current_date_time", "download_file",
     "exit_gracefully", "extract_archive", "extract_webpage",
     "fetch_financial_data", "format_search_results", "generate_image",

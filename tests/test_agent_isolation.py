@@ -51,7 +51,7 @@ def test_isolated_agent_gets_own_memory_and_vision_instances(monkeypatch, tmp_pa
 
     mem_a, mem_b = find(agent_a, memory_mod), find(agent_b, memory_mod)
     vis_a, vis_b = find(agent_a, vision_mod), find(agent_b, vision_mod)
-    assert len(mem_a) == 3 and len(vis_a) == 1  # recall/store/clear + image_response
+    assert len(mem_a) == 4 and len(vis_a) == 1  # recall/store/clear/compact + image
     # fresh instances per agent: none is the module-default instance
     assert all(m.__self__ is not memory_mod._default for m in mem_a + mem_b)
     assert all(v.__self__ is not vision_mod._default for v in vis_a + vis_b)
@@ -87,15 +87,20 @@ def test_main_agent_keeps_module_default_tools(monkeypatch, tmp_path):
     mem = [t for t in agent.tools if getattr(t, "__module__", "") == memory_mod.__name__]
     vis = [t for t in agent.tools if getattr(t, "__module__", "") == vision_mod.__name__]
     assert mem == [memory_mod.recall_memory, memory_mod.store_memory,
-                   memory_mod.clear_chat]
+                   memory_mod.clear_chat, memory_mod.compact_chat]
     assert vis == [vision_mod.image_response]
 
 
 def test_tool_names_unchanged_for_isolated_agent(monkeypatch, tmp_path):
     agent = _offline_agent(monkeypatch, tmp_path, isolated_tools=True)
     names = {t.__name__ for t in agent.tools}
-    assert {"recall_memory", "store_memory", "clear_chat",
+    assert {"recall_memory", "store_memory", "clear_chat", "compact_chat",
             "image_response"} <= names
+
+
+def test_compact_chat_in_memory_topic():
+    from src.live_ai import _TOOL_TOPICS
+    assert "compact_chat" in _TOOL_TOPICS["memory"]
 
 
 # ------------------------------------------------------ task 3: quiet mode
