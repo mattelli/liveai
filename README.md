@@ -840,6 +840,14 @@ on_missed = "skip"                   # missed one-shots after a restart:
 
 ## Setup (Python 3.12.10)
 
+### Environment Variable `LIVEAI_DIR`
+
+The `LIVEAI_DIR` environment variable must be set to the project root directory.
+All launcher scripts (`bin/liveai`, `bin/liveai-code`, `bin/local-servers`) use it
+to locate `main.py`, config files, and the virtual environment.
+
+The setup script needs Python environment `.liveai-cpu/` to be created at first.
+
 OS Windows 11 (powershell)
 
 ```
@@ -847,9 +855,6 @@ OS Windows 11 (powershell)
 .\setup-liveai-cpu.ps1
 
 ```
-
-Optional: MCP server support needs the official SDK in the same environment
-(`pip install mcp`).
 
 OS Linux / macOS (bash)
 

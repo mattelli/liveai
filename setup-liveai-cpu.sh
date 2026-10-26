@@ -54,6 +54,7 @@ pip install requests
 pip install beautifulsoup4
 pip install ddgs
 pip install py7zr
+pip install mcp
 
 # EMBEDDING
 pip install -U "sentence-transformers[image]"

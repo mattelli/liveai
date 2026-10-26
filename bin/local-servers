@@ -3,9 +3,12 @@
 # Interactive menu: pick options while the terminal stays open.
 # Quit with q or Ctrl+C.
 
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-source ../../.liveai-cpu/bin/activate
+# Use LIVEAI_DIR if set, otherwise derive from SCRIPT_DIR
+LIVEAI_DIR="${LIVEAI_DIR:-$(dirname "$SCRIPT_DIR")}"
+
+source "$LIVEAI_DIR/.liveai-cpu/bin/activate"
 
 echo "--------------------------------------------------"
 echo "Local Model Runner"
@@ -13,6 +16,6 @@ echo "Interactive menu: pick options while the terminal"
 echo "stays open. Quit with q or Ctrl+C."
 echo "--------------------------------------------------"
 
-python ../../samples/local_model_runner.py -i "$@"
+python "$LIVEAI_DIR/samples/local_model_runner.py" -i "$@"
 
-read
+read -p "Press Enter to continue..."

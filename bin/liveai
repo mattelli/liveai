@@ -5,9 +5,18 @@
 # Activates the .liveai-cpu virtual environment and runs main.py --chat
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
 
-source "../.liveai-cpu/bin/activate"
+# Use LIVEAI_DIR if set, otherwise derive from SCRIPT_DIR
+LIVEAI_DIR="${LIVEAI_DIR:-$(dirname "$SCRIPT_DIR")}"
+
+source "$LIVEAI_DIR/.liveai-cpu/bin/activate"
 
 echo "Loading Agent ..."
-python "../main.py" "--config" "../config-chat.toml" "$@"
+python "$LIVEAI_DIR/main.py" --config "$LIVEAI_DIR/config-chat.toml" "$@"
+
+if [ $? -ne 0 ]; then
+    echo "Agent exited with error."
+    exit 1
+fi
+
+read -p "Press Enter to continue..."

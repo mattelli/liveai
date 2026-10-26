@@ -1,8 +1,7 @@
 @echo off
-cd /d "%~dp0"
-call ..\.liveai-cpu\Scripts\activate
+call %LIVEAI_DIR%\.liveai-cpu\Scripts\activate
 echo Loading Agent ...
-python ..\main.py --config ..\config.toml %*
+python %LIVEAI_DIR%\main.py --config %LIVEAI_DIR%\config.toml %*
 if errorlevel 1 (
     echo Agent exited with error.
     exit /b 1
