@@ -1619,6 +1619,18 @@ class Brain(OpenAICore):
                 self.logger.debug("Closing prediction stream failed: %s", exc)
         return "Cancel requested"
 
+    def interrupt(self) -> str:
+        """
+        Request a graceful stop of the current turn (public API).
+
+        Unlike :meth:`cancel_generation` this never closes the active HTTP
+        stream: the running completion round finishes naturally, the loop
+        stops before the next round, and queued tools are not executed
+        (see ``_execute_tool``). Not exposed to the LLM.
+        """
+        self._cancel_requested = True
+        return "Interrupt requested"
+
     def _context_usage(self) -> tuple[float, int]:
         """Approximate context usage (no server-side tokenizer available)."""
         chars = sum(len(str(m.get("content") or "")) for m in self._messages)
@@ -2038,6 +2050,10 @@ class Agent(Brain):
         if call["name"] in (getattr(self, "_disabled_tools", None) or set()):
             return (f"Error: tool '{call['name']}' is disabled "
                     "(re-enable it with /tools on)")
+        if getattr(self, "_cancel_requested", False):
+            # interrupt()/cancel_generation() while tools were queued: do not
+            # start new work, let the act() loop unwind instead.
+            return "Error: execution cancelled by user (tool not run)"
         try:
             args = json.loads(call["arguments"] or "{}")
         except json.JSONDecodeError as exc:
