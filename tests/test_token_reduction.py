@@ -205,8 +205,9 @@ def test_tool_definitions_payload_budget_with_doc_cap():
         len(json.dumps(live_ai_mod.Brain._openai_tool_definition(t, max_doc_chars=300)))
         for t in tools
     )
-    # Measured baseline: 21_942 (full docs + defaults) -> 19_126 (doc300).
-    assert total < 20_000
+    # Measured baseline: 21_942 (full docs + defaults) -> 19_126 (doc300);
+    # +wikipedia_search +transcribe_audio -> ~20_454.
+    assert total < 21_000
 
 
 # ------------------------------------------------------- tool group filtering
@@ -273,7 +274,7 @@ def test_agent_build_tools_default_keeps_all_tools():
     agent.config = SimpleNamespace(brain=SimpleNamespace(model="m"))
     agent.isolated_tools = False
     names = [t.__name__ for t in agent._build_tools()]
-    assert len(names) == 44  # two delegation tools removed, spawn_process + compact_chat added
+    assert len(names) == 46  # two delegation tools removed, spawn_process + compact_chat added, plus wikipedia_search + transcribe_audio
     assert "summarize_doc" in names and "exit_gracefully" in names
 
 
