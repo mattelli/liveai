@@ -2074,6 +2074,46 @@ class Agent(Brain):
                            tool=call["name"], result=result[:200])
         return result
 
+    def _force_final_answer(self) -> str:
+        """
+        One tool-free completion asking the model to conclude the turn.
+
+        Called by ``act()`` when the round budget is exhausted (smolagents'
+        ``_handle_max_steps_reached`` pattern): the model gets the same
+        history but no tool schemas, so its only way forward is a final
+        answer. Returns the answer text ("" on failure or cancellation).
+        """
+        if self._cancel_requested:
+            return ""
+        self.logger.warning(
+            "Max act rounds reached (%s); forcing a final answer.",
+            self.MAX_ACT_ROUNDS)
+        try:
+            stream = self._stream_completion(None)
+            self._active_stream = stream
+            parts: list[str] = []
+            try:
+                for chunk in stream:
+                    if self._cancel_requested:
+                        break
+                    delta = self._stream_delta(chunk)
+                    if delta is None:
+                        continue
+                    answer = self._consume_delta(delta)
+                    if answer:
+                        parts.append(answer)
+                        self._handle_fragment(answer)
+                pending = self._flush_pending_answer()
+                if pending:
+                    parts.append(pending)
+                    self._handle_fragment(pending)
+            finally:
+                self._active_stream = None
+            return "".join(parts).strip()
+        except Exception as exc:
+            self.logger.error("Forced final answer failed: %s", exc)
+            return ""
+
     def act(self, prompt: str):
         """
         Perform an action based on the input prompt.
@@ -2124,6 +2164,15 @@ class Agent(Brain):
                 self._messages.append({"role": "assistant", "content": text})
                 self._handle_round_end(round_index)
                 break
+            else:
+                # Round budget exhausted without a final text round: one
+                # tool-free completion so the turn ends with an answer
+                # (smolagents _handle_max_steps_reached pattern).
+                final_text = self._force_final_answer()
+                if not final_text and self._cancel_requested:
+                    final_text = CANCELLED_PLACEHOLDER
+                self._messages.append({"role": "assistant",
+                                       "content": final_text})
         finally:
             self._stream.stop_spinner()
             self._active_stream = None

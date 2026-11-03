@@ -1452,3 +1452,169 @@ def test_schedule_task_schema_offers_task_objects():
     assert "tasks" not in definition["function"]["parameters"]["properties"] or \
         definition["function"]["parameters"]["properties"]["tasks"] == {
             "type": "array", "items": {"type": "object"}}
+
+# ------------------------------------------------ forced final answer (Task 2)
+
+
+class _FakeDelta:
+    """Minimal stream delta: answer text, no reasoning, no tool calls."""
+
+    def __init__(self, content):
+        self.content = content
+        self.tool_calls = []
+
+
+class _FakeChunk:
+    """Mimics an OpenAI stream chunk wrapping one delta."""
+
+    def __init__(self, content):
+        self.choices = [SimpleNamespace(delta=_FakeDelta(content))]
+
+
+class _FakeRoundStream:
+    """Yields one OpenAI-shaped chunk then ends (forced-final-answer stream)."""
+
+    def __init__(self, content="final answer text"):
+        self._content = content
+        self.closed = False
+
+    def __iter__(self):
+        yield _FakeChunk(self._content)
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeStreamPrinter:
+    """Minimal stand-in for the stream printer used by act()."""
+
+    def __init__(self):
+        self.notes = []
+        self.spun = []
+
+    def feed(self, content):
+        pass
+
+    def feed_thinking(self, content):
+        pass
+
+    def flush(self):
+        pass
+
+    def note(self, text):
+        self.notes.append(text)
+
+    def start_spinner(self, note="working"):
+        self.spun.append(note)
+
+    def stop_spinner(self):
+        pass
+
+    def mark_line_clean(self):
+        pass
+
+
+def _make_act_agent(max_rounds=2):
+    """A _BareAgent wired for act() tests: no network, canned streams."""
+    agent = _BareAgent()
+    agent._messages = [
+        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "question"},
+    ]
+    agent.MAX_ACT_ROUNDS = max_rounds
+    agent._stream = _FakeStreamPrinter()
+    agent._fragments_buffer = []
+    agent.tool_definitions = []
+    agent._tool_impls = {"system_info": lambda **kw: "ok"}
+    agent._context_window = 8192
+    agent._show_thinking = False
+    agent._pending_answer = ""
+    return agent
+
+
+def test_act_forces_final_answer_after_max_rounds(monkeypatch):
+    """Exhausting the round budget still ends the turn with an answer.
+
+    Every round returns tool calls (the model never produces plain text), so
+    act() burns MAX_ACT_ROUNDS rounds; the forced tool-free completion then
+    appends the final assistant message.
+    """
+    agent = _make_act_agent(max_rounds=2)
+    round_counter = {"n": 0}
+
+    def fake_round(tools):
+        round_counter["n"] += 1
+        return "", [{"id": "call_1", "name": "system_info", "arguments": "{}"}]
+
+    monkeypatch.setattr(agent, "_stream_round", fake_round)
+    monkeypatch.setattr(agent, "_prune_history", lambda: 0)
+
+    def fake_stream_completion(tools):
+        # The forced call must be tool-free.
+        assert tools is None
+        return _FakeRoundStream("All work done.")
+
+    monkeypatch.setattr(agent, "_stream_completion", fake_stream_completion)
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+
+    agent.act("do the thing")
+
+    # Two tool rounds + one forced final answer.
+    assert round_counter["n"] == 2
+    assistant_texts = [m.get("content") for m in agent._messages
+                       if m.get("role") == "assistant"]
+    assert assistant_texts[-1] == "All work done."
+
+
+def test_act_no_forced_call_when_final_round_answers(monkeypatch):
+    """A turn that ends with plain text never fires the forced completion."""
+    agent = _make_act_agent(max_rounds=3)
+    round_counter = {"n": 0}
+
+    def fake_round(tools):
+        round_counter["n"] += 1
+        if round_counter["n"] == 1:
+            return "", [{"id": "c1", "name": "system_info", "arguments": "{}"}]
+        return "the answer", []
+
+    monkeypatch.setattr(agent, "_stream_round", fake_round)
+    monkeypatch.setattr(agent, "_prune_history", lambda: 0)
+    stream_calls = []
+
+    def fake_stream_completion(tools):
+        stream_calls.append(tools)
+        return _FakeRoundStream("should not happen")
+
+    monkeypatch.setattr(agent, "_stream_completion", fake_stream_completion)
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+
+    agent.act("quick question")
+
+    assert round_counter["n"] == 2
+    assert stream_calls == []  # forced completion never requested
+    assistant_texts = [m.get("content") for m in agent._messages
+                       if m.get("role") == "assistant"]
+    assert assistant_texts[-1] == "the answer"
+
+
+def test_force_final_answer_skipped_when_cancelled(monkeypatch):
+    """_force_final_answer returns '' immediately when a cancel is pending."""
+    agent = _make_act_agent()
+    agent._cancel_requested = True
+    calls = []
+    monkeypatch.setattr(
+        agent, "_stream_completion",
+        lambda tools: calls.append(tools) or _FakeRoundStream())
+    assert agent._force_final_answer() == ""
+    assert calls == []
+
+
+def test_force_final_answer_swallows_errors(monkeypatch):
+    """A failing forced completion logs and returns '' (never raises)."""
+    agent = _make_act_agent()
+
+    def broken_stream(tools):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agent, "_stream_completion", broken_stream)
+    assert agent._force_final_answer() == ""
