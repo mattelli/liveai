@@ -1852,6 +1852,9 @@ class Agent(Brain):
         self._auto_compaction = str(
             getattr(config.brain, "auto_compaction", False)).strip().lower() \
             in ("true", "1", "yes", "on")
+        # Per-round step records (smolagents memory-step pattern): one
+        # entry per act() round for introspection/replay (see replay()).
+        self._steps: list[dict] = []
         self._fragments_buffer: list[str] = []
         # Runtime tool toggling (/tools on|off): names here are excluded from
         # the schemas sent with every request (session-only, main agent).
@@ -2238,7 +2241,36 @@ class Agent(Brain):
             self.logger.error("Forced final answer failed: %s", exc)
             return ""
 
-    def _run_tool_calls(self, tool_calls: list[dict]) -> None:
+    def _record_step(self, round_index: int, tool_calls: list[dict],
+                     results: list[str], durations_ms: list[float],
+                     cancelled: bool = False) -> None:
+        """Append one per-round record to ``_steps`` (best effort)."""
+        errors = [r for r in results if r.startswith("Error:")]
+        usage = getattr(self, "_last_round_usage", None) or (0, 0)
+        self._steps.append({
+            "round": round_index,
+            "tools": [c.get("name", "") for c in tool_calls],
+            "durations_ms": durations_ms,
+            "errors": errors,
+            "prompt_tokens": usage[0],
+            "completion_tokens": usage[1],
+            "cancelled": cancelled,
+        })
+
+    def replay(self) -> list[dict]:
+        """
+        Per-round records of the agent's work (deep copy).
+
+        One dict per ``act()`` round: ``round``, ``tools`` (names in
+        call order), ``durations_ms`` per tool, ``errors`` (tool error
+        strings), ``prompt_tokens``/``completion_tokens`` for the round
+        and ``cancelled``. Read-only view for sessions/monitoring; the
+        record of the round in progress is finalized on round end.
+        """
+        return copy.deepcopy(self._steps)
+
+    def _run_tool_calls(self, tool_calls: list[dict],
+                         round_index: int = -1) -> None:
         """
         Execute one round's tool calls and append the tool messages.
 
@@ -2252,6 +2284,9 @@ class Agent(Brain):
         order (smolagents ``process_tool_calls`` pattern).
         """
         results = self._execute_tool_calls(tool_calls)
+        self._record_step(round_index, tool_calls, results,
+                          getattr(self, "_last_tool_durations", []),
+                          cancelled=self._cancel_requested)
         for index, (call, result) in enumerate(zip(tool_calls, results)):
             self.logger.debug("Tool %s -> %s", call["name"],
                               str(result)[:200])
@@ -2267,10 +2302,20 @@ class Agent(Brain):
 
         Parallel execution when ``[agent] max_parallel_tools`` allows
         it and the round carries more than one call; sequential
-        otherwise.
+        otherwise. Per-call durations land on ``_last_tool_durations``
+        for the step record.
         """
+        self._last_tool_durations: list[float] = []
         if len(tool_calls) < 2 or self._max_parallel_tools < 2:
-            return [self._execute_tool(call) for call in tool_calls]
+            results = []
+            for call in tool_calls:
+                started = time.perf_counter()
+                result = self._execute_tool(call)
+                self._last_tool_durations.append(
+                    (time.perf_counter() - started) * 1000.0)
+                results.append(result)
+            return results
+        _pool_started = time.perf_counter()
         workers = min(len(tool_calls), self._max_parallel_tools)
         contexts = [contextvars.copy_context() for _ in tool_calls]
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -2278,7 +2323,13 @@ class Agent(Brain):
                 executor.submit(context.run, self._execute_tool, call)
                 for context, call in zip(contexts, tool_calls)
             ]
-            return [future.result() for future in futures]
+            results = [future.result() for future in futures]
+        # Durations are meaningless out of order; keep only the wall time
+        # of the pool as one aggregate entry per call.
+        self._last_tool_durations = [
+            (time.perf_counter() - _pool_started) * 1000.0
+        ] * len(results)
+        return results
 
     def act(self, prompt: str):
         """
@@ -2319,11 +2370,14 @@ class Agent(Brain):
                         ],
                     }
                     self._messages.append(assistant_call)
-                    self._run_tool_calls(tool_calls)
+                    self._run_tool_calls(tool_calls,
+                                          round_index=round_index)
                     self._handle_round_end(round_index)
                     continue
                 if not text and self._cancel_requested:
                     text = CANCELLED_PLACEHOLDER
+                self._record_step(round_index, [], [], [],
+                                  cancelled=self._cancel_requested)
                 self._messages.append({"role": "assistant", "content": text})
                 self._handle_round_end(round_index)
                 break
@@ -2331,6 +2385,8 @@ class Agent(Brain):
                 # Round budget exhausted without a final text round: one
                 # tool-free completion so the turn ends with an answer
                 # (smolagents _handle_max_steps_reached pattern).
+                self._record_step(round_index, [], [], [],
+                                  cancelled=self._cancel_requested)
                 final_text = self._force_final_answer()
                 if not final_text and self._cancel_requested:
                     final_text = CANCELLED_PLACEHOLDER

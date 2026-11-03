@@ -269,6 +269,7 @@ def _bare_act_agent(rounds):
     agent._messages = [{"role": "system", "content": "s"}]
     agent.tool_definitions = []
     agent._tool_impls = {}
+    agent._steps = []
     scripted = iter(rounds)
 
     def fake_round(tools):
@@ -1526,6 +1527,7 @@ def _make_act_agent(max_rounds=2):
     agent._stream = _FakeStreamPrinter()
     agent._fragments_buffer = []
     agent.tool_definitions = []
+    agent._steps = []
     agent._tool_impls = {"system_info": lambda **kw: "ok"}
     agent._context_window = 8192
     agent._show_thinking = False
@@ -1753,6 +1755,7 @@ def _parallel_agent(parallel=3, calls_made=None):
         "tool_three": tool_three,
     }
     agent.tool_definitions = []  # no schemas -> validation skips
+    agent._steps = []  # per-round step records (Task 6)
     return agent
 
 
@@ -1954,3 +1957,59 @@ def test_stream_completion_falls_back_without_stream_options(monkeypatch):
     assert "stream_options" in attempts[0]
     assert "stream_options" not in attempts[1]
     assert agent._stream_options_ok is False  # remembered for later rounds
+
+# ------------------------------------------------ step records + replay (Task 6)
+
+
+def test_act_records_steps(monkeypatch):
+    """A tool round + final round produce two step records."""
+    agent = _bare_act_agent([
+        ("", [{"id": "c1", "name": "get_time", "arguments": "{}"}]),
+        ("It is 12:00", []),
+    ])
+    agent._tool_impls = {"get_time": lambda **kw: "12:00"}
+    agent.act("What time is it?")
+    assert len(agent._steps) == 2
+    first, second = agent._steps
+    assert first["round"] == 0
+    assert first["tools"] == ["get_time"]
+    assert first["errors"] == []
+    assert first["cancelled"] is False
+    assert second["tools"] == []
+    assert second["cancelled"] is False
+
+
+def test_replay_returns_copy():
+    """Mutating the returned list must not affect the agent's records."""
+    agent = _bare_act_agent([("done", [])])
+    agent._record_step(0, [], [], [])
+    snapshot = agent.replay()
+    snapshot.append({"round": 99})
+    snapshot[0]["tools"] = ["tampered"]
+    assert len(agent._steps) == 1
+    assert agent._steps[0]["tools"] == []
+
+
+def test_record_step_captures_errors_and_usage():
+    agent = _bare_act_agent([("done", [])])
+    agent._last_round_usage = (100, 25)
+    agent._record_step(
+        1,
+        [{"name": "web_search"}, {"name": "run_command"}],
+        ["results here", "Error: boom"],
+        [12.5, 33.0],
+    )
+    record = agent._steps[-1]
+    assert record["round"] == 1
+    assert record["tools"] == ["web_search", "run_command"]
+    assert record["errors"] == ["Error: boom"]
+    assert record["durations_ms"] == [12.5, 33.0]
+    assert record["prompt_tokens"] == 100
+    assert record["completion_tokens"] == 25
+
+
+def test_record_step_cancelled_flag():
+    agent = _bare_act_agent([("done", [])])
+    agent._cancel_requested = True
+    agent._record_step(2, [], [], [], cancelled=True)
+    assert agent._steps[-1]["cancelled"] is True
