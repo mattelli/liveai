@@ -800,6 +800,7 @@ class OpenAICore:
         self.__dict__.pop("_model_meta", None)
         self._context_window = self._resolve_context_window(self.config)
         self._vision = self._resolve_vision_flag(self.config)
+        self._warn_streaming_unsupported()
         self._max_tokens = _response_token_cap(
             getattr(self.config.brain, "max_response_tokens", 0), self._context_window)
         self.logger.info(
@@ -837,6 +838,25 @@ class OpenAICore:
             self._model_name, ", ".join(map(str, capabilities)), has_vision,
         )
         return has_vision
+
+    def _warn_streaming_unsupported(self) -> None:
+        """Warn once when the server reports no streaming capability.
+
+        smolagents raises early when ``stream_outputs`` is requested but
+        the model class cannot stream; this session streams
+        unconditionally, so the equivalent is a warning at model
+        selection/init time from the server-reported capabilities
+        (absent = unknown = silent).
+        """
+        capabilities = self._fetch_model_metadata().get("capabilities")
+        if isinstance(capabilities, (list, tuple)) and capabilities:
+            names = [str(c).lower() for c in capabilities]
+            if not any(("stream" in c) or (c == "completion")
+                       for c in names):
+                self.logger.warning(
+                    "Model %r reports capabilities [%s] without "
+                    "streaming; streamed turns may fail.",
+                    self._model_name, ", ".join(names))
 
     def _resolve_context_window(self, config) -> int:
         """Resolve the context window: explicit config > server report > default.

@@ -2081,3 +2081,36 @@ def test_run_tool_calls_stringifies_errors_for_history():
     tool_messages = [m for m in agent._messages if m.get("role") == "tool"]
     assert tool_messages[0]["content"].startswith("Error: boom")
     assert agent._steps[0]["errors"] == ["Error: boom"]
+
+# ------------------------------------------- streaming capability warning (Task 8)
+
+
+def test_warn_streaming_unsupported_when_no_stream_capability(caplog):
+    """A capabilities list without completion/stream entries logs a warning."""
+    agent = _BareAgent()
+    agent._model_name = "m"
+    agent._fetch_model_metadata = (
+        lambda: {"capabilities": ["embedding", "rerank"]})
+    with caplog.at_level("WARNING"):
+        agent._warn_streaming_unsupported()
+    assert any("without streaming" in r.message for r in caplog.records)
+
+
+def test_no_warning_when_completion_capability_present(caplog):
+    agent = _BareAgent()
+    agent._model_name = "m"
+    agent._fetch_model_metadata = (
+        lambda: {"capabilities": ["completion", "tools"]})
+    with caplog.at_level("WARNING"):
+        agent._warn_streaming_unsupported()
+    assert not any("without streaming" in r.message for r in caplog.records)
+
+
+def test_no_warning_when_server_reports_nothing(caplog):
+    """Unknown capabilities (most cloud servers) stay silent."""
+    agent = _BareAgent()
+    agent._model_name = "m"
+    agent._fetch_model_metadata = lambda: {}
+    with caplog.at_level("WARNING"):
+        agent._warn_streaming_unsupported()
+    assert not any("without streaming" in r.message for r in caplog.records)
