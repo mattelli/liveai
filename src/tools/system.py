@@ -228,8 +228,23 @@ def _spawn_posix_detached(cmd: str, workdir: Path) -> str:
             f"logging to {log_file}")
 
 
+def _powershell_command(cmd: str) -> str:
+    """Prepare ``cmd`` for PowerShell's ``-Command`` parameter.
+
+    PowerShell parses a quoted executable path as a string expression, so a
+    command like ``"C:\\path\\python.exe" -c "..."`` fails with a parser
+    error ("Unexpected token '-c'"). Prefixing the call operator ``&`` makes
+    PowerShell invoke the quoted path as a command.
+    """
+    stripped = cmd.lstrip()
+    if stripped[:1] in ('"', "'"):
+        return "& " + stripped
+    return cmd
+
+
 def _spawn_windows(cmd: str, workdir: Path, background: bool, timeout_s: float) -> str:
     """Spawn a process on Windows using PowerShell."""
+    ps_cmd = _powershell_command(cmd)
     if background:
         try:
             process = subprocess.Popen(
@@ -237,7 +252,7 @@ def _spawn_windows(cmd: str, workdir: Path, background: bool, timeout_s: float) 
                     "powershell.exe",
                     "-NoExit",
                     "-ExecutionPolicy", "Bypass",
-                    "-Command", cmd,
+                    "-Command", ps_cmd,
                 ],
                 cwd=workdir,
                 stdin=subprocess.DEVNULL,
@@ -255,7 +270,7 @@ def _spawn_windows(cmd: str, workdir: Path, background: bool, timeout_s: float) 
                 "powershell.exe",
                 "-NoProfile",
                 "-ExecutionPolicy", "Bypass",
-                "-Command", cmd,
+                "-Command", ps_cmd,
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
