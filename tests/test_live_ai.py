@@ -1720,10 +1720,14 @@ def test_execute_tool_returns_validation_error_without_calling_tool():
         return "ran"
 
     agent = _agent_with_tool(spy, {"query": {"type": "string"}}, ["query"])
-    result = agent._execute_tool(
-        {"name": "echo", "arguments": json.dumps({"wrong": True})})
-    assert "invalid arguments" in result
+    with pytest.raises(live_ai_mod.AgentToolArgumentError) as excinfo:
+        agent._execute_tool(
+            {"name": "echo", "arguments": json.dumps({"wrong": True})})
+    assert "invalid arguments" in str(excinfo.value)
     assert calls == []  # the tool never ran
+    # Through the caller (_stringify_tool_error) the model still sees text.
+    assert live_ai_mod.Agent._stringify_tool_error(
+        excinfo.value).startswith("Error: invalid arguments")
 
 # ------------------------------------------------ parallel tool calls (Task 4)
 
@@ -2013,3 +2017,67 @@ def test_record_step_cancelled_flag():
     agent._cancel_requested = True
     agent._record_step(2, [], [], [], cancelled=True)
     assert agent._steps[-1]["cancelled"] is True
+
+# ------------------------------------------------ typed agent errors (Task 7)
+
+
+def test_agent_error_hierarchy():
+    """The error classes form the documented hierarchy."""
+    assert issubclass(live_ai_mod.AgentToolArgumentError,
+                      live_ai_mod.AgentToolError)
+    assert issubclass(live_ai_mod.AgentToolExecutionError,
+                      live_ai_mod.AgentToolError)
+    assert issubclass(live_ai_mod.AgentToolError, Exception)
+
+
+def test_execute_tool_malformed_json_raises_argument_error():
+    agent = _agent_with_tool(lambda **kw: "ok",
+                             {"query": {"type": "string"}}, ["query"])
+    with pytest.raises(live_ai_mod.AgentToolArgumentError) as excinfo:
+        agent._execute_tool({"name": "echo", "arguments": "{not json"})
+    assert "malformed arguments" in str(excinfo.value)
+
+
+def test_execute_tool_non_object_args_raises_argument_error():
+    agent = _agent_with_tool(lambda **kw: "ok",
+                             {"query": {"type": "string"}}, ["query"])
+    with pytest.raises(live_ai_mod.AgentToolArgumentError) as excinfo:
+        agent._execute_tool({"name": "echo", "arguments": '"just a string"'})
+    assert "expected a JSON object" in str(excinfo.value)
+
+
+def test_execute_tool_raising_tool_raises_execution_error():
+    def boom(**kwargs):
+        raise ValueError("disk on fire")
+
+    agent = _agent_with_tool(boom, {}, [])
+    with pytest.raises(live_ai_mod.AgentToolExecutionError) as excinfo:
+        agent._execute_tool({"name": "echo", "arguments": "{}"})
+    assert "disk on fire" in str(excinfo.value)
+
+
+def test_stringify_tool_error_passes_plain_results_through():
+    assert live_ai_mod.Agent._stringify_tool_error("normal result") \
+        == "normal result"
+    assert live_ai_mod.Agent._stringify_tool_error(42) == 42
+
+
+def test_stringify_tool_error_converts_typed_errors():
+    error = live_ai_mod.AgentToolExecutionError("Error: disk on fire")
+    assert live_ai_mod.Agent._stringify_tool_error(error) == \
+        "Error: disk on fire"
+
+
+def test_run_tool_calls_stringifies_errors_for_history():
+    """A raising tool yields the Error string in the history, not a crash."""
+
+    def boom(**kwargs):
+        raise ValueError("boom")
+
+    agent = _parallel_agent(parallel=0)
+    agent._tool_impls = {"tool_one": boom}
+    agent._run_tool_calls([{"id": "c1", "name": "tool_one",
+                            "arguments": "{}"}], round_index=0)
+    tool_messages = [m for m in agent._messages if m.get("role") == "tool"]
+    assert tool_messages[0]["content"].startswith("Error: boom")
+    assert agent._steps[0]["errors"] == ["Error: boom"]

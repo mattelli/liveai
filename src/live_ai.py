@@ -37,6 +37,32 @@ from src.tools import speech as speech_tools
 CANCELLED_PLACEHOLDER = "(generation cancelled by user)"
 
 
+class AgentToolError(Exception):
+    """Base class for tool-execution failures (smolagents pattern)."""
+
+
+class AgentToolArgumentError(AgentToolError):
+    """Tool arguments failed validation or JSON decoding."""
+
+
+class AgentToolExecutionError(AgentToolError):
+    """The tool ran and raised (or was otherwise not executable)."""
+
+
+def _safe_tool_call(agent: "Agent", context, call: dict) -> str:
+    """Run one tool call in a worker thread, typed errors as text.
+
+    Module-level so the thread pool gets a plain callable: the
+    ``contextvars`` copy keeps agent-name/monitor thread-locals alive,
+    and ``AgentToolError`` becomes the model-facing "Error: ..." string
+    (the historical behavior for a raising tool).
+    """
+    try:
+        return context.run(agent._execute_tool, call)
+    except AgentToolError as exc:
+        return str(exc)
+
+
 def _validated_style(value: str | None, default: str = "cyan") -> str:
     """`[ui]` assistant color: any rich style name, falling back to `default`."""
     value = value or default
@@ -2165,6 +2191,18 @@ class Agent(Brain):
         return (f"Error: invalid arguments for '{name}': "
                 + "; ".join(problems)
                 + f". Valid parameters: {', '.join(sorted(properties)) or 'none'}.")
+    @staticmethod
+    def _stringify_tool_error(result: Any) -> Any:
+        """Typed tool errors become their model-facing string.
+
+        ``AgentToolError`` carries the same text the model saw before
+        the typed hierarchy existed; anything else passes through
+        unchanged.
+        """
+        if isinstance(result, AgentToolError):
+            return str(result)
+        return result
+
     def _execute_tool(self, call: dict) -> str:
         tool = self._tool_impls.get(call["name"])
         if tool is None:
@@ -2179,16 +2217,18 @@ class Agent(Brain):
         try:
             args = json.loads(call["arguments"] or "{}")
         except json.JSONDecodeError as exc:
-            return f"Error: malformed arguments for '{call['name']}': {exc}"
+            raise AgentToolArgumentError(
+                f"Error: malformed arguments for '{call['name']}': {exc}") from exc
         if not isinstance(args, dict):
-            return ("Error: invalid arguments for %r: expected a JSON object" % call["name"])
+            raise AgentToolArgumentError(
+                "Error: invalid arguments for %r: expected a JSON object" % call["name"])
         validation_error = self._validate_tool_args(call["name"], args)
         if validation_error is not None:
-            return validation_error
+            raise AgentToolArgumentError(validation_error)
         try:
             result = tool(**args)
         except Exception as exc:
-            result = f"Error: {exc}"
+            raise AgentToolExecutionError(f"Error: {exc}") from exc
         result = result if isinstance(result, str) else str(result)
         # Sub-agent tool activity: isolated agents report their tool
         # calls/results to the process-wide monitor (agent name comes from
@@ -2310,7 +2350,10 @@ class Agent(Brain):
             results = []
             for call in tool_calls:
                 started = time.perf_counter()
-                result = self._execute_tool(call)
+                try:
+                    result = self._execute_tool(call)
+                except AgentToolError as exc:
+                    result = str(exc)
                 self._last_tool_durations.append(
                     (time.perf_counter() - started) * 1000.0)
                 results.append(result)
@@ -2319,10 +2362,8 @@ class Agent(Brain):
         workers = min(len(tool_calls), self._max_parallel_tools)
         contexts = [contextvars.copy_context() for _ in tool_calls]
         with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = [
-                executor.submit(context.run, self._execute_tool, call)
-                for context, call in zip(contexts, tool_calls)
-            ]
+            futures = [executor.submit(_safe_tool_call, self, context, call)
+                        for context, call in zip(contexts, tool_calls)]
             results = [future.result() for future in futures]
         # Durations are meaningless out of order; keep only the wall time
         # of the pool as one aggregate entry per call.
