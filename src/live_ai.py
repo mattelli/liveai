@@ -17,7 +17,7 @@ from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPri
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command, spawn_process,
-    web_search, web_images, web_videos, web_news, web_books, extract_webpage,
+    web_search, web_images, web_videos, web_news, web_books, extract_webpage, wikipedia_search,
     capture_image,
     generate_image, unload_image_generator,
     summarize_doc, query_document, image_search,
@@ -244,7 +244,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
         capture_image, system_info, current_date_time, get_working_directory,
         run_command, spawn_process, search_in_file, search_pattern_in_files,
         read_text_file, replace_string_in_file, write_text_file,
-        web_search, web_images, web_videos, web_news, web_books,
+        web_search, web_images, web_videos, web_news, web_books, wikipedia_search,
         extract_webpage, download_file, extract_archive, zip_files,
         fetch_financial_data, save_financial_chart,
         generate_image, unload_image_generator,

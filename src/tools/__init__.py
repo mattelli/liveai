@@ -43,6 +43,7 @@ from .web import (
     download_file, extract_webpage, format_search_results, web_books,
     web_images, web_news, web_search, web_videos,
 )
+from .wiki import wikipedia_search
 from .archives import extract_archive, zip_files
 from .camera import CAPTURED_IMAGE, capture_image
 from .image_gen import GENERATED_IMAGE, generate_image, unload_image_generator
@@ -76,7 +77,7 @@ __all__ = [
     "search_pattern_in_files", "select_financial_columns", "spawn_process",
     "store_corpus",
     "store_memory", "summarize_doc", "system_info", "unload_image_generator",
-    "web_books", "web_images", "web_news", "web_search", "web_videos",
+    "web_books", "wikipedia_search", "web_images", "web_news", "web_search", "web_videos",
     "write_text_file", "zip_files",
 ]
 
