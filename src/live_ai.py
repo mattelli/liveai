@@ -1,4 +1,5 @@
 import copy
+import contextvars
 import inspect
 import json
 import os
@@ -1796,6 +1797,15 @@ class Agent(Brain):
         except (TypeError, ValueError):
             result_chars = 0
         self._max_tool_result_chars = max(0, result_chars)
+
+        # [agent] max_parallel_tools: run multi-tool rounds concurrently
+        # (0/1 = sequential, the default; capped at 8 workers).
+        try:
+            parallel = int(getattr(getattr(config, "agent", None),
+                                   "max_parallel_tools", 0) or 0)
+        except (TypeError, ValueError):
+            parallel = 0
+        self._max_parallel_tools = min(max(0, parallel), 8)
         # [brain] context_trim_ratio / context_keep_messages: prune the oldest
         # history when the approximate context usage exceeds the ratio
         # (0/unset/invalid = never prune, the historical behavior).
@@ -2196,6 +2206,48 @@ class Agent(Brain):
             self.logger.error("Forced final answer failed: %s", exc)
             return ""
 
+    def _run_tool_calls(self, tool_calls: list[dict]) -> None:
+        """
+        Execute one round's tool calls and append the tool messages.
+
+        Sequential by default (the historical behavior, safest for
+        tools that share session state). With ``[agent]
+        max_parallel_tools > 1`` and more than one call in the round,
+        the calls run in a bounded thread pool: each worker gets a
+        ``contextvars.copy_context()`` so thread-locals (agent name,
+        monitor wiring) keep working, and results are appended to the
+        history in the original call order regardless of completion
+        order (smolagents ``process_tool_calls`` pattern).
+        """
+        results = self._execute_tool_calls(tool_calls)
+        for index, (call, result) in enumerate(zip(tool_calls, results)):
+            self.logger.debug("Tool %s -> %s", call["name"],
+                              str(result)[:200])
+            self._messages.append({
+                "role": "tool",
+                "tool_call_id": call["id"] or f"call_{index}",
+                "content": _truncate_tool_result(
+                    result, getattr(self, "_max_tool_result_chars", 0)),
+            })
+
+    def _execute_tool_calls(self, tool_calls: list[dict]) -> list[str]:
+        """Results of one round's tool calls, in call order.
+
+        Parallel execution when ``[agent] max_parallel_tools`` allows
+        it and the round carries more than one call; sequential
+        otherwise.
+        """
+        if len(tool_calls) < 2 or self._max_parallel_tools < 2:
+            return [self._execute_tool(call) for call in tool_calls]
+        workers = min(len(tool_calls), self._max_parallel_tools)
+        contexts = [contextvars.copy_context() for _ in tool_calls]
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [
+                executor.submit(context.run, self._execute_tool, call)
+                for context, call in zip(contexts, tool_calls)
+            ]
+            return [future.result() for future in futures]
+
     def act(self, prompt: str):
         """
         Perform an action based on the input prompt.
@@ -2230,15 +2282,7 @@ class Agent(Brain):
                         ],
                     }
                     self._messages.append(assistant_call)
-                    for index, call in enumerate(tool_calls):
-                        result = self._execute_tool(call)
-                        self.logger.debug("Tool %s -> %s", call["name"], str(result)[:200])
-                        self._messages.append({
-                            "role": "tool",
-                            "tool_call_id": call["id"] or f"call_{index}",
-                            "content": _truncate_tool_result(
-                                result, getattr(self, "_max_tool_result_chars", 0)),
-                        })
+                    self._run_tool_calls(tool_calls)
                     self._handle_round_end(round_index)
                     continue
                 if not text and self._cancel_requested:
