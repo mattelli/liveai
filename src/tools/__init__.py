@@ -45,6 +45,7 @@ from .web import (
 )
 from .wiki import wikipedia_search
 from .stt import transcribe_audio
+from .pyeval import python_eval
 from .archives import extract_archive, zip_files
 from .camera import CAPTURED_IMAGE, capture_image
 from .image_gen import GENERATED_IMAGE, generate_image, unload_image_generator
@@ -78,7 +79,7 @@ __all__ = [
     "search_pattern_in_files", "select_financial_columns", "spawn_process",
     "store_corpus",
     "store_memory", "summarize_doc", "system_info", "unload_image_generator",
-    "web_books", "transcribe_audio", "wikipedia_search", "web_images", "web_news", "web_search", "web_videos",
+    "web_books", "python_eval", "transcribe_audio", "wikipedia_search", "web_images", "web_news", "web_search", "web_videos",
     "write_text_file", "zip_files",
 ]
 

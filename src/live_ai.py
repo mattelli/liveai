@@ -17,7 +17,7 @@ from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPri
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command, spawn_process,
-    web_search, web_images, web_videos, web_news, web_books, extract_webpage, wikipedia_search, transcribe_audio,
+    web_search, web_images, web_videos, web_news, web_books, extract_webpage, wikipedia_search, transcribe_audio, python_eval,
     capture_image,
     generate_image, unload_image_generator,
     summarize_doc, query_document, image_search,
@@ -1899,7 +1899,14 @@ class Agent(Brain):
             memory_mod.compact_chat: memory.compact_chat,
             vision_mod.image_response: vision.image_response,
         }
-        return [per_agent.get(tool, tool) for tool in tools]
+        # Sandboxed Python evaluation for background agents only (PLAN
+        # task 13): the main agent has run_command and is user-supervised.
+        from src.tools import python_eval as _python_eval_impl
+        tools = [per_agent.get(tool, tool) for tool in tools]
+        if not any(getattr(t, "__name__", "") == "python_eval"
+                   for t in tools):
+            tools.append(_python_eval_impl)
+        return tools
 
     def __init__(self, config: SimpleNamespace, isolated_tools: bool = False, quiet: bool = False):
         # Set before super().__init__: OpenAICore.__init__ skips the
