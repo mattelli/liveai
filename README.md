@@ -621,6 +621,52 @@ async delegation receipts and the `[agent]` pool keys `parallel_agents`,
 the app is single-agent again. Leftover pool keys in a `config.toml` are
 inert (nothing reads them anymore). The sub-agent activity monitor is kept and
 now tracks **scheduled-task runs** (see [Sub-agent activity monitoring](#sub-agent-activity-monitoring)).
+Task delegation is back as **`[agents]`** (see the next section).
+
+## Task delegation (`[agents]`)
+
+The main agent can delegate tasks to named sub-agents with the
+**`delegate_task(agent_name, task)`** tool. Sub-agents are declared in
+`config.toml`; with no `[agents]` entries the tool is not registered and the
+feature costs zero tokens.
+
+```toml
+[agents]
+summarize_results = false            # true -> long child results get an LLM summary before being shown
+# summarize_max_chars = 800          # summarize only results longer than this (0 = always)
+
+[agents.researcher]
+tool_groups = "web, files"           # tool topics for this child (see [agent] tool_groups)
+model = "fast"                       # models.json entry name; unset = the main model
+system_prompt = "You are a research assistant. Be concise."
+max_act_rounds = 50                  # child round budget
+description = "web research"         # shown to the main agent in its prompt
+```
+
+How it works:
+
+- **Asynchronous (fire-and-forget)** — `delegate_task` returns an
+  acknowledgment with a task id immediately; the parent's tool loop is never
+  blocked. The child runs on a daemon thread as an isolated, quiet agent
+  (fresh per-agent tool instances, like the scheduler executor).
+- **Result delivery** — when the child finishes, its final text is queued and
+  injected into the main chat history before the next turn (like scheduled-task
+  results); the parent agent can then use or mention it. Child failures queue
+  an error text instead of crashing the turn.
+- **Flat topology** — children get no `delegate_task` tool and cannot spawn
+  further agents; the delegation tool is registered for the main session agent
+  only.
+- **Child model/tools** — each child uses its configured `tool_groups` (smaller
+  tool set = cheaper per-request payloads), optional `model` (a `models.json`
+  entry) and optional `system_prompt`.
+- **Result summarization (optional)** — with `summarize_results = true`,
+  results longer than `summarize_max_chars` are condensed by an LLM summary
+  pass (on the child's own model endpoint) before being queued; short results
+  pass through unchanged and a summary failure queues the original text
+  (fail-open, results are never dropped).
+- **Known limitations (v1)** — no mid-run cancellation of a running child, and
+  no hierarchical delegation (flat only). Sub-agent tool calls are visible in
+  the activity monitor and the `agent_activity` tool.
 
 ## Reducing token consumption
 
