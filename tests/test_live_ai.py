@@ -2114,3 +2114,62 @@ def test_no_warning_when_server_reports_nothing(caplog):
     with caplog.at_level("WARNING"):
         agent._warn_streaming_unsupported()
     assert not any("without streaming" in r.message for r in caplog.records)
+
+# ------------------------------------------ prompt templates as data (Task 9)
+
+
+def test_prompts_defaults_present():
+    """All documented keys exist in _PROMPTS with their default text."""
+    for key in ("summarizer_system", "pruned_marker",
+                "cancelled_placeholder"):
+        assert key in live_ai_mod._PROMPTS
+    assert live_ai_mod._PROMPTS["cancelled_placeholder"] == \
+        live_ai_mod.CANCELLED_PLACEHOLDER
+
+
+def test_prompts_file_overrides_summarizer(tmp_path, monkeypatch):
+    """A [brain] prompts_file JSON overrides the summarizer prompt."""
+    overrides = tmp_path / "prompts.json"
+    overrides.write_text(
+        '{"summarizer_system": "Custom summary instructions."}',
+        encoding="utf-8")
+    config = SimpleNamespace(brain=SimpleNamespace(
+        prompts_file=str(overrides)))
+    before = live_ai_mod._PROMPTS["summarizer_system"]
+    try:
+        live_ai_mod._load_prompt_overrides(config)
+        assert live_ai_mod._PROMPTS["summarizer_system"] == \
+            "Custom summary instructions."
+    finally:
+        live_ai_mod._PROMPTS["summarizer_system"] = before
+
+
+def test_prompts_unknown_keys_ignored(tmp_path, caplog):
+    overrides = tmp_path / "prompts.json"
+    overrides.write_text('{"not_a_key": "x"}', encoding="utf-8")
+    config = SimpleNamespace(brain=SimpleNamespace(
+        prompts_file=str(overrides)))
+    with caplog.at_level("WARNING"):
+        live_ai_mod._load_prompt_overrides(config)
+    assert any("ignored" in r.message for r in caplog.records)
+    assert "not_a_key" not in live_ai_mod._PROMPTS
+
+
+def test_prompts_missing_file_warns_and_continues(tmp_path, caplog):
+    config = SimpleNamespace(brain=SimpleNamespace(
+        prompts_file=str(tmp_path / "missing.json")))
+    with caplog.at_level("WARNING"):
+        live_ai_mod._load_prompt_overrides(config)
+    assert any("ignored" in r.message for r in caplog.records)
+
+
+def test_prompts_no_config_is_noop():
+    config = SimpleNamespace(brain=SimpleNamespace(prompts_file=""))
+    snapshot = dict(live_ai_mod._PROMPTS)
+    live_ai_mod._load_prompt_overrides(config)
+    assert live_ai_mod._PROMPTS == snapshot
+
+
+def test_pruned_marker_template_formats():
+    text = live_ai_mod._PROMPTS["pruned_marker"].format(dropped=7)
+    assert "7" in text and "pruned" in text

@@ -31,10 +31,23 @@ from src.tools import (
 from src.tools import speech as speech_tools
 
 
+_PROMPTS = {
+    # LLM-backed history compaction (src.tools.memory, Brain._summarize_messages)
+    "summarizer_system": (
+        "Summarize this conversation concisely: key facts, decisions, user "
+        "preferences, open tasks, and any file paths or resources mentioned. "
+        "Write only the summary."
+    ),
+    # History-prune marker appended to the system prompt by _prune_history
+    "pruned_marker": "\n[history pruned: {dropped} messages dropped]",
+    # Placeholder when a generation is cancelled before any text was produced
+    "cancelled_placeholder": "(generation cancelled by user)",
+}
+
 # Padded into the history when a generation is cancelled before any text was
 # produced: an empty assistant turn would be dropped by the model's prompt
 # template and break user/assistant role alternation on the next request.
-CANCELLED_PLACEHOLDER = "(generation cancelled by user)"
+CANCELLED_PLACEHOLDER = _PROMPTS["cancelled_placeholder"]
 
 
 class AgentToolError(Exception):
@@ -61,6 +74,33 @@ def _safe_tool_call(agent: "Agent", context, call: dict) -> str:
         return context.run(agent._execute_tool, call)
     except AgentToolError as exc:
         return str(exc)
+
+
+def _load_prompt_overrides(config) -> None:
+    """Merge ``[brain] prompts_file`` (JSON) into ``_PROMPTS``.
+
+    Unknown keys and unreadable files are logged and ignored; valid
+    keys must be strings.
+    """
+    path = getattr(getattr(config, "brain", None), "prompts_file", "")
+    if not path:
+        return
+    log = getLogger(__name__)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            overrides = json.load(fh)
+    except Exception as exc:
+        log.warning("prompts_file %r ignored: %s", path, exc)
+        return
+    if not isinstance(overrides, dict):
+        log.warning("prompts_file %r ignored: top level must be an object",
+                    path)
+        return
+    for key, value in overrides.items():
+        if key in _PROMPTS and isinstance(value, str):
+            _PROMPTS[key] = value
+        else:
+            log.warning("prompts_file key %r ignored", key)
 
 
 def _validated_style(value: str | None, default: str = "cyan") -> str:
@@ -1373,7 +1413,8 @@ class Brain(OpenAICore):
                 if cut != -1:  # replace a marker from an earlier prune
                     base = base[:cut]
                 system["content"] = (
-                    base + f"\n[history pruned: {dropped_total} messages dropped]")
+                    base + _PROMPTS["pruned_marker"].format(
+                        dropped=dropped_total))
         return dropped_total
 
     def _auto_compact(self) -> str:
@@ -1463,11 +1504,7 @@ class Brain(OpenAICore):
 
     ## LLM-backed summarization for history compaction (src.tools.memory) ##
 
-    _SUMMARIZER_SYSTEM_PROMPT = (
-        "Summarize this conversation concisely: key facts, decisions, user "
-        "preferences, open tasks, and any file paths or resources mentioned. "
-        "Write only the summary."
-    )
+    _SUMMARIZER_SYSTEM_PROMPT = _PROMPTS["summarizer_system"]
 
     def _summarize_messages(self, messages: list[dict]) -> str:
         """Summarize messages via the chat model (for history compaction).
@@ -1847,6 +1884,7 @@ class Agent(Brain):
         # Set before super().__init__: OpenAICore.__init__ skips the
         # module-default tool binding for isolated agents, and
         # OpenAICore.__init__ builds the stream printer (quiet -> NullPrinter).
+        _load_prompt_overrides(config)
         self.isolated_tools = isolated_tools
         self.quiet = quiet
         super().__init__(config)
