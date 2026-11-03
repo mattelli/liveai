@@ -30,6 +30,7 @@ from src.tools import (
     mcp_list_tools, mcp_call_tool,
 )
 from src.tools import speech as speech_tools
+from src.delegation import delegate_task, configure_delegation
 
 
 _PROMPTS = {
@@ -249,6 +250,10 @@ def _default_tools(agent: "Brain") -> list[Callable]:
         fetch_financial_data, save_financial_chart,
         generate_image, unload_image_generator,
         mcp_list_tools, mcp_call_tool,
+        # Only when [agents] is configured; a no-op stub otherwise (removed
+        # again in Agent.__init__, see _trim_unavailable_tools). Children get
+        # no delegation tool (flat topology), so the tool set is main-agent-only.
+        delegate_task,
         exit_gracefully
     ]
 
@@ -314,6 +319,7 @@ _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
     "system": ("system_info", "current_date_time", "get_working_directory",
                "spawn_process", "exit_gracefully"),
     "mcp": ("mcp_list_tools", "mcp_call_tool"),
+    "delegation": ("delegate_task",),
 }
 
 
@@ -675,7 +681,14 @@ class OpenAICore:
         self._max_thinking_tokens = _thinking_token_cap(
             getattr(config.ui, "max_thinking_tokens", 0))
         self._reset_thinking()
-        self._messages: list[dict] = [{"role": "system", "content": config.brain.system_prompt}]
+        # Managed-agents section ([agents] delegation, PLAN-multiagent):
+        # appended to the system prompt by Agent._managed_agents_section()
+        # when the subclass provides one and [agents] entries exist.
+        system_prompt = str(config.brain.system_prompt or "")
+        if hasattr(self, "_managed_agents_section"):
+            system_prompt += self._managed_agents_section()
+        self._messages: list[dict] = [{"role": "system",
+                                       "content": system_prompt}]
         ui = getattr(config, "ui", None)
         if getattr(self, "quiet", False):
             # Quiet agents (e.g. the scheduler execution agent) buffer fragments instead of printing:
@@ -1921,6 +1934,15 @@ class Agent(Brain):
         _load_prompt_overrides(config)
         self.isolated_tools = isolated_tools
         self.quiet = quiet
+        # [agents] registry: parsed before super().__init__ because the
+        # managed-agents system-prompt section and the tool trim both read it.
+        # Only the main agent (isolated_tools=False) refreshes the registry
+        # and the delegation config: children must not hijack either.
+        if not isolated_tools:
+            from src.agent_registry import load_agent_registry
+            load_agent_registry(config)
+            from src.delegation import configure_delegation
+            configure_delegation(config)
         super().__init__(config)
         # Per-agent round limit from [agent] max_act_rounds (0/unset -> class default).
         rounds = int(getattr(getattr(config, "agent", None), "max_act_rounds", 0) or 0)
@@ -1982,6 +2004,11 @@ class Agent(Brain):
             self._model_name
         )
         self.tools: list[Callable] = self._build_tools()
+        # Flat topology ([agents] delegation, PLAN-multiagent): children must
+        # never offer delegation. Children are main-agent-only exclusions, so
+        # simply dropping the tool for isolated agents is not enough — the
+        # tool must also vanish when no [agents] are configured at all.
+        self._trim_unavailable_tools()
         # [agent] tool_doc_chars: cap tool descriptions in the JSON schemas
         # (0/unset/invalid = full docstring, the historical behavior).
         try:
@@ -2013,6 +2040,49 @@ class Agent(Brain):
             "✅ Agent with Model '%s' is ready with [%d] tools.",
             self._model_name, len(self.tools)
         )
+
+    def _trim_unavailable_tools(self) -> None:
+        """Drop tools whose backing feature is disabled in this config.
+
+        Currently only ``delegate_task``: it stays registered only when
+        ``[agents]`` entries exist AND the agent is not isolated (main agent
+        only). Everything else stays: built-ins are always available.
+        """
+        from src.agent_registry import agent_registry
+        if not getattr(self, "isolated_tools", False) and agent_registry():
+            return
+        names = {getattr(t, "__name__", "") for t in self.tools}
+        if "delegate_task" not in names:
+            return
+        self.tools = [t for t in self.tools
+                      if getattr(t, "__name__", "") != "delegate_task"]
+        self.logger.info(
+            "delegate_task not available (%s): tool removed",
+            "isolated agent" if getattr(self, "isolated_tools", False)
+            else "no [agents] entries")
+
+    def _managed_agents_section(self) -> str:
+        """System-prompt block describing the configured sub-agents.
+
+        Rendered from the ``[agents]`` registry for the main agent only
+        (smolagents ``initialize_system_prompt`` managed-agents pattern);
+        empty when delegation is unavailable, so child/isolated agents and
+        unconfigured setups see nothing.
+        """
+        from src.agent_registry import agent_registry
+        if getattr(self, "isolated_tools", False):
+            return ""
+        specs = agent_registry()
+        if not specs:
+            return ""
+        lines = ["", "You can delegate tasks to these sub-agents with the "
+                     "delegate_task tool (they run in the background; results "
+                     "arrive automatically):"]
+        for name in sorted(specs):
+            spec = specs[name]
+            desc = f": {spec.description}" if spec.description else ""
+            lines.append(f"- {name}{desc}")
+        return "\n".join(lines)
 
     def refresh_mcp_tools(self) -> str:
         """Reconnect the MCP servers and rebuild the injected tools in place.

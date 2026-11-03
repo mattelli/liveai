@@ -274,7 +274,7 @@ def test_agent_build_tools_default_keeps_all_tools():
     agent.config = SimpleNamespace(brain=SimpleNamespace(model="m"))
     agent.isolated_tools = False
     names = [t.__name__ for t in agent._build_tools()]
-    assert len(names) == 46  # two delegation tools removed, spawn_process + compact_chat added, plus wikipedia_search + transcribe_audio
+    assert len(names) == 47  # delegation added; spawn_process + compact_chat, wikipedia_search + transcribe_audio included
     assert "summarize_doc" in names and "exit_gracefully" in names
 
 

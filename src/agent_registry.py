@@ -119,6 +119,11 @@ def load_agent_registry(config: SimpleNamespace) -> dict[str, AgentSpec]:
 
 def agent_registry() -> dict[str, AgentSpec]:
     """The module-level ``[agents]`` registry (empty = feature disabled)."""
+    return dict(_AGENT_SPECS)
+
+
+def agent_registry_state() -> dict[str, AgentSpec]:
+    """The live registry dict (read-only view; tests assert non-emptiness)."""
     return _AGENT_SPECS
 
 

@@ -190,6 +190,11 @@ class ConversationSession:
                     "role": "assistant",
                     "content": f"Scheduled task {result_id} completed. Result:\n{text}",
                 })
+            elif kind == "delegation":
+                self.agent.messages.append({
+                    "role": "assistant",
+                    "content": f"Sub-agent task {result_id} completed. Result:\n{text}",
+                })
             else:  # unknown kind: log and skip, never crash the turn
                 getLogger(__name__).warning("Unknown background result kind %r", kind)
 
