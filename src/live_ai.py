@@ -17,7 +17,7 @@ from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPri
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command, spawn_process,
-    web_search, web_images, web_videos, web_news, web_books, extract_webpage, wikipedia_search, transcribe_audio, python_eval,
+    web_search, web_images, web_videos, web_news, web_books, extract_webpage, wikipedia_search, transcribe_audio, python_eval, ask_user,
     capture_image,
     generate_image, unload_image_generator,
     summarize_doc, query_document, image_search,
@@ -1906,6 +1906,12 @@ class Agent(Brain):
         if not any(getattr(t, "__name__", "") == "python_eval"
                    for t in tools):
             tools.append(_python_eval_impl)
+        # Human-in-the-loop for background agents (PLAN task 14):
+        # ambiguous tasks pause and ask the session user.
+        from src.tools import ask_user as _ask_user_impl
+        if not any(getattr(t, "__name__", "") == "ask_user"
+                   for t in tools):
+            tools.append(_ask_user_impl)
         return tools
 
     def __init__(self, config: SimpleNamespace, isolated_tools: bool = False, quiet: bool = False):
