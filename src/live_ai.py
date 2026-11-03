@@ -1396,7 +1396,24 @@ class Brain(OpenAICore):
         }
         if tools:
             kwargs["tools"] = tools
-        return self._client.chat.completions.create(**kwargs)
+        self._stream_options_ok = True
+        try:
+            return self._client.chat.completions.create(
+                **kwargs, stream_options={"include_usage": True})
+        except TypeError:
+            # Very old SDK without stream_options support.
+            self._stream_options_ok = False
+            return self._client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            if self._stream_options_ok and "stream_options" in str(exc):
+                # Server rejected the option (older OpenAI-compatible
+                # endpoints): fall back once and remember the refusal.
+                self._stream_options_ok = False
+                self.logger.debug(
+                    "stream_options rejected by the server; retrying "
+                    "without it (%s)", exc)
+                return self._client.chat.completions.create(**kwargs)
+            raise
 
     ## LLM-backed summarization for history compaction (src.tools.memory) ##
 
@@ -2007,6 +2024,9 @@ class Agent(Brain):
         if not getattr(self, "quiet", False):
             cprint("")
             stats = f"context {context_usage_percentage:.1f}% [{int(context_window / 1000)}k]"
+            turn_usage = getattr(self, "_turn_usage", None)
+            if turn_usage and (turn_usage[0] or turn_usage[1]):
+                stats += f" · in {turn_usage[0]} / out {turn_usage[1]} tok"
             started = getattr(self, "_turn_started", None)
             if started is not None:
                 stats += f" · {time.monotonic() - started:.1f}s"
@@ -2019,10 +2039,17 @@ class Agent(Brain):
         self._fragments_buffer.clear()
 
     def _stream_round(self, tools: list[dict]) -> tuple[str, list[dict]]:
-        """Stream one completion round; return (text, accumulated tool calls)."""
+        """Stream one completion round; return (text, accumulated tool calls).
+
+        The final stream chunk's ``usage`` (servers that honor
+        ``stream_options.include_usage``) is stored on
+        ``_last_round_usage`` as ``(prompt_tokens, completion_tokens)``
+        or ``None``; ``act()`` accumulates it per turn.
+        """
         # Fresh thinking-display budget per round: a multi-round act() turn
         # would otherwise exhaust the cap in round 1 and show nothing later.
         self._reset_thinking()
+        self._last_round_usage: tuple[int, int] | None = None
         stream = self._stream_completion(self.enabled_tool_definitions())
         self._active_stream = stream
         parts: list[str] = []
@@ -2031,6 +2058,11 @@ class Agent(Brain):
             for chunk in stream:
                 if self._cancel_requested:
                     break
+                usage = getattr(chunk, "usage", None)
+                if usage is not None and getattr(usage, "total_tokens", None):
+                    self._last_round_usage = (
+                        int(getattr(usage, "prompt_tokens", 0) or 0),
+                        int(getattr(usage, "completion_tokens", 0) or 0))
                 delta = self._stream_delta(chunk)
                 if delta is None:
                     continue
@@ -2046,7 +2078,7 @@ class Agent(Brain):
                         slot["name"] += tc.function.name or ""
                         slot["arguments"] += tc.function.arguments or ""
             pending = self._flush_pending_answer()
-            if pending:  # trailing partial istine tag held back by _split_thinking
+            if pending:  # trailing partial think tag held back by _split_thinking
                 parts.append(pending)
                 self._handle_fragment(pending)
         finally:
@@ -2261,10 +2293,15 @@ class Agent(Brain):
         self._cancel_requested = False  # fresh turn
         self._reset_thinking()
         self._turn_started = time.monotonic()
+        self._turn_usage = [0, 0]  # [prompt_tokens, completion_tokens]
         self._stream.start_spinner("thinking")
         try:
             for round_index in range(self.MAX_ACT_ROUNDS):
                 text, tool_calls = self._stream_round(self.tool_definitions)
+                usage = getattr(self, "_last_round_usage", None)
+                if usage:
+                    self._turn_usage[0] += usage[0]
+                    self._turn_usage[1] += usage[1]
                 if tool_calls and not self._cancel_requested:
                     assistant_call = {
                         "role": "assistant",

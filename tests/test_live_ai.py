@@ -1530,6 +1530,9 @@ def _make_act_agent(max_rounds=2):
     agent._context_window = 8192
     agent._show_thinking = False
     agent._pending_answer = ""
+    agent._temperature = 0.7
+    agent._max_tokens = 1024
+    agent._stream_options_ok = True
     return agent
 
 
@@ -1840,3 +1843,114 @@ def test_max_parallel_tools_config_parsing():
     src = inspect.getsource(_A.__init__)
     assert "max_parallel_tools" in src
     assert "min(max(0, parallel), 8)" in src
+
+# ------------------------------------------------ token usage tracking (Task 5)
+
+
+class _UsageChunk:
+    """Stream chunk carrying the final usage block (include_usage=True)."""
+
+    def __init__(self, prompt_tokens, completion_tokens, with_delta=False):
+        self.usage = SimpleNamespace(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=prompt_tokens + completion_tokens,
+        )
+        self.choices = [SimpleNamespace(delta=_FakeDelta("x"))] \
+            if with_delta else []
+
+
+def test_stream_round_captures_usage(monkeypatch):
+    """A usage-bearing final chunk is stored on _last_round_usage."""
+    agent = _make_act_agent()
+    agent._show_thinking = False
+    agent._pending_answer = ""
+
+    class _Stream:
+        def __iter__(self):
+            yield _FakeChunk("hello")
+            yield _UsageChunk(120, 45)
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(agent, "_stream_completion",
+                        lambda tools: _Stream())
+    text, calls = agent._stream_round([])
+    assert text == "hello"
+    assert agent._last_round_usage == (120, 45)
+
+
+def test_stream_round_without_usage_chunk(monkeypatch):
+    """No usage chunk (server without include_usage) leaves None."""
+    agent = _make_act_agent()
+    agent._show_thinking = False
+    agent._pending_answer = ""
+
+    class _Stream:
+        def __iter__(self):
+            yield _FakeChunk("hi")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(agent, "_stream_completion",
+                        lambda tools: _Stream())
+    agent._stream_round([])
+    assert agent._last_round_usage is None
+
+
+def test_act_accumulates_turn_usage(monkeypatch):
+    """Multi-round turns sum prompt/completion tokens."""
+    agent = _make_act_agent(max_rounds=3)
+    round_counter = {"n": 0}
+
+    def fake_round(tools):
+        round_counter["n"] += 1
+        agent._last_round_usage = (100, 20)
+        if round_counter["n"] == 1:
+            return "", [{"id": "c1", "name": "system_info",
+                         "arguments": "{}"}]
+        agent._last_round_usage = (150, 60)
+        return "done", []
+
+    monkeypatch.setattr(agent, "_stream_round", fake_round)
+    monkeypatch.setattr(agent, "_prune_history", lambda: 0)
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+    agent.act("question")
+    assert agent._turn_usage == [250, 80]
+
+
+def test_round_end_stats_include_tokens(monkeypatch, capsys):
+    """The round-end stats rule shows in/out token counts."""
+    agent = _make_act_agent()
+    agent._turn_usage = [120, 45]
+    agent._cancel_requested = False
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+    agent._handle_round_end(0)
+    # _FakeStreamPrinter buffers nothing; crule printed to stdout.
+    out = capsys.readouterr().out
+    assert "in 120 / out 45 tok" in out
+
+
+def test_stream_completion_falls_back_without_stream_options(monkeypatch):
+    """A server rejecting stream_options gets one retry without it."""
+    agent = _make_act_agent()
+    agent._client = SimpleNamespace()
+    attempts = []
+
+    def fake_create(**kwargs):
+        attempts.append(kwargs)
+        if kwargs.get("stream_options"):
+            raise RuntimeError("stream_options is not supported")
+        return "stream"
+
+    agent._client.chat = SimpleNamespace(
+        completions=SimpleNamespace(create=fake_create))
+    agent._stream_options_ok = True
+    result = agent._stream_completion(None)
+    assert result == "stream"
+    assert len(attempts) == 2
+    assert "stream_options" in attempts[0]
+    assert "stream_options" not in attempts[1]
+    assert agent._stream_options_ok is False  # remembered for later rounds
