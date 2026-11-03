@@ -80,6 +80,14 @@ class _BareAgent(live_ai_mod.Agent):
         self._active_stream = None
         self._fragments_buffer = []
         self._stream = None
+        # Attributes added by the smolagents-inspired improvements
+        # (Tasks 1-10): quiet flag, per-round step records, parallelism
+        # cap, per-turn token usage and the final-text capture slot.
+        self.quiet = False
+        self._steps = []
+        self._max_parallel_tools = 0
+        self._turn_usage = [0, 0]
+        self._turn_tool_calls = 0
 
 
 def _agent_with_tool_result(result: str, limit: int) -> _BareAgent:

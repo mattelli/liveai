@@ -254,6 +254,9 @@ def test_scheduled_tool_calls_reported_to_monitor(agent_env, tmp_path_factory):
 
     class _ToolAgent:
         _tool_impls = {"echo": lambda **kw: "echo-ok"}
+        tool_definitions = []  # no schemas -> argument validation skips
+        _disabled_tools = set()
+        _cancel_requested = False
 
         def __init__(self):
             self.messages = []

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 import copy
 import contextvars
 import inspect
@@ -49,6 +50,26 @@ _PROMPTS = {
 # template and break user/assistant role alternation on the next request.
 CANCELLED_PLACEHOLDER = _PROMPTS["cancelled_placeholder"]
 
+
+@dataclass
+class ActResult:
+    """Outcome of one ``Agent.act()`` turn (smolagents RunResult pattern).
+
+    ``text`` is the final assistant message (possibly the cancellation
+    placeholder), ``rounds`` the number of completion rounds consumed,
+    ``tool_calls`` the total tool invocations, ``duration_s`` the wall time
+    of the turn, ``prompt_tokens``/``completion_tokens`` the server-reported
+    per-turn totals (0/0 when the server does not report usage) and
+    ``cancelled`` whether the user stopped the turn.
+    """
+
+    text: str = ""
+    rounds: int = 0
+    tool_calls: int = 0
+    duration_s: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    cancelled: bool = False
 
 class AgentToolError(Exception):
     """Base class for tool-execution failures (smolagents pattern)."""
@@ -2280,7 +2301,9 @@ class Agent(Brain):
         if not isinstance(args, dict):
             raise AgentToolArgumentError(
                 "Error: invalid arguments for %r: expected a JSON object" % call["name"])
-        validation_error = self._validate_tool_args(call["name"], args)
+        validator = getattr(self, "_validate_tool_args", None)
+        validation_error = (
+            validator(call["name"], args) if validator else None)
         if validation_error is not None:
             raise AgentToolArgumentError(validation_error)
         try:
@@ -2444,6 +2467,7 @@ class Agent(Brain):
         self._reset_thinking()
         self._turn_started = time.monotonic()
         self._turn_usage = [0, 0]  # [prompt_tokens, completion_tokens]
+        self._turn_tool_calls = 0
         self._stream.start_spinner("thinking")
         try:
             for round_index in range(self.MAX_ACT_ROUNDS):
@@ -2469,6 +2493,7 @@ class Agent(Brain):
                         ],
                     }
                     self._messages.append(assistant_call)
+                    self._turn_tool_calls += len(tool_calls)
                     self._run_tool_calls(tool_calls,
                                           round_index=round_index)
                     self._handle_round_end(round_index)
@@ -2477,6 +2502,7 @@ class Agent(Brain):
                     text = CANCELLED_PLACEHOLDER
                 self._record_step(round_index, [], [], [],
                                   cancelled=self._cancel_requested)
+                self._turn_final_text = text
                 self._messages.append({"role": "assistant", "content": text})
                 self._handle_round_end(round_index)
                 break
@@ -2489,10 +2515,22 @@ class Agent(Brain):
                 final_text = self._force_final_answer()
                 if not final_text and self._cancel_requested:
                     final_text = CANCELLED_PLACEHOLDER
+                self._turn_final_text = final_text
                 self._messages.append({"role": "assistant",
                                        "content": final_text})
         finally:
             self._stream.stop_spinner()
             self._active_stream = None
+            result = ActResult(
+                text=getattr(self, "_turn_final_text", ""),
+                rounds=round_index + 1,
+                tool_calls=getattr(self, "_turn_tool_calls", 0),
+                duration_s=time.monotonic() - self._turn_started,
+                prompt_tokens=self._turn_usage[0],
+                completion_tokens=self._turn_usage[1],
+                cancelled=self._cancel_requested,
+            )
+            self._turn_final_text = ""
+            return result
 
 

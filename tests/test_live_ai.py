@@ -2173,3 +2173,81 @@ def test_prompts_no_config_is_noop():
 def test_pruned_marker_template_formats():
     text = live_ai_mod._PROMPTS["pruned_marker"].format(dropped=7)
     assert "7" in text and "pruned" in text
+
+# ------------------------------------------------ ActResult return (Task 10)
+
+
+def test_act_returns_act_result(monkeypatch):
+    """act() returns a populated ActResult on a normal turn."""
+    agent = _make_act_agent(max_rounds=3)
+    rounds = iter([("", [{"id": "c1", "name": "system_info",
+                          "arguments": "{}"}]),
+                   ("done", [])])
+
+    def fake_round(tools):
+        return next(rounds)
+
+    monkeypatch.setattr(agent, "_stream_round", fake_round)
+    monkeypatch.setattr(agent, "_prune_history", lambda: 0)
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+    result = agent.act("question")
+    assert isinstance(result, live_ai_mod.ActResult)
+    assert result.rounds == 2  # one tool round + one answer round
+    assert result.tool_calls == 1
+    assert result.cancelled is False
+    assert result.duration_s >= 0.0
+
+
+def test_act_result_counts_exhausted_rounds(monkeypatch):
+    """When the budget is exhausted, rounds equals the budget."""
+    agent = _make_act_agent(max_rounds=2)
+    monkeypatch.setattr(
+        agent, "_stream_round",
+        lambda tools: ("", [{"id": "c1", "name": "system_info",
+                             "arguments": "{}"}]))
+    monkeypatch.setattr(agent, "_prune_history", lambda: 0)
+    monkeypatch.setattr(agent, "_force_final_answer", lambda: "conclusion")
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+    result = agent.act("question")
+    assert result.rounds == 2  # MAX_ACT_ROUNDS consumed
+    assert result.tool_calls == 2
+    assert result.text == "conclusion"
+
+
+def test_act_result_carries_final_text(monkeypatch):
+    agent = _make_act_agent(max_rounds=3)
+    rounds = iter([("", [{"id": "c1", "name": "system_info",
+                          "arguments": "{}"}]),
+                   ("the final answer", [])])
+
+    def fake_round(tools):
+        return next(rounds)
+
+    monkeypatch.setattr(agent, "_stream_round", fake_round)
+    monkeypatch.setattr(agent, "_prune_history", lambda: 0)
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+    result = agent.act("question")
+    assert result.text == "the final answer"
+
+
+def test_act_result_cancelled_flag(monkeypatch):
+    agent = _make_act_agent(max_rounds=3)
+
+    def fake_round(tools):
+        agent._cancel_requested = True
+        return "", []
+
+    monkeypatch.setattr(agent, "_stream_round", fake_round)
+    monkeypatch.setattr(agent, "_prune_history", lambda: 0)
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+    result = agent.act("question")
+    assert result.cancelled is True
+    assert result.text == live_ai_mod.CANCELLED_PLACEHOLDER
+
+
+def test_act_result_defaults():
+    result = live_ai_mod.ActResult()
+    assert result.text == ""
+    assert result.rounds == 0
+    assert result.tool_calls == 0
+    assert result.cancelled is False
