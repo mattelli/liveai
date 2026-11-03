@@ -2043,6 +2043,83 @@ class Agent(Brain):
             self._active_stream = None
         return "".join(parts), [calls[i] for i in sorted(calls)]
 
+    @staticmethod
+    def _json_type_ok(value: Any, schema: dict) -> bool:
+        """Best-effort check of a Python value against one JSON schema entry.
+
+        Used by ``_validate_tool_args`` to catch obviously wrong argument
+        types before the tool runs. ``None`` is always accepted (nullable
+        parameters exist across the tool set and the schema fallbacks do not
+        model them); unknown/absent types pass.
+        """
+        if value is None:
+            return True
+        json_type = schema.get("type")
+        checks = {
+            "string": lambda v: isinstance(v, str),
+            "number": lambda v: isinstance(v, (int, float))
+                                and not isinstance(v, bool),
+            "integer": lambda v: isinstance(v, int)
+                                  and not isinstance(v, bool),
+            "boolean": lambda v: isinstance(v, bool),
+            "array": lambda v: isinstance(v, list),
+            "object": lambda v: isinstance(v, dict),
+            "null": lambda v: v is None,
+        }
+        check = checks.get(json_type)
+        return True if check is None else check(value)
+
+    def _validate_tool_args(self, name: str, args: dict) -> str | None:
+        """Check decoded tool arguments against the tool's JSON schema.
+
+        smolagents' ``validate_tool_arguments`` pattern: required keys,
+        unknown keys, primitive types and ``enum`` values are checked before
+        the tool runs, and a *corrective* message is returned so the model
+        can fix the call in the next round instead of guessing. Best-effort:
+        tools without an object schema (e.g. some MCP tools) are not
+        validated. Returns ``None`` when the arguments are acceptable.
+        """
+        definition = next(
+            (d for d in self.tool_definitions
+             if d.get("function", {}).get("name") == name), None)
+        if definition is None:
+            return None
+        params = definition.get("function", {}).get("parameters") or {}
+        properties = params.get("properties")
+        if not isinstance(properties, dict):
+            return None
+        required = params.get("required") or []
+        problems: list[str] = []
+        missing = [key for key in required if key not in args]
+        if missing:
+            problems.append(
+                f"missing required parameter(s): {', '.join(missing)}")
+        unknown = [key for key in args if key not in properties]
+        if unknown:
+            problems.append(
+                f"unknown parameter(s): {', '.join(unknown)}"
+                f" (expected: {', '.join(properties) or 'none'})")
+        type_errors: list[str] = []
+        for key, value in args.items():
+            schema = properties.get(key)
+            if not isinstance(schema, dict):
+                continue
+            enum = schema.get("enum")
+            if isinstance(enum, list) and value is not None and value not in enum:
+                type_errors.append(
+                    f"{key} must be one of {enum!r} (got {value!r})")
+                continue
+            if not self._json_type_ok(value, schema):
+                type_errors.append(
+                    f"{key} must be {schema.get('type')}"
+                    f" (got {type(value).__name__})")
+        if type_errors:
+            problems.append("; ".join(type_errors))
+        if not problems:
+            return None
+        return (f"Error: invalid arguments for '{name}': "
+                + "; ".join(problems)
+                + f". Valid parameters: {', '.join(sorted(properties)) or 'none'}.")
     def _execute_tool(self, call: dict) -> str:
         tool = self._tool_impls.get(call["name"])
         if tool is None:
@@ -2058,6 +2135,11 @@ class Agent(Brain):
             args = json.loads(call["arguments"] or "{}")
         except json.JSONDecodeError as exc:
             return f"Error: malformed arguments for '{call['name']}': {exc}"
+        if not isinstance(args, dict):
+            return ("Error: invalid arguments for %r: expected a JSON object" % call["name"])
+        validation_error = self._validate_tool_args(call["name"], args)
+        if validation_error is not None:
+            return validation_error
         try:
             result = tool(**args)
         except Exception as exc:

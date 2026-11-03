@@ -1,4 +1,5 @@
 import io
+import json
 import pathlib
 from logging import getLogger
 from types import SimpleNamespace
@@ -1618,3 +1619,103 @@ def test_force_final_answer_swallows_errors(monkeypatch):
 
     monkeypatch.setattr(agent, "_stream_completion", broken_stream)
     assert agent._force_final_answer() == ""
+
+# ------------------------------------------------ tool argument validation (Task 3)
+
+
+def _agent_with_tool(tool, schema_params, required):
+    """Bare agent carrying one tool definition + impl for validation tests."""
+    agent = _BareAgent()
+    agent.tool_definitions = [{
+        "type": "function",
+        "function": {
+            "name": "echo",
+            "description": "echo tool",
+            "parameters": {
+                "type": "object",
+                "properties": schema_params,
+                "required": required,
+            },
+        },
+    }]
+    agent._tool_impls = {"echo": tool}
+    agent._disabled_tools = set()
+    agent._cancel_requested = False
+    return agent
+
+
+def test_validate_tool_args_missing_required():
+    agent = _agent_with_tool(lambda **kw: "ok",
+                             {"query": {"type": "string"}}, ["query"])
+    error = agent._validate_tool_args("echo", {})
+    assert error is not None
+    assert "missing required parameter(s): query" in error
+
+
+def test_validate_tool_args_unknown_key():
+    agent = _agent_with_tool(lambda **kw: "ok",
+                             {"query": {"type": "string"}}, ["query"])
+    error = agent._validate_tool_args("echo", {"query": "x", "qury": "y"})
+    assert error is not None
+    assert "unknown parameter(s): qury" in error
+
+
+def test_validate_tool_args_wrong_type():
+    agent = _agent_with_tool(lambda **kw: "ok",
+                             {"count": {"type": "integer"}}, ["count"])
+    error = agent._validate_tool_args("echo", {"count": "many"})
+    assert error is not None
+    assert "count must be integer (got str)" in error
+
+
+def test_validate_tool_args_enum_violation():
+    agent = _agent_with_tool(
+        lambda **kw: "ok",
+        {"level": {"type": "string", "enum": ["low", "high"]}}, ["level"])
+    error = agent._validate_tool_args("echo", {"level": "medium"})
+    assert error is not None
+    assert "must be one of" in error
+
+
+def test_validate_tool_args_accepts_valid():
+    agent = _agent_with_tool(lambda **kw: "ok",
+                             {"query": {"type": "string"}}, ["query"])
+    assert agent._validate_tool_args("echo", {"query": "hello"}) is None
+
+
+def test_validate_tool_args_accepts_null_values():
+    """Nullable parameters (None) never fail the type check."""
+    agent = _agent_with_tool(lambda **kw: "ok",
+                             {"count": {"type": "integer"}}, [])
+    assert agent._validate_tool_args("echo", {"count": None}) is None
+
+
+def test_validate_tool_args_skips_non_object_schemas():
+    """Tools without object properties (some MCP tools) are not validated."""
+    agent = _BareAgent()
+    agent.tool_definitions = [{
+        "type": "function",
+        "function": {"name": "mcp_tool", "parameters": {"type": "string"}},
+    }]
+    assert agent._validate_tool_args("mcp_tool", {"anything": 1}) is None
+
+
+def test_validate_tool_args_unknown_tool_passes():
+    agent = _agent_with_tool(lambda **kw: "ok",
+                             {"query": {"type": "string"}}, ["query"])
+    # No schema found -> None (the unknown-tool error path handles it later).
+    assert agent._validate_tool_args("nope", {}) is None
+
+
+def test_execute_tool_returns_validation_error_without_calling_tool():
+    calls = []
+
+    def spy(**kwargs):
+        calls.append(kwargs)
+        return "ran"
+
+    agent = _agent_with_tool(spy, {"query": {"type": "string"}}, ["query"])
+    result = agent._execute_tool(
+        {"name": "echo", "arguments": json.dumps({"wrong": True})})
+    assert "invalid arguments" in result
+    assert calls == []  # the tool never ran
