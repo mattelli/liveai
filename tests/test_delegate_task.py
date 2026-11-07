@@ -234,6 +234,117 @@ def test_summarization_disabled_by_default(wired):
     assert got == [("researcher (agent-1)", "x" * 999)]
 
 
+# ------------------------------------------------------------ monitoring
+
+def test_delegated_run_records_start_and_answer(wired):
+    """A delegation emits start/answer events under the child's name."""
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    live_ai_mod.bind_monitor(monitor)
+    try:
+        _register("researcher")
+        sub_agents_mod._AGENT_FACTORY = lambda cfg, spec: _FakeChild(
+            text="the answer")
+        delegation_mod.delegate_task("researcher", "task one")
+        got = _drain()
+        assert got == [("researcher (agent-1)", "the answer")]
+        events = monitor.snapshot()
+        assert [(e["agent"], e["event"]) for e in events] == [
+            ("researcher", "start"), ("researcher", "answer")]
+        assert events[0]["prompt"] == "task one"
+        assert events[0]["task_id"] == "agent-1"
+        assert events[1]["answer"] == "the answer"
+    finally:
+        live_ai_mod.bind_monitor(None)
+
+
+def test_delegated_failure_records_answer_with_error(wired):
+    """A failing child still records an answer event (with the error text)."""
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    live_ai_mod.bind_monitor(monitor)
+    try:
+        _register("researcher")
+        sub_agents_mod._AGENT_FACTORY = lambda cfg, spec: _FakeChild(fail=True)
+        delegation_mod.delegate_task("researcher", "task one")
+        got = _drain()
+        assert "Error: sub-agent 'researcher' failed" in got[0][1]
+        events = monitor.snapshot()
+        assert [e["event"] for e in events] == ["start", "answer"]
+        assert "failed" in events[1]["answer"]
+    finally:
+        live_ai_mod.bind_monitor(None)
+
+
+def test_delegated_tool_calls_reported_to_monitor(wired):
+    """Tool calls during a delegation flow into the monitor (thread-local)."""
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    class _ToolChild:
+        _tool_impls = {"echo": lambda **kw: "echo-ok"}
+        tool_definitions = []
+        _disabled_tools = set()
+        _cancel_requested = False
+
+        def __init__(self):
+            self.messages = []
+
+        def act(self, prompt):
+            live_ai.Agent._execute_tool(
+                self, {"name": "echo", "arguments": "{}"})
+            self.messages.append({"role": "assistant", "content": "ok"})
+            return SimpleNamespace(text="ok")
+
+    monitor = AgentMonitor(maxlen=10)
+    live_ai_mod.bind_monitor(monitor)
+    try:
+        _register("researcher")
+        sub_agents_mod._AGENT_FACTORY = lambda cfg, spec: _ToolChild()
+        delegation_mod.delegate_task("researcher", "task one")
+        got = _drain()
+        assert got == [("researcher (agent-1)", "ok")]
+        events = monitor.snapshot()
+        kinds = [e["event"] for e in events]
+        assert kinds == ["start", "tool_call", "tool_result", "answer"]
+        assert events[1]["tool"] == "echo"
+        assert events[2]["result"] == "echo-ok"
+    finally:
+        live_ai_mod.bind_monitor(None)
+
+
+def test_delegation_not_monitored_when_monitor_off(wired):
+    """No monitor bound: delegation still completes, no events recorded."""
+    _register("researcher")
+    sub_agents_mod._AGENT_FACTORY = lambda cfg, spec: _FakeChild(text="ok")
+    delegation_mod.delegate_task("researcher", "task one")
+    got = _drain()
+    assert got == [("researcher (agent-1)", "ok")]
+
+
+def test_delegated_events_visible_in_agent_activity(wired):
+    """agent_activity() reports delegation runs alongside scheduled runs."""
+    from src.live_ai import AgentMonitor
+
+    monitor = AgentMonitor(maxlen=10)
+    monitor.record("scheduler", "start", prompt="check the news")
+    live_ai_mod.bind_monitor(monitor)
+    try:
+        _register("researcher")
+        sub_agents_mod._AGENT_FACTORY = lambda cfg, spec: _FakeChild(
+            text="research done")
+        delegation_mod.delegate_task("researcher", "research X")
+        _drain()
+        report = live_ai_mod.agent_activity()
+        assert "researcher" in report and "research X" in report
+        assert "scheduler" in report and "check the news" in report
+        assert "research done" in report
+    finally:
+        live_ai_mod.bind_monitor(None)
+
+
 # ------------------------------------------------------------ flat topology
 
 def test_child_toolset_never_contains_delegate_task(wired, monkeypatch):

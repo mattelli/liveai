@@ -118,19 +118,58 @@ def delegate_task(agent_name: str, task: str) -> str:
             "will arrive automatically when the sub-agent finishes.")
 
 
+def _set_child_name(name: str) -> None:
+    """Set/clear the thread-local agent name for a delegation child.
+
+    A non-empty name makes ``Agent._execute_tool`` report the child's tool
+    calls/results to the monitor, exactly like the scheduler executor.
+    """
+    try:
+        from src.live_ai import _TOOL_CONTEXT
+        _TOOL_CONTEXT.agent_name = name
+    except Exception:  # pragma: no cover - monitoring must never break tasks
+        pass
+
+
+def _monitor_or_none():
+    """The process-wide activity monitor, or None when monitoring is off.
+
+    Lazy import: ``src.live_ai`` imports this module's consumers, so a
+    module-level import here would be circular. Any failure keeps the
+    delegation working.
+    """
+    try:
+        from src.live_ai import get_monitor
+        return get_monitor()
+    except Exception:  # pragma: no cover - monitoring must never break tasks
+        return None
+
+
 def _run_child(agent, agent_name: str, task_id: str, task: str) -> None:
     """One child ``act()`` turn on a background thread (never raises).
 
     The final text is queued for main-session delivery; failures queue an
     error text instead of raising into the thread (a raised exception in a
     daemon thread would be silently swallowed anyway).
+
+    The run is monitored when ``[agent] monitor`` is enabled: a ``start``
+    event before ``act()``, an ``answer`` event with the final message
+    after, and per-tool ``tool_call``/``tool_result`` events while it works
+    (via the thread-local agent name, mirroring the scheduler executor).
     """
+    monitor = _monitor_or_none()
+    label = f"{agent_name} ({task_id})"
+    if monitor is not None:
+        monitor.record(agent_name, "start", task_id=task_id, prompt=task[:200])
+    _set_child_name(label)
     runner = _CHILD_RUNNER or _default_child_runner
     try:
         result = runner(agent, task)
     except Exception as exc:
         log.error("Delegation %s ('%s') failed: %s", task_id, agent_name, exc)
         result = f"Error: sub-agent '{agent_name}' failed: {exc}"
+    finally:
+        _set_child_name("")
     result = (result or "").strip() or \
         f"Sub-agent '{agent_name}' returned an empty answer."
     try:
@@ -140,8 +179,11 @@ def _run_child(agent, agent_name: str, task_id: str, task: str) -> None:
             result = summarize_text(agent, result) or result
     except Exception as exc:  # summarization must never lose the result
         log.warning("Delegation %s summarization failed: %s", task_id, exc)
+    if monitor is not None:
+        monitor.record(agent_name, "answer", task_id=task_id,
+                       answer=result[:200])
     from src.live_ai import queue_agent_result
-    queue_agent_result("delegation", f"{agent_name} ({task_id})", result)
+    queue_agent_result("delegation", label, result)
     with _RUNNING_LOCK:
         _RUNNING.discard(task_id)
     log.info("Delegation %s ('%s') completed", task_id, agent_name)
