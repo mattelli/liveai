@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import logging
 from pathlib import Path
 
@@ -28,6 +29,8 @@ def main(argv=None) -> int:
     configure_tools(config)
     from src.common import configure_ui  # inject [ui] display settings
     configure_ui(config)
+    from src.live_ai import configure_notify  # inject [notify] hint settings
+    configure_notify(config)
 
     logging.basicConfig(
         level=config.logging.level if hasattr(config, "logging") and hasattr(config.logging, "level") else logging.WARNING,
@@ -72,16 +75,44 @@ def main(argv=None) -> int:
                 silence_timeout_s=config.speech_det.silence_timeout_s
             )
 
-        return ConversationSession(
+        return _run_session(ConversationSession(
             agent,
             read_prompt,
             use_tools=not args.no_tools,
             quit_on_prompt_interrupt=not args.chat,  # voice: Ctrl+C quits
-        ).run()
+        ), chat=args.chat,
+            prompt_toolkit=getattr(getattr(config, "input", None),
+                                   "prompt_toolkit", True))
     finally:
         if reader is not None:
             reader.close()
         _stop_scheduler()  # no-op when the scheduler never started
+
+
+def _run_session(session, chat: bool = False,
+                 prompt_toolkit: bool = False) -> int:
+    """Run the session, making background-thread prints prompt-safe.
+
+    Chat mode uses prompt_toolkit, which owns the input line: a raw print
+    from a background thread (the [notify] completion hints) would garble
+    the prompt. ``patch_stdout`` reroutes such prints above the prompt line
+    and redraws the prompt below. Voice mode (plain input()) and the
+    builtin-input fallback need nothing: raw printing is already safe there.
+    When no interactive console is available (piped stdio, ``pythonw.exe``),
+    entering ``patch_stdout`` fails and the session runs with plain prints.
+    """
+    if not (chat and prompt_toolkit):
+        return session.run()
+    try:
+        from prompt_toolkit.patch_stdout import patch_stdout
+    except ImportError:  # pragma: no cover - guarded by the reader flag
+        return session.run()
+    with contextlib.ExitStack() as stack:
+        try:
+            stack.enter_context(patch_stdout())
+        except Exception:  # no console behind sys.stdout: raw prints only
+            pass
+        return session.run()
 
 
 def _setup_scheduler(config) -> None:
