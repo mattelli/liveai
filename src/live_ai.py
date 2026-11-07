@@ -303,7 +303,6 @@ def _select_tools(tools: list[Callable], groups) -> list[Callable]:
 _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
     "model": ("model_info",),
     "memory": ("recall_memory", "store_memory", "clear_chat", "compact_chat"),
-    "speech": ("allow_speech",),
     "scheduling": ("schedule_task", "list_scheduled_tasks",
                    "cancel_scheduled_task", "agent_activity"),
     "documents": ("summarize_doc", "query_document", "list_corpora",
@@ -314,7 +313,7 @@ _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
               "read_text_file", "replace_string_in_file", "write_text_file",
               "download_file", "extract_archive", "zip_files"),
     "web": ("web_search", "web_images", "web_videos", "web_news", "web_books",
-            "extract_webpage"),
+            "wikipedia_search", "extract_webpage"),
     "finance": ("fetch_financial_data", "save_financial_chart"),
     "system": ("system_info", "current_date_time", "get_working_directory",
                "spawn_process", "exit_gracefully"),
