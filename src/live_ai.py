@@ -13,7 +13,7 @@ from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type
 from logging import getLogger
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
-from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter, set_subagent_dump
+from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command, spawn_process,
@@ -599,6 +599,7 @@ def _current_agent_name() -> str:
     return getattr(_TOOL_CONTEXT, "agent_name", "") or ""
 
 
+@dump_func_call
 def agent_activity(last: int = 20) -> str:
     """
     Report the recent sub-agent activity: the last `last` events

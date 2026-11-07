@@ -929,6 +929,7 @@ python -m pytest tests/ -q                 # quiet output, one dot per test
 python -m pytest tests/ -x                 # stop at the first failure
 python -m pytest tests/ -v --tb=short      # verbose + short tracebacks
 python -m pytest tests/ --durations=10     # show the slowest tests
+python -m pytest tests/ -q -rs             # show the skipped ones with skip reasons
 ```
 
 Run a subset:

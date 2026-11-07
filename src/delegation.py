@@ -26,8 +26,10 @@ import itertools
 import threading
 from logging import getLogger
 from types import SimpleNamespace
+from typing import Callable
 
 from src.agent_registry import agent_registry, summarize_settings
+from src.common import dump_func_call
 from src.sub_agents import SubAgentBuildError, build_sub_agent
 
 __all__ = [
@@ -71,6 +73,7 @@ def pending_delegations() -> int:
         return len(_RUNNING)
 
 
+@dump_func_call
 def delegate_task(agent_name: str, task: str) -> str:
     """Delegate a task to a configured sub-agent (fire-and-forget).
 

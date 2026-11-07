@@ -10,6 +10,8 @@ from __future__ import annotations
 import os
 from logging import getLogger
 
+from src.common import dump_func_call
+
 __all__ = ["configure", "transcribe_audio"]
 
 _config_cache = None       # [stt] section injected via configure()
@@ -52,6 +54,7 @@ def _get_transcriber():
     return _model_cache
 
 
+@dump_func_call
 def transcribe_audio(path: str, language: str | None = None) -> str:
     """
     Transcribe a local audio file (wav/mp3/flac/...) into text.

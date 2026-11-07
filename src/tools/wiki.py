@@ -8,12 +8,15 @@ import json
 
 getLogger = __import__("logging").getLogger
 
+from src.common import dump_func_call
+
 _USER_AGENT = "live-assistant/1.0 (local personal assistant)"
 
 _SEARCH_URL = "https://{lang}.wikipedia.org/w/api.php"
 _SUMMARY_URL = "https://{lang}.wikipedia.org/api/rest_v1/page/summary/{title}"
 
 
+@dump_func_call
 def wikipedia_search(
     query: str,
     language: str = "en",
