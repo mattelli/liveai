@@ -8,7 +8,7 @@ level = "WARNING"
 # api_key_env = "OPENROUTER_API_KEY"
 # model = "z-ai/glm-5.3-flash"
 
-system_prompt = "You are a helpful assistant, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
+system_prompt = "You are a helpful coding agent, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 memory_path = "memory.log"
 sessions_dir = ".sessions"         # folder for /session store|list|load chat session files (JSON)
 models_file = "models.json"        # models: first entry boots, /model switches (JSON: name -> {api_key_env, base_url, model})
@@ -25,23 +25,23 @@ auto_compaction = false            # run compact_chat (summary) instead of plain
 # context_window = 8192
 
 [agent] # agent configuration
-bootstrap_prompt = "Recall user personal content and say 'Hello' to the user. Ask user name if it is unknown."
-max_act_rounds = 100       # max tool-loop rounds per agent turn (default 100)
-tool_doc_chars = 200       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
-# tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
+bootstrap_prompt = "Read %LIVEAI_DIR%\\AGENT.md (Windows), or $LIVEAI_DIR/AGENT.md (Unix-like), and follow its instructions. If no AGENT.md is found, proceed by announcing 'No agent instructions found.'"
+max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
+tool_doc_chars = 300       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
+tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
 monitor = "log"                                  # scheduled-task monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
 monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
-monitor_buffer = 100                             # in-memory events kept for the agent_activity tool
+monitor_buffer = 200                             # in-memory events kept for the agent_activity tool
 
 [delegation] # background/delegated work: scheduler, notifications, sub-agents (all keys optional)
 
 [delegation.scheduler] # schedule agent prompts for a future time (all keys optional)
-enabled = true                       # false (or missing section) -> tools are no-ops
+enabled = false                      # false (or missing section) -> tools are no-ops
 persist_file = ".res/schedule.json"  # task persistence (survives restarts)
 on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 
 [delegation.notify] # terminal hint when a background task completes (all keys optional)
-terminal = true  # print "🔔 task completed" when a scheduled task or sub-agent finishes (missing section = off)
+terminal = false    # print "🔔 task completed" when a scheduled task or sub-agent finishes (missing section = off)
 
 [delegation.agents] # sub-agents the main agent can delegate to with delegate_task (all keys optional)
 # One [delegation.agents.<name>] table per sub-agent; no entries -> no delegate_task tool.
@@ -51,12 +51,12 @@ terminal = true  # print "🔔 task completed" when a scheduled task or sub-agen
 # cannot delegate. Each child gets its own tool instances (memory/vision).
 summarize_results = false            # true -> long child results are condensed by an LLM summary before being shown
 # summarize_max_chars = 800          # results longer than this get summarized (0 = summarize everything)
-[delegation.agents.researcher]
-tool_groups = "web, files"         # tool topics for this child (see [agent] tool_groups)
-model = "ternary-bonsai"           # models.json entry name; unset = the main model
-system_prompt = "You are a research assistant. Be concise and cite sources."
-max_act_rounds = 50                # child round budget (default: Agent class default)
-description = "web research"       # shown to the main agent in its prompt
+# [delegation.agents.researcher]
+# tool_groups = "web, files"         # tool topics for this child (see [agent] tool_groups)
+# model = "ternary-bonsai"           # models.json entry name; unset = the main model
+# system_prompt = "You are a research assistant. Be concise and cite sources."
+# max_act_rounds = 50                # child round budget (default: Agent class default)
+# description = "web research"       # shown to the main agent in its prompt
 
 [ui] # chat appearance (all keys optional)
 prompt = "You (hint '/') ›"      # chat-mode input label
@@ -64,11 +64,11 @@ prompt_color = "yellow"     # label color: black/red/green/yellow/blue/magenta/c
 assistant_color = "cyan"    # streamed assistant text color (any rich style: bright_blue, #5fd7ff, ...)
 code_theme = "monokai"      # Pygments theme for fenced code blocks (ansi_dark, dracula, github-dark, ...)
 banner = true               # false -> single-line "Agent ready." startup banner
-banner_logo = true          # false -> hide the ASCII-art logo inside the banner panel
-call_lines_max = 0          # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
+banner_logo = false         # false -> hide the ASCII-art logo inside the banner panel
+call_lines_max = 6          # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
 line_width = 120            # max width of each parameter value line; max limit is 240
-show_thinking = false        # Chain-of-thought visualization, reasoning is display-only it never enters the chat history or the spoken/returned answer.
-max_thinking_tokens = 100   # max tokens of thinking to visualize (0 = unlimited)
+show_thinking = true        # Chain-of-thought visualization, reasoning is display-only it never enters the chat history or the spoken/returned answer.
+max_thinking_tokens = 0     # max tokens of thinking to visualize (0 = unlimited)
 
 [input] # Interactive chat input (prompt_toolkit). All keys optional.
 history_file = "input.log"       # resolved relative to this config file; "." or empty disables persistence
@@ -76,7 +76,7 @@ prompt_toolkit = true            # false -> builtin input() fallback
 auto_suggest = true              # inline history suggestions
 completion = true                # complete /slash commands with Tab
 explicit_paste = true            # /paste ... . fallback for terminals without bracketed paste
-multiline = false                # true -> Esc+Enter to accept (advanced)
+multiline = true                 # true -> Esc+Enter to accept (advanced)
 
 [speech_det] # speech detection and transcription (faster-whisper)
 model_path= ".res/faster-whisper-medium"
