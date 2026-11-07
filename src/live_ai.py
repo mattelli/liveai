@@ -564,10 +564,48 @@ _BACKGROUND_RESULTS: list[tuple[str, str, str]] = []
 _BACKGROUND_RESULTS_LOCK = threading.Lock()
 
 
+## [notify] terminal hint (PLAN-notify.md) ##
+
+# Notification settings injected by configure_notify() (main.py startup).
+# Missing [notify] section -> hints off (the pre-feature behavior, unchanged).
+_NOTIFY: dict = {"terminal": False}
+
+# Human label per background-result kind; unknown kinds fall back to a
+# generic label so a future producer is still announced.
+_NOTIFY_LABELS = {"scheduled": "Scheduled task", "delegation": "Sub-agent task"}
+
+
+def configure_notify(config: SimpleNamespace) -> None:
+    """Inject the ``[notify]`` section into the background-result notifier.
+
+    Called by ``main.py`` next to ``configure_tools`` / ``configure_ui``. A
+    missing section (or ``terminal = false``) keeps hints off: background
+    results are only injected into the history on the next turn, exactly as
+    before this feature.
+    """
+    section = getattr(config, "notify", None)
+    _NOTIFY["terminal"] = bool(getattr(section, "terminal", False))
+
+
+def _notify_background_result(kind: str, result_id: str, text: str) -> None:
+    """Print the one-line completion hint (no result text is ever shown).
+
+    Runs on the background thread right after the result is queued; the full
+    text is still delivered into the history on the next turn. An empty
+    result (the scheduler's "produced no answer" case) prints no hint.
+    """
+    if not _NOTIFY.get("terminal") or not (text or "").strip():
+        return
+    label = _NOTIFY_LABELS.get(kind, "Background task")
+    cprint(f"🔔 {label} {result_id} completed — the full result will be "
+           "delivered on your next message.", "magenta")
+
+
 def queue_agent_result(kind: str, result_id: str, text: str) -> None:
     """Queue one background result for main-agent delivery (thread-safe)."""
     with _BACKGROUND_RESULTS_LOCK:
         _BACKGROUND_RESULTS.append((kind, str(result_id), text))
+    _notify_background_result(kind, str(result_id), text)
 
 
 def drain_agent_results() -> list[tuple[str, str, str]]:
