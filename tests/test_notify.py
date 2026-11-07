@@ -41,8 +41,7 @@ def test_hint_scheduled_kind_no_preview(notify_on, capsys):
     """scheduled: exact wording, and the result text never appears."""
     live_ai_mod.queue_agent_result("scheduled", "t-1", "SECRET RESULT TEXT")
     out = _ANSI.sub("", capsys.readouterr().out)
-    assert out == ("🔔 Scheduled task t-1 completed — the full result will be "
-                   "delivered on your next message.\n")
+    assert out == ("🔔 Scheduled task t-1 completed.\n")
     assert "SECRET RESULT TEXT" not in out  # no preview, ever
     # delivery is unchanged: the full text is still queued for the next turn
     assert live_ai_mod.drain_agent_results() == [("scheduled", "t-1", "SECRET RESULT TEXT")]
@@ -51,16 +50,14 @@ def test_hint_scheduled_kind_no_preview(notify_on, capsys):
 def test_hint_delegation_kind(notify_on, capsys):
     live_ai_mod.queue_agent_result("delegation", "researcher (agent-1)", "research answer")
     out = _ANSI.sub("", capsys.readouterr().out)
-    assert out == ("🔔 Sub-agent task researcher (agent-1) completed — the full "
-                   "result will be delivered on your next message.\n")
+    assert out == ("🔔 Sub-agent task researcher (agent-1) completed.\n")
     assert "research answer" not in out
 
 
 def test_hint_unknown_kind_generic_label(notify_on, capsys):
     live_ai_mod.queue_agent_result("future-kind", "x-9", "some answer")
     out = _ANSI.sub("", capsys.readouterr().out)
-    assert out == ("🔔 Background task x-9 completed — the full result will be "
-                   "delivered on your next message.\n")
+    assert out == ("🔔 Background task x-9 completed.\n")
 
 
 def test_no_hint_for_empty_result(notify_on, capsys):

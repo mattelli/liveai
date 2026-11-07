@@ -597,8 +597,7 @@ def _notify_background_result(kind: str, result_id: str, text: str) -> None:
     if not _NOTIFY.get("terminal") or not (text or "").strip():
         return
     label = _NOTIFY_LABELS.get(kind, "Background task")
-    cprint(f"🔔 {label} {result_id} completed — the full result will be "
-           "delivered on your next message.", "magenta")
+    cprint(f"🔔 {label} {result_id} completed.", "magenta")
 
 
 def queue_agent_result(kind: str, result_id: str, text: str) -> None:
