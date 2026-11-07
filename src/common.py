@@ -52,6 +52,30 @@ def set_output_hook(hook: Callable[[], None] | None) -> None:
     global _output_hook
     _output_hook = hook
 
+
+# Cooperative quit flag: set by tools that want the session to exit
+# (exit_gracefully) instead of raising SystemExit mid-turn, which would
+# abandon the round and skip session cleanup. The session loop polls it
+# after each turn and shuts down cleanly.
+_quit_requested = False
+
+
+def request_quit() -> None:
+    """Ask the session loop to exit after the current turn completes."""
+    global _quit_requested
+    _quit_requested = True
+
+
+def quit_requested() -> bool:
+    """True when a tool has asked for a graceful session exit."""
+    return _quit_requested
+
+
+def reset_quit() -> None:
+    """Clear the quit flag (used by tests and session startup)."""
+    global _quit_requested
+    _quit_requested = False
+
 def cprint(text: str, color: Colors = "reset", bold: bool = False, end: str = "\n", flush: bool = False) -> None:
     """
     Print text in the terminal with ANSI colors.

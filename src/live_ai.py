@@ -2636,8 +2636,7 @@ class Agent(Brain):
                 if not final_text and self._cancel_requested:
                     final_text = CANCELLED_PLACEHOLDER
                 self._turn_final_text = final_text
-                self._messages.append({"role": "assistant",
-                                       "content": final_text})
+                self._messages.append({"role": "assistant", "content": final_text})
         finally:
             self._stream.stop_spinner()
             self._active_stream = None

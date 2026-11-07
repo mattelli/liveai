@@ -75,22 +75,21 @@ def main(argv=None) -> int:
                 silence_timeout_s=config.speech_det.silence_timeout_s
             )
 
-        return _run_session(ConversationSession(
+        conversation_session = ConversationSession(
             agent,
             read_prompt,
             use_tools=not args.no_tools,
             quit_on_prompt_interrupt=not args.chat,  # voice: Ctrl+C quits
-        ), chat=args.chat,
-            prompt_toolkit=getattr(getattr(config, "input", None),
-                                   "prompt_toolkit", True))
+        )
+        prompt_toolkit = getattr(getattr(config, "input", None), "prompt_toolkit", True)
+        return _run_session(conversation_session, args.chat, prompt_toolkit)
     finally:
         if reader is not None:
             reader.close()
         _stop_scheduler()  # no-op when the scheduler never started
 
 
-def _run_session(session, chat: bool = False,
-                 prompt_toolkit: bool = False) -> int:
+def _run_session(session, chat: bool = False, prompt_toolkit: bool = False) -> int:
     """Run the session, making background-thread prints prompt-safe.
 
     Chat mode uses prompt_toolkit, which owns the input line: a raw print

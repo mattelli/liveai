@@ -9,7 +9,7 @@ from datetime import datetime
 from logging import getLogger
 from typing import Callable
 
-from src.common import cprint, safe_filename
+from src.common import cprint, quit_requested, safe_filename
 from src.tools import allow_speech, clear_chat
 
 
@@ -138,6 +138,10 @@ class ConversationSession:
                 continue
             self._run_generation_step(lambda: self._run_turn(text))
             cprint("")  # blank separator line after each turn
+            if quit_requested():
+                # A tool (exit_gracefully) asked for a clean exit: the turn
+                # has completed, so shutdown() runs the normal cleanup path.
+                break
         return self.shutdown()
 
     def _run_generation_step(self, step: Callable[[], None]) -> None:

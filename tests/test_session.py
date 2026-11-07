@@ -40,6 +40,32 @@ def test_run_stops_on_eof():
     assert agent.acted == []
 
 
+def test_quit_flag_from_tool_exits_after_turn(capsys):
+    """exit_gracefully's quit flag ends the loop after the turn completes."""
+    from src.common import quit_requested, reset_quit
+
+    reset_quit()
+    try:
+        it = iter(["hi", "never-asked"])
+        agent = FakeAgent()
+        session = ConversationSession(agent, lambda: next(it))
+        # Simulate the tool having run during the first turn.
+        original_act = agent.act
+
+        def act_and_request(prompt):
+            original_act(prompt)
+            from src.common import request_quit
+            request_quit()
+
+        agent.act = act_and_request
+        assert session.run() == 0
+        assert agent.acted == ["hi"]  # second prompt never consumed
+        assert "Bye" in capsys.readouterr().out
+        assert quit_requested() is True  # flag is not auto-cleared; loop broke
+    finally:
+        reset_quit()
+
+
 def test_tools_off_uses_stream_path():
     it = iter(["hi", "/quit"])
     agent = FakeAgent()

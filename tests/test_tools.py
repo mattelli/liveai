@@ -300,10 +300,24 @@ def test_spawn_process_is_exported_and_listed():
     assert "spawn_process" in live_ai._TOOL_TOPICS["system"]
 
 
-def test_exit_gracefully_raises_system_exit():
-    with pytest.raises(SystemExit) as exc:
-        tools.exit_gracefully()
-    assert exc.value.code == 0
+def test_exit_gracefully_sets_quit_flag():
+    from src.common import quit_requested, request_quit, reset_quit
+    reset_quit()
+    try:
+        result = tools.exit_gracefully()
+        assert quit_requested() is True
+        assert "session will close" in result
+    finally:
+        reset_quit()  # do not leak the flag into other tests
+
+
+def test_exit_gracefully_does_not_raise():
+    from src.common import reset_quit
+    reset_quit()
+    try:
+        tools.exit_gracefully()  # no SystemExit: the turn must complete
+    finally:
+        reset_quit()
 
 
 # ------------------------------------------------------------------ T5 extract_webpage
