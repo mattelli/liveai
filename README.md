@@ -884,6 +884,28 @@ on_missed = "skip"                   # missed one-shots after a restart:
                                      # "run" executes them, "skip" drops them
 ```
 
+## Completion notifications (`[notify]`)
+
+Scheduled tasks and delegated sub-agents finish in the background: their
+result is injected into the chat history before the next turn. With
+`[notify]` enabled the user also gets an immediate one-line terminal hint the
+moment a task completes — no result text is shown, only the task kind and id
+(so long results are not echoed twice and stay out of the terminal):
+
+```
+🔔 Scheduled task t-1 completed — the full result will be delivered on your next message.
+🔔 Sub-agent task researcher (agent-1) completed — the full result will be delivered on your next message.
+```
+
+```toml
+[notify]
+terminal = true  # missing section (or false) -> no hint, results on next turn only
+```
+
+The hint prints from the background thread; in chat mode prompt_toolkit's
+`patch_stdout` renders it above the prompt line, so the input is never
+garbled. Voice mode prints it between prompts.
+
 ## Setup (Python 3.12.10)
 
 ### Environment Variable `LIVEAI_DIR`

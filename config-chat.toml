@@ -38,6 +38,9 @@ enabled = true                       # false (or missing section) -> tools are n
 persist_file = ".res/schedule.json"  # task persistence (survives restarts)
 on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 
+[notify] # terminal hint when a background task completes (all keys optional)
+terminal = true  # print "🔔 task completed" when a scheduled task or sub-agent finishes (missing section = off)
+
 [agents] # sub-agents the main agent can delegate to with delegate_task (all keys optional)
 # One [agents.<name>] table per sub-agent; no entries -> no delegate_task tool.
 # Children run asynchronously (fire-and-forget): delegate_task returns an
@@ -46,12 +49,12 @@ on_missed = "skip"                   # one-shot tasks missed while the app was o
 # cannot delegate. Each child gets its own tool instances (memory/vision).
 summarize_results = false            # true -> long child results are condensed by an LLM summary before being shown
 # summarize_max_chars = 800          # results longer than this get summarized (0 = summarize everything)
-# [agents.researcher]
-# tool_groups = "web, files"         # tool topics for this child (see [agent] tool_groups)
-# model = "fast"                     # models.json entry name; unset = the main model
-# system_prompt = "You are a research assistant. Be concise and cite sources."
-# max_act_rounds = 50                # child round budget (default: Agent class default)
-# description = "web research"       # shown to the main agent in its prompt
+[agents.researcher]
+tool_groups = "web, files"         # tool topics for this child (see [agent] tool_groups)
+model = "ternary-bonsai"           # models.json entry name; unset = the main model
+system_prompt = "You are a research assistant. Be concise and cite sources."
+max_act_rounds = 50                # child round budget (default: Agent class default)
+description = "web research"       # shown to the main agent in its prompt
 
 [ui] # chat appearance (all keys optional)
 prompt = "You (hint '/') ›"      # chat-mode input label
