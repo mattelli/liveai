@@ -109,7 +109,8 @@ def _run_session(session, chat: bool = False,
         return session.run()
     with contextlib.ExitStack() as stack:
         try:
-            stack.enter_context(patch_stdout())
+            # raw=True: keep ANSI escape codes (colors) in background prints;
+            stack.enter_context(patch_stdout(raw=True))
         except Exception:  # no console behind sys.stdout: raw prints only
             pass
         return session.run()
