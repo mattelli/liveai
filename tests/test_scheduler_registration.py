@@ -61,13 +61,13 @@ def test_schedule_task_definition_parameters():
 def test_config_parses_scheduler_section(tmp_path):
     config_file = tmp_path / "config.toml"
     config_file.write_text(
-        "[scheduler]\n"
+        "[delegation.scheduler]\n"
         'enabled = true\n'
         'persist_file = "data/schedule.json"\n'
         'on_missed = "run"\n',
         encoding="utf-8")
     config = load_config(config_file)
-    section = config.scheduler
+    section = config.delegation.scheduler
     assert section.enabled is True
     assert str(section.persist_file).endswith("schedule.json")  # path resolved
     assert section.on_missed == "run"
@@ -77,16 +77,16 @@ def test_config_without_scheduler_section_has_no_attribute(tmp_path):
     config_file = tmp_path / "config.toml"
     config_file.write_text("[brain]\nmodel = 'x'\n", encoding="utf-8")
     config = load_config(config_file)
-    assert not hasattr(config, "scheduler")  # configure() then disables
+    assert not hasattr(config, "delegation")  # configure() then disables
 
 
 def test_configure_with_real_config_shape(tmp_path):
-    """End-to-end config injection: [scheduler] enabled -> tools work."""
+    """End-to-end config injection: [delegation.scheduler] enabled -> tools work."""
     from types import SimpleNamespace
 
-    config = SimpleNamespace(scheduler=SimpleNamespace(
+    config = SimpleNamespace(delegation=SimpleNamespace(scheduler=SimpleNamespace(
         enabled=True, persist_file=str(tmp_path / "schedule.json"),
-        on_missed="skip"))
+        on_missed="skip")))
     scheduler_module.configure(config)
     try:
         assert scheduler_module._enabled() is True

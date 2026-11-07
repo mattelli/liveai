@@ -36,8 +36,8 @@ def wired():
 
 
 def _register(name: str, **spec_kw):
-    load_agent_registry(SimpleNamespace(agents={
-        name: {"tool_groups": "web", **spec_kw}}))
+    load_agent_registry(SimpleNamespace(delegation=SimpleNamespace(agents={
+        name: {"tool_groups": "web", **spec_kw}})))
 
 
 class _FakeChild:
@@ -72,7 +72,7 @@ def _drain(timeout_s: float = 2.0):
 # ------------------------------------------------------------------ registry
 
 def test_no_registry_raises(wired):
-    load_agent_registry(SimpleNamespace())  # no [agents]
+    load_agent_registry(SimpleNamespace())  # no [delegation.agents]
     with pytest.raises(LookupError, match="no sub-agents configured"):
         delegation_mod.delegate_task("researcher", "do things")
 
@@ -187,10 +187,10 @@ def test_build_failure_surfaces_immediately(wired):
 # ------------------------------------------------------------- summarization
 
 def _wire_summarize(summarize: bool, max_chars: int):
-    load_agent_registry(SimpleNamespace(agents={
+    load_agent_registry(SimpleNamespace(delegation=SimpleNamespace(agents={
         "summarize_results": summarize,
         "summarize_max_chars": max_chars,
-        "researcher": {"tool_groups": "web"}}))
+        "researcher": {"tool_groups": "web"}})))
 
 
 def test_long_result_summarized_when_enabled(wired):

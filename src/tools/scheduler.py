@@ -1,16 +1,17 @@
 """Task scheduler: run agent prompts at a future time (one-shot or recurring).
 
 The scheduler follows the ``src.tools`` architecture: config is injected by
-``main.py`` via :func:`configure` (``[scheduler]`` section), the tool logic
+``main.py`` via :func:`configure` (``[delegation.scheduler]`` section), the
+tool logic
 lives in :class:`SchedulerTools` (per-agent isolation via ``for_owner``, like
 ``memory.py``), and the module-level tools delegate to a module-default
 instance so the historical call API and test seams keep working.
 
-``[scheduler]`` config section (all keys optional):
+``[delegation.scheduler]`` config section (all keys optional):
 
 .. code-block:: toml
 
-    [scheduler]
+    [delegation.scheduler]
     enabled = true                # false (or missing section) -> tools are no-ops
     persist_file = "data/schedule.json"  # resolved relative to the config file
     on_missed = "skip"            # one-shot tasks missed while the app was off:
@@ -46,10 +47,10 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_DISABLED_MESSAGE = "Error: scheduler is disabled (set [scheduler] enabled = true)"
+_DISABLED_MESSAGE = "Error: scheduler is disabled (set [delegation.scheduler] enabled = true)"
 
 # Module state injected by configure() (see the module docstring for the
-# [scheduler] section). Missing section -> the scheduler stays disabled.
+# [delegation.scheduler] section). Missing section -> the scheduler stays disabled.
 _CONFIG: dict = {}
 _SCHEDULER: "Scheduler | None" = None
 
@@ -71,12 +72,13 @@ def _default_scheduler_factory() -> "Scheduler":
 def configure(config) -> None:
     """
     Inject the application config into the tool (called by ``main.py`` after
-    ``load_config``). Keeps the ``[scheduler]`` section (plus the full config
+    ``load_config``). Keeps the ``[delegation.scheduler]`` section (plus the
+    full config
     for the execution-agent factory); a missing section keeps the scheduler
     disabled (tools return the disabled-error string).
     """
     global _CONFIG
-    section = getattr(config, "scheduler", None)
+    section = getattr(getattr(config, "delegation", None), "scheduler", None)
     _CONFIG = {
         "enabled": bool(getattr(section, "enabled", False)),
         "persist_file": getattr(section, "persist_file", None),

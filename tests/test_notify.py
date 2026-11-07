@@ -1,4 +1,4 @@
-"""Tests for the [notify] terminal hint (PLAN-notify.md).
+"""Tests for the [delegation.notify] terminal hint (PLAN-notify.md).
 
 The hint is printed by the background thread right after a result is
 queued: one line, task kind + id only — the result text is never shown.
@@ -30,7 +30,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def test_no_hint_when_disabled(capsys):
-    """Missing [notify] / terminal=false: no output, queue still filled."""
+    """Missing [delegation.notify] / terminal=false: no output, queue still filled."""
     live_ai_mod.queue_agent_result("scheduled", "t-1", "secret answer")
     out = capsys.readouterr().out
     assert "completed" not in out
@@ -73,11 +73,13 @@ def test_configure_notify_missing_section_keeps_off():
 
 
 def test_configure_notify_enables_hints():
-    live_ai_mod.configure_notify(SimpleNamespace(notify=SimpleNamespace(terminal=True)))
+    live_ai_mod.configure_notify(SimpleNamespace(
+        delegation=SimpleNamespace(notify=SimpleNamespace(terminal=True))))
     assert live_ai_mod._NOTIFY["terminal"] is True
     live_ai_mod._NOTIFY["terminal"] = False  # restore for other tests
 
 
 def test_configure_notify_false_disables():
-    live_ai_mod.configure_notify(SimpleNamespace(notify=SimpleNamespace(terminal=False)))
+    live_ai_mod.configure_notify(SimpleNamespace(
+        delegation=SimpleNamespace(notify=SimpleNamespace(terminal=False))))
     assert live_ai_mod._NOTIFY["terminal"] is False

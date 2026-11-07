@@ -1,7 +1,8 @@
 """``delegate_task``: fire-and-forget task delegation to configured sub-agents.
 
 The main session agent calls :func:`delegate_task` (registered as a tool) with
-an ``[agents]`` registry name and a task prompt; the tool validates the name,
+an ``[delegation.agents]`` registry name and a task prompt; the tool validates
+the name,
 spawns a daemon thread running an isolated, quiet child agent, and returns an
 acknowledgment immediately. On completion the child's final text is queued via
 :func:`src.live_ai.queue_agent_result` under the ``"delegation"`` kind, so the
@@ -11,7 +12,7 @@ Flat topology (PLAN-multiagent goal 4): children are built without the
 delegation tool, so they cannot spawn further agents.
 
 Optional result summarization (PLAN-multiagent goal 5): with
-``[agents] summarize_results = true``, child results longer than
+``[delegation.agents] summarize_results = true``, child results longer than
 ``summarize_max_chars`` are condensed by an LLM summary pass before queuing
 (fail-open: a summary failure queues the original text).
 
@@ -85,8 +86,8 @@ def delegate_task(agent_name: str, task: str) -> str:
     specs = agent_registry()
     if config is None or not specs:
         raise LookupError(
-            "Error: no sub-agents configured (set [agents.<name>] tables in "
-            "config.toml)")
+            "Error: no sub-agents configured (set [delegation.agents.<name>] "
+            "tables in config.toml)")
     name = str(agent_name or "").strip()
     if not name:
         raise LookupError("Error: agent_name is required")

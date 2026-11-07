@@ -1,4 +1,4 @@
-"""Sub-agent factory: build isolated, quiet agents from ``[agents]`` entries.
+"""Sub-agent factory: build isolated, quiet agents from ``[delegation.agents]`` entries.
 
 A child agent is a real ``Agent`` with ``isolated_tools=True`` (fresh
 per-agent memory/vision tool instances, scheduler-executor pattern) and

@@ -28,14 +28,15 @@ def _offline_agent(monkeypatch, tmp_path, agent_overrides=None, agents=None,
     config = _remote_config()
     config.agent = SimpleNamespace(bootstrap_prompt="", **(agent_overrides or {}))
     if agents is not None:
-        # The [agents] section lives in the config the agent is built from
+        # The [delegation.agents] section lives in the config the agent is
+        # built from
         # (production flow: config.toml -> Agent(config)).
-        config.agents = SimpleNamespace(**agents)
+        config.delegation = SimpleNamespace(agents=SimpleNamespace(**agents))
     return live_ai_mod.Agent(config, **kwargs)
 
 
 def _register(**agents):
-    load_agent_registry(SimpleNamespace(agents=dict(agents)))
+    load_agent_registry(SimpleNamespace(delegation=SimpleNamespace(agents=dict(agents))))
 
 
 # ------------------------------------------------------- tool registration

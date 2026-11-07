@@ -621,21 +621,22 @@ async delegation receipts and the `[agent]` pool keys `parallel_agents`,
 the app is single-agent again. Leftover pool keys in a `config.toml` are
 inert (nothing reads them anymore). The sub-agent activity monitor is kept and
 now tracks **scheduled-task runs** (see [Sub-agent activity monitoring](#sub-agent-activity-monitoring)).
-Task delegation is back as **`[agents]`** (see the next section).
+Task delegation is back as **`[delegation.agents]`** (see the next section).
 
-## Task delegation (`[agents]`)
+## Task delegation (`[delegation.agents]`)
 
 The main agent can delegate tasks to named sub-agents with the
 **`delegate_task(agent_name, task)`** tool. Sub-agents are declared in
-`config.toml`; with no `[agents]` entries the tool is not registered and the
+`config.toml`; with no `[delegation.agents]` entries the tool is not registered
+and the
 feature costs zero tokens.
 
 ```toml
-[agents]
+[delegation.agents]
 summarize_results = false            # true -> long child results get an LLM summary before being shown
 # summarize_max_chars = 800          # summarize only results longer than this (0 = always)
 
-[agents.researcher]
+[delegation.agents.researcher]
 tool_groups = "web, files"           # tool topics for this child (see [agent] tool_groups)
 model = "fast"                       # models.json entry name; unset = the main model
 system_prompt = "You are a research assistant. Be concise."
@@ -877,18 +878,19 @@ disturbed. Tasks persist to a JSON file and survive restarts.
 The feature ships off by default; enable it in `config.toml`:
 
 ```
-[scheduler]
+[delegation.scheduler]
 enabled = true                       # false/missing -> tools are no-ops
 persist_file = "data/schedule.json"  # task persistence (survives restarts)
 on_missed = "skip"                   # missed one-shots after a restart:
                                      # "run" executes them, "skip" drops them
 ```
 
-## Completion notifications (`[notify]`)
+## Completion notifications (`[delegation.notify]`)
 
 Scheduled tasks and delegated sub-agents finish in the background: their
 result is injected into the chat history before the next turn. With
-`[notify]` enabled the user also gets an immediate one-line terminal hint the
+`[delegation.notify]` enabled the user also gets an immediate one-line
+terminal hint the
 moment a task completes — no result text is shown, only the task kind and id
 (so long results are not echoed twice and stay out of the terminal):
 
@@ -898,7 +900,7 @@ moment a task completes — no result text is shown, only the task kind and id
 ```
 
 ```toml
-[notify]
+[delegation.notify]
 terminal = true  # missing section (or false) -> no hint, results on next turn only
 ```
 

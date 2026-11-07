@@ -29,7 +29,7 @@ def main(argv=None) -> int:
     configure_tools(config)
     from src.common import configure_ui  # inject [ui] display settings
     configure_ui(config)
-    from src.live_ai import configure_notify  # inject [notify] hint settings
+    from src.live_ai import configure_notify  # inject [delegation.notify] hints
     configure_notify(config)
 
     logging.basicConfig(
@@ -44,7 +44,7 @@ def main(argv=None) -> int:
 
     agent = Agent(config=config)
     _setup_monitor(config)    # bind the activity monitor when [agent] monitor is set
-    _setup_scheduler(config)   # no-op when [scheduler] enabled is false/missing
+    _setup_scheduler(config)   # no-op when [delegation.scheduler] enabled is false/missing
     reader = None
 
     try:
@@ -94,7 +94,8 @@ def _run_session(session, chat: bool = False,
     """Run the session, making background-thread prints prompt-safe.
 
     Chat mode uses prompt_toolkit, which owns the input line: a raw print
-    from a background thread (the [notify] completion hints) would garble
+    from a background thread (the [delegation.notify] completion hints) would
+    garble
     the prompt. ``patch_stdout`` reroutes such prints above the prompt line
     and redraws the prompt below. Voice mode (plain input()) and the
     builtin-input fallback need nothing: raw printing is already safe there.
@@ -117,7 +118,7 @@ def _run_session(session, chat: bool = False,
 
 
 def _setup_scheduler(config) -> None:
-    """Start the task scheduler from the ``[scheduler]`` config section.
+    """Start the task scheduler from the ``[delegation.scheduler]`` config section.
 
     No-op when the section is missing or ``enabled`` is false, so single-agent
     setups are untouched. Failures are logged, never raised: a broken

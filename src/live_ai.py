@@ -250,7 +250,7 @@ def _default_tools(agent: "Brain") -> list[Callable]:
         fetch_financial_data, save_financial_chart,
         generate_image, unload_image_generator,
         mcp_list_tools, mcp_call_tool,
-        # Only when [agents] is configured; a no-op stub otherwise (removed
+        # Only when [delegation.agents] is configured; a no-op stub otherwise (removed
         # again in Agent.__init__, see _trim_unavailable_tools). Children get
         # no delegation tool (flat topology), so the tool set is main-agent-only.
         delegate_task,
@@ -564,10 +564,11 @@ _BACKGROUND_RESULTS: list[tuple[str, str, str]] = []
 _BACKGROUND_RESULTS_LOCK = threading.Lock()
 
 
-## [notify] terminal hint (PLAN-notify.md) ##
+## [delegation.notify] terminal hint (PLAN-notify.md) ##
 
 # Notification settings injected by configure_notify() (main.py startup).
-# Missing [notify] section -> hints off (the pre-feature behavior, unchanged).
+# Missing [delegation.notify] section -> hints off (the pre-feature behavior,
+# unchanged).
 _NOTIFY: dict = {"terminal": False}
 
 # Human label per background-result kind; unknown kinds fall back to a
@@ -576,14 +577,14 @@ _NOTIFY_LABELS = {"scheduled": "Scheduled task", "delegation": "Sub-agent task"}
 
 
 def configure_notify(config: SimpleNamespace) -> None:
-    """Inject the ``[notify]`` section into the background-result notifier.
+    """Inject the ``[delegation.notify]`` section into the background-result notifier.
 
     Called by ``main.py`` next to ``configure_tools`` / ``configure_ui``. A
     missing section (or ``terminal = false``) keeps hints off: background
     results are only injected into the history on the next turn, exactly as
     before this feature.
     """
-    section = getattr(config, "notify", None)
+    section = getattr(getattr(config, "delegation", None), "notify", None)
     _NOTIFY["terminal"] = bool(getattr(section, "terminal", False))
 
 
@@ -719,7 +720,7 @@ class OpenAICore:
         self._reset_thinking()
         # Managed-agents section ([agents] delegation, PLAN-multiagent):
         # appended to the system prompt by Agent._managed_agents_section()
-        # when the subclass provides one and [agents] entries exist.
+        # when the subclass provides one and [delegation.agents] entries exist.
         system_prompt = str(config.brain.system_prompt or "")
         if hasattr(self, "_managed_agents_section"):
             system_prompt += self._managed_agents_section()
@@ -1970,7 +1971,7 @@ class Agent(Brain):
         _load_prompt_overrides(config)
         self.isolated_tools = isolated_tools
         self.quiet = quiet
-        # [agents] registry: parsed before super().__init__ because the
+        # [delegation.agents] registry: parsed before super().__init__ because the
         # managed-agents system-prompt section and the tool trim both read it.
         # Only the main agent (isolated_tools=False) refreshes the registry
         # and the delegation config: children must not hijack either.
@@ -2043,7 +2044,7 @@ class Agent(Brain):
         # Flat topology ([agents] delegation, PLAN-multiagent): children must
         # never offer delegation. Children are main-agent-only exclusions, so
         # simply dropping the tool for isolated agents is not enough — the
-        # tool must also vanish when no [agents] are configured at all.
+        # tool must also vanish when no [delegation.agents] are configured at all.
         self._trim_unavailable_tools()
         # [agent] tool_doc_chars: cap tool descriptions in the JSON schemas
         # (0/unset/invalid = full docstring, the historical behavior).
@@ -2081,7 +2082,7 @@ class Agent(Brain):
         """Drop tools whose backing feature is disabled in this config.
 
         Currently only ``delegate_task``: it stays registered only when
-        ``[agents]`` entries exist AND the agent is not isolated (main agent
+        ``[delegation.agents]`` entries exist AND the agent is not isolated (main agent
         only). Everything else stays: built-ins are always available.
         """
         from src.agent_registry import agent_registry
@@ -2095,12 +2096,12 @@ class Agent(Brain):
         self.logger.info(
             "delegate_task not available (%s): tool removed",
             "isolated agent" if getattr(self, "isolated_tools", False)
-            else "no [agents] entries")
+            else "no [delegation.agents] entries")
 
     def _managed_agents_section(self) -> str:
         """System-prompt block describing the configured sub-agents.
 
-        Rendered from the ``[agents]`` registry for the main agent only
+        Rendered from the ``[delegation.agents]`` registry for the main agent only
         (smolagents ``initialize_system_prompt`` managed-agents pattern);
         empty when delegation is unavailable, so child/isolated agents and
         unconfigured setups see nothing.

@@ -33,23 +33,25 @@ monitor = "log"                                  # scheduled-task monitoring fla
 monitor_log_file = ".res/agents.jsonl"           # JSONL event log path (monitor = "log")
 monitor_buffer = 100                             # in-memory events kept for the agent_activity tool
 
-[scheduler] # schedule agent prompts for a future time (all keys optional)
+[delegation] # background/delegated work: scheduler, notifications, sub-agents (all keys optional)
+
+[delegation.scheduler] # schedule agent prompts for a future time (all keys optional)
 enabled = true                       # false (or missing section) -> tools are no-ops
 persist_file = ".res/schedule.json"  # task persistence (survives restarts)
 on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 
-[notify] # terminal hint when a background task completes (all keys optional)
+[delegation.notify] # terminal hint when a background task completes (all keys optional)
 terminal = true  # print "🔔 task completed" when a scheduled task or sub-agent finishes (missing section = off)
 
-[agents] # sub-agents the main agent can delegate to with delegate_task (all keys optional)
-# One [agents.<name>] table per sub-agent; no entries -> no delegate_task tool.
+[delegation.agents] # sub-agents the main agent can delegate to with delegate_task (all keys optional)
+# One [delegation.agents.<name>] table per sub-agent; no entries -> no delegate_task tool.
 # Children run asynchronously (fire-and-forget): delegate_task returns an
 # acknowledgment immediately, the result arrives when the child finishes
 # (injected into the chat history on the next turn). Flat topology: children
 # cannot delegate. Each child gets its own tool instances (memory/vision).
 summarize_results = false            # true -> long child results are condensed by an LLM summary before being shown
 # summarize_max_chars = 800          # results longer than this get summarized (0 = summarize everything)
-[agents.researcher]
+[delegation.agents.researcher]
 tool_groups = "web, files"         # tool topics for this child (see [agent] tool_groups)
 model = "ternary-bonsai"           # models.json entry name; unset = the main model
 system_prompt = "You are a research assistant. Be concise and cite sources."

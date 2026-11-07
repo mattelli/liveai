@@ -1,4 +1,4 @@
-"""Unit tests for the [agents] registry parsing (src.agent_registry)."""
+"""Unit tests for the [delegation.agents] registry parsing (src.agent_registry)."""
 
 import textwrap
 from pathlib import Path
@@ -19,14 +19,14 @@ def _config_with(toml: str, tmp_path: Path):
 
 def test_valid_registry(tmp_path):
     config = _config_with("""
-        [agents.researcher]
+        [delegation.agents.researcher]
         tool_groups = "web, files"
         model = "fast"
         system_prompt = "research things"
         max_act_rounds = 50
         description = "does research"
 
-        [agents.writer]
+        [delegation.agents.writer]
         tool_groups = "files, memory"
     """, tmp_path)
     specs = load_agent_registry(config)
@@ -45,7 +45,7 @@ def test_valid_registry(tmp_path):
 
 def test_shorthand_string_entry(tmp_path):
     config = _config_with("""
-        [agents]
+        [delegation.agents]
         researcher = "web, files"
     """, tmp_path)
     specs = load_agent_registry(config)
@@ -65,14 +65,14 @@ def test_missing_section_disables_feature(tmp_path):
 
 def test_empty_section_disables_feature(tmp_path):
     config = _config_with("""
-        [agents]
+        [delegation.agents]
     """, tmp_path)
     assert load_agent_registry(config) == {}
 
 
 def test_unknown_keys_logged_and_ignored(tmp_path, caplog):
     config = _config_with("""
-        [agents.researcher]
+        [delegation.agents.researcher]
         tool_groups = "web"
         typo_key = "oops"
     """, tmp_path)
@@ -86,10 +86,10 @@ def test_case_variations_are_distinct_entries(tmp_path):
     # are two entries. (A true duplicate can never reach the loader: Python
     # dicts collapse duplicate keys before we see them.)
     config = _config_with("""
-        [agents.Researcher]
+        [delegation.agents.Researcher]
         tool_groups = "web"
 
-        [agents.researcher]
+        [delegation.agents.researcher]
         tool_groups = "files"
     """, tmp_path)
     specs = load_agent_registry(config)
@@ -100,7 +100,7 @@ def test_case_variations_are_distinct_entries(tmp_path):
 
 def test_invalid_max_act_rounds_falls_back(tmp_path, caplog):
     config = _config_with("""
-        [agents.researcher]
+        [delegation.agents.researcher]
         tool_groups = "web"
         max_act_rounds = "lots"
     """, tmp_path)
@@ -111,7 +111,7 @@ def test_invalid_max_act_rounds_falls_back(tmp_path, caplog):
 
 def test_non_table_entry_ignored(tmp_path, caplog):
     config = _config_with("""
-        [agents]
+        [delegation.agents]
         researcher = 42
     """, tmp_path)
     assert load_agent_registry(config) == {}
@@ -120,11 +120,11 @@ def test_non_table_entry_ignored(tmp_path, caplog):
 
 def test_shared_flags_parsed(tmp_path):
     config = _config_with("""
-        [agents]
+        [delegation.agents]
         summarize_results = true
         summarize_max_chars = 500
 
-        [agents.researcher]
+        [delegation.agents.researcher]
         tool_groups = "web"
     """, tmp_path)
     load_agent_registry(config)
@@ -133,7 +133,7 @@ def test_shared_flags_parsed(tmp_path):
 
 def test_shared_flags_defaults(tmp_path):
     config = _config_with("""
-        [agents.researcher]
+        [delegation.agents.researcher]
         tool_groups = "web"
     """, tmp_path)
     load_agent_registry(config)
@@ -142,10 +142,10 @@ def test_shared_flags_defaults(tmp_path):
 
 def test_invalid_summarize_max_chars_falls_back(tmp_path):
     config = _config_with("""
-        [agents]
+        [delegation.agents]
         summarize_max_chars = "many"
 
-        [agents.researcher]
+        [delegation.agents.researcher]
         tool_groups = "web"
     """, tmp_path)
     load_agent_registry(config)
@@ -154,7 +154,7 @@ def test_invalid_summarize_max_chars_falls_back(tmp_path):
 
 def test_empty_registry_resets_module_state(tmp_path):
     config = _config_with("""
-        [agents.researcher]
+        [delegation.agents.researcher]
         tool_groups = "web"
     """, tmp_path)
     load_agent_registry(config)
