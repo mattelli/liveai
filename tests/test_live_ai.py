@@ -1387,8 +1387,8 @@ def test_tool_topics_groups_known_tools_in_curated_order():
     grouped = live_ai_mod.tool_topics(tools)
     topics = [topic for topic, _ in grouped]
     # curated order wins regardless of the input order; agent_activity is
-    # grouped under "scheduling" (it reports scheduled-task activity)
-    assert topics == ["model", "memory", "scheduling", "web"]
+    # grouped under "delegation" (it reports sub-agent/scheduled activity)
+    assert topics == ["model", "memory", "delegation", "web"]
 
 
 def test_tool_topics_preserves_input_order_within_topic():

@@ -303,8 +303,8 @@ def _select_tools(tools: list[Callable], groups) -> list[Callable]:
 _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
     "model": ("model_info",),
     "memory": ("recall_memory", "store_memory", "clear_chat", "compact_chat"),
-    "scheduling": ("schedule_task", "list_scheduled_tasks",
-                   "cancel_scheduled_task", "agent_activity"),
+    "delegation": ("delegate_task", "agent_activity", "schedule_task",
+                   "list_scheduled_tasks", "cancel_scheduled_task"),
     "documents": ("summarize_doc", "query_document", "list_corpora",
                   "store_corpus", "query_corpus"),
     "images": ("image_response", "capture_image", "image_search",
@@ -318,7 +318,6 @@ _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
     "system": ("system_info", "current_date_time", "get_working_directory",
                "spawn_process", "exit_gracefully"),
     "mcp": ("mcp_list_tools", "mcp_call_tool"),
-    "delegation": ("delegate_task",),
 }
 
 
