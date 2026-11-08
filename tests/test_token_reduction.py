@@ -206,8 +206,9 @@ def test_tool_definitions_payload_budget_with_doc_cap():
         for t in tools
     )
     # Measured baseline: 21_942 (full docs + defaults) -> 19_126 (doc300);
-    # +wikipedia_search +transcribe_audio -> ~20_454.
-    assert total < 21_000
+    # +wikipedia_search +transcribe_audio -> ~20_454; +spawn_process/schedule_task/
+    # exit_gracefully docstring growth (7bc1c4f, e554b0e, 43769eb) -> 21_170.
+    assert total < 21_500
 
 
 # ------------------------------------------------------- tool group filtering
