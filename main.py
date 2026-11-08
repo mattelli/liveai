@@ -57,7 +57,15 @@ def main(argv=None) -> int:
         else:
             try:
                 from src.audio_wrapper import AudioDeviceError, SpeechDetector  # lazy import
-
+            except ImportError as exc:  # e.g. faster-whisper not installed
+                cprint(f"❌ {exc} — install faster-whisper (see README / "
+                       "setup-liveai-cpu.ps1), or use --chat.", "red")
+                return 1
+            except OSError as exc:  # e.g. sounddevice: PortAudio library not found
+                cprint(f"❌ {exc} — install the PortAudio library "
+                       "(e.g. sudo apt-get install libportaudio2), or use --chat.", "red")
+                return 1
+            try:
                 detector = SpeechDetector(
                     model_path=config.speech_det.model_path,
                     language=config.speech_det.language,
