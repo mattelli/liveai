@@ -61,10 +61,15 @@ def allow_speech(enable: bool) -> str:
     """
     global _speech_generator
     if enable and _speech_generator is None:
-        from src.audio_generator import SpeechGenerator  # heavy: piper + sounddevice
+        try:
+            from src.audio_generator import SpeechGenerator  # heavy: piper + sounddevice
 
-        factory = _SPEECH_FACTORY or SpeechGenerator
-        _speech_generator = factory(**_speech_kwargs(_config_cache))
+            factory = _SPEECH_FACTORY or SpeechGenerator
+            _speech_generator = factory(**_speech_kwargs(_config_cache))
+        except (ImportError, FileNotFoundError) as exc:
+            # Missing piper/sounddevice package or voice model file: degrade
+            # gracefully instead of crashing the agent turn.
+            return f"Error: speech generation unavailable: {exc}"
         return "Speech Generator initialized"
     elif not enable and _speech_generator is not None:
         _speech_generator.close()
