@@ -21,11 +21,8 @@ def exit_gracefully() -> str:
     Exits the program gracefully.
     Useful when user asks to quit or exit the application.
 
-    Sets a cooperative quit flag instead of raising ``SystemExit``: the
-    model gets a tool result, finishes its turn with a farewell message,
-    and the session loop shuts down cleanly (stream flush, speech reset)
-    after the turn. Raising mid-turn would abandon the round and skip
-    ``Session.shutdown()``.
+    Sets a cooperative quit flag (no ``SystemExit``): the turn completes
+    normally and the session shuts down cleanly afterwards.
     """
     from src.common import request_quit
     request_quit()
