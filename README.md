@@ -613,15 +613,7 @@ Notes:
 - The same validation applies at startup for the first entry: a missing file,
   invalid JSON or a non-resolvable API key aborts the launch with a clear
   message.
-## Multi-agent pool (removed)
 
-The multi-agent pool (delegation tools `ask_agent`/`run_parallel_agents`,
-async delegation receipts and the `[agent]` pool keys `parallel_agents`,
-`agent_models`, `agent_system_prompts`, `async_delegation`) has been removed:
-the app is single-agent again. Leftover pool keys in a `config.toml` are
-inert (nothing reads them anymore). The sub-agent activity monitor is kept and
-now tracks **scheduled-task runs** (see [Sub-agent activity monitoring](#sub-agent-activity-monitoring)).
-Task delegation is back as **`[delegation.agents]`** (see the next section).
 
 ## Task delegation (`[delegation.agents]`)
 
@@ -895,8 +887,8 @@ moment a task completes — no result text is shown, only the task kind and id
 (so long results are not echoed twice and stay out of the terminal):
 
 ```
-🔔 Scheduled task t-1 completed — the full result will be delivered on your next message.
-🔔 Sub-agent task researcher (agent-1) completed — the full result will be delivered on your next message.
+🔔 Scheduled task t-1 completed.
+🔔 Sub-agent task researcher (agent-1) completed.
 ```
 
 ```toml
@@ -915,24 +907,22 @@ garbled. Voice mode prints it between prompts.
 The `LIVEAI_DIR` environment variable must be set to the project root directory.
 All launcher scripts (`bin/liveai`, `bin/liveai-code`, `bin/local-servers`) use it
 to locate `main.py`, config files, and the virtual environment.
+The `LIVEAI_DIR/bin` folder should be added in system path environment variable to launch available  `liveai ` commands from any directory.
 
-The setup script needs Python environment `.liveai-cpu/` to be created at first.
 
-OS Windows 11 (powershell)
+### Launch setup scripts
 
-```
-# Ai agent based on an OpenAI-compatible LLM API
+The setup script needs Python 3.12 environment `.liveai-cpu/` to be created at first.
+
+```bash
+# OS Windows 11 (powershell)
+.liveai-cpu\Scripts\activate.bat     # Active the Python environment
 .\setup-liveai-cpu.ps1
 
-```
-
-OS Linux / macOS (bash)
-
-```
-# Install Python 3.12, then run the setup script
+# OS Linux / macOS (bash)
+.liveai-cpu/bin/activate             # Active the Python environment
 ./setup-liveai-cpu.sh
 ```
-
 
 
 ## Unit tests
