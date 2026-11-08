@@ -55,9 +55,9 @@ def main(argv=None) -> int:
             reader = _build_chat_reader(config, ConversationSession)
             read_prompt = lambda: reader.read(_chat_label(config))  # noqa: E731
         else:
-            from src.audio_wrapper import AudioDeviceError, SpeechDetector  # lazy import
-
             try:
+                from src.audio_wrapper import AudioDeviceError, SpeechDetector  # lazy import
+
                 detector = SpeechDetector(
                     model_path=config.speech_det.model_path,
                     language=config.speech_det.language,
@@ -70,6 +70,14 @@ def main(argv=None) -> int:
                 )
             except AudioDeviceError as exc:
                 cprint(f"❌ {exc}", "red")
+                return 1
+            except FileNotFoundError as exc:
+                cprint(f"❌ {exc} — install the Whisper model (see README), fix "
+                       "[speech_det].model_path in config.toml, or use --chat.", "red")
+                return 1
+            except ImportError as exc:  # e.g. faster-whisper not installed
+                cprint(f"❌ {exc} — install faster-whisper (see README / "
+                       "setup-liveai-cpu.ps1), or use --chat.", "red")
                 return 1
             read_prompt = lambda: detector.listen_and_transcribe(  # noqa: E731
                 silence_timeout_s=config.speech_det.silence_timeout_s

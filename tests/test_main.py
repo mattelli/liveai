@@ -332,3 +332,73 @@ def test_voice_missing_device_returns_error(monkeypatch, capsys):
     assert main_mod.main([]) == 1
     out = capsys.readouterr().out.lower()
     assert "no mic" in out or "microphone" in out
+
+
+# ---------------------------------------------- graceful voice-mode startup
+
+
+def _voice_cfg():
+    return types.SimpleNamespace(
+        brain=types.SimpleNamespace(model="m"),
+        agent=types.SimpleNamespace(bootstrap_prompt=""),
+        speech_det=types.SimpleNamespace(
+            model_path="m", language="en", silence_timeout_s=2.0,
+        ),
+    )
+
+
+def test_voice_missing_model_returns_error(monkeypatch, capsys):
+    """Missing Whisper model dir: clear message, exit code 1, no traceback."""
+    import src.audio_wrapper as aw
+
+    class MissingModelDetector:
+        def __init__(self, **kw):
+            raise FileNotFoundError("Model file not found: m")
+
+    class StubSession:
+        COMMANDS = ()
+
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(aw, "SpeechDetector", MissingModelDetector)
+    monkeypatch.setattr(session_mod, "ConversationSession", StubSession)
+    monkeypatch.setattr(live_ai_mod, "Agent", lambda config: object())
+    monkeypatch.setattr(main_mod, "load_config", lambda p: _voice_cfg())
+
+    assert main_mod.main([]) == 1
+    out = capsys.readouterr().out.lower()
+    assert "model file not found" in out
+    assert "--chat" in out  # hints at the text-mode alternative
+    assert "traceback" not in out
+
+
+def test_voice_missing_whisper_package_returns_error(monkeypatch, capsys):
+    """Missing faster-whisper package: clear message, exit code 1."""
+    import src.audio_wrapper as aw
+
+    class NoPackageDetector:
+        def __init__(self, **kw):
+            raise ImportError("faster-whisper is not installed")
+
+    class StubSession:
+        COMMANDS = ()
+
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self):
+            return 0
+
+    monkeypatch.setattr(aw, "SpeechDetector", NoPackageDetector)
+    monkeypatch.setattr(session_mod, "ConversationSession", StubSession)
+    monkeypatch.setattr(live_ai_mod, "Agent", lambda config: object())
+    monkeypatch.setattr(main_mod, "load_config", lambda p: _voice_cfg())
+
+    assert main_mod.main([]) == 1
+    out = capsys.readouterr().out.lower()
+    assert "faster-whisper" in out
+    assert "--chat" in out
