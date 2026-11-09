@@ -1,5 +1,7 @@
 """File tools: read/write text files, search and replace their content."""
 
+import os
+import tempfile
 from pathlib import Path
 
 from src.common import dump_func_call, normalize_extensions
@@ -13,7 +15,8 @@ __all__ = [
 
 @dump_func_call
 def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
-                   number_lines: bool = False) -> str:
+                   number_lines: bool = False,
+                   max_file_bytes: int = 5_000_000) -> str:
     """
     Read a text file and return its contents as a string.
     Useful when user asks for content description.
@@ -21,16 +24,25 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
     file, e.g. after search_in_file / search_pattern_in_files report line
     numbers. number_lines prefixes each line with its number ("12: text"),
     useful to cite exact positions for replace_string_in_file.
+    ``max_file_bytes`` (0 = unlimited) caps how many bytes are read;
+    the read stops at the cap and the returned text is truncated.
     """
     file_path = Path(file).resolve()
     if not (file_path.exists() and file_path.is_file()):
         return f"Unable to read '{file}'"
     try:
-        text = file_path.read_text(encoding="utf-8")
+        if start_line > 0 or line_count > 0 or number_lines:
+            # Stream only the requested window instead of loading the whole
+            # file into memory (important for large files).
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = [line.rstrip("\n")
+                         for line in f.readlines(max_file_bytes)]
+        else:
+            with open(file_path, "r", encoding="utf-8", newline="") as f:
+                text = f.read()
     except Exception as exc:
         return f"Error: {exc!r}"
     if start_line > 0 or line_count > 0 or number_lines:
-        lines = text.splitlines()
         start = max(start_line - 1, 0) if start_line > 0 else 0
         window = lines[start:start + line_count] if line_count > 0 else lines[start:]
         if number_lines:
@@ -63,7 +75,7 @@ def write_text_file(file: str, content: str, overwrite: bool = False,
             return f"Error: '{dest_path}' is a directory."
         if append:
             try:
-                with open(dest_path, "a", encoding="utf-8") as f:
+                with open(dest_path, "a", encoding="utf-8", newline="") as f:
                     f.write(content)
             except Exception as exc:
                 return f"Error: {exc!r}"
@@ -72,7 +84,8 @@ def write_text_file(file: str, content: str, overwrite: bool = False,
             return "File already exists."
     try:
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        dest_path.write_text(content, encoding="utf-8")
+        with open(dest_path, "w", encoding="utf-8", newline="") as f:
+            f.write(content)
     except Exception as exc:
         return f"Error: {exc!r}"
     return f"File created at '{dest_path.resolve()}'"
@@ -111,16 +124,26 @@ def search_pattern_in_files(
         include_extensions: str = "",
         exclude_extensions: str = "",
         exclude_glob: str | None = ".*",
+        exclude_dirs: str = "target",
+        max_file_bytes: int = 5_000_000,
     ) -> str:
     """
     Search for a pattern in files within a directory recursively.
     Returns a list of the file paths and the line numbers where pattern is found.
     ``include_extensions``/``exclude_extensions`` accept ``py`` or ``.py``.
     ``exclude_glob`` (default ``".*"``) skips hidden entries.
+    ``exclude_dirs`` (default ``"target"``) skips whole build/dependency
+    directories (comma-separated names, matched against any path part);
+    pass ``""`` to disable.
+    Files that are binary/undecodable or larger than ``max_file_bytes``
+    (0 = unlimited) are skipped and reported instead of silently ignored.
     """
     include_extensions_list = normalize_extensions(include_extensions)
     exclude_extensions_list = normalize_extensions(exclude_extensions)
+    excluded_dir_names = {d.strip().lower()
+                          for d in exclude_dirs.split(",") if d.strip()}
     results: dict[str, list[int]] = {}
+    skipped: list[str] = []
     search_dir = Path(directory).resolve()
     if not search_dir.exists():
         return f"'{search_dir}' does not exist!"
@@ -132,29 +155,45 @@ def search_pattern_in_files(
     for file_path in search_dir.rglob("*"):
         if file_path.is_dir():
             continue
+        if any(item in file_path.parts for item in excluded_items):
+            continue
+        if any(part.lower() in excluded_dir_names
+               for part in file_path.parts[:-1]):
+            continue
         ext = file_path.suffix.lower()
         if include_extensions_list and ext not in include_extensions_list:
             continue
         if exclude_extensions_list and ext in exclude_extensions_list:
             continue
-        if any(item in file_path.parts for item in excluded_items):
-            continue
         try:
+            if max_file_bytes and file_path.stat().st_size > max_file_bytes:
+                skipped.append(f"{file_path} (exceeds max_file_bytes)")
+                continue
+            found_in_file: list[int] = []
             with open(file_path, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-                for line_num, line in enumerate(lines):
+                for line_num, line in enumerate(f):  # streamed, not readlines()
                     if pattern in line:
-                        if file_path not in results:
-                            results[file_path] = []
-                        results[file_path].append(line_num + 1)  # Line numbers are 1-based
-        except Exception:
+                        found_in_file.append(line_num + 1)  # 1-based
+            if found_in_file:
+                results[file_path] = found_in_file
+        except (UnicodeDecodeError, ValueError):
+            skipped.append(f"{file_path} (binary/undecodable)")
+            continue
+        except OSError as e:
+            skipped.append(f"{file_path} ({e})")
             continue
     if not results:
-        return f"Did not find file having pattern '{pattern}' in directory '{search_dir}' "
-    formatted_res = f"Found '{len(results)}' files having pattern '{pattern}' in directory '{search_dir}' :\n"
-    for path, lines in results.items():
-        formatted_res += f"- in file '{str(path)}' at lines: " + ", ".join(map(str, lines)) + "\n"
-    return formatted_res
+        result = f"Did not find file having pattern '{pattern}' in directory '{search_dir}' "
+    else:
+        result = (f"Found '{len(results)}' files having pattern '{pattern}' "
+                  f"in directory '{search_dir}' :\n")
+        for path, lines in results.items():
+            result += f"- in file '{str(path)}' at lines: " + ", ".join(map(str, lines)) + "\n"
+    if skipped:
+        result += f"\nSkipped {len(skipped)} file(s):\n"
+        for item in skipped:
+            result += f"- {item}\n"
+    return result
 
 
 @dump_func_call
@@ -165,13 +204,30 @@ def replace_string_in_file(path: str, old_string: str, new_string: str) -> str:
     _file_path = Path(path).resolve()
     if _file_path.is_dir():
         return f"Error: '{_file_path}' is a directory."
+    if not old_string:
+        return "Error: 'old_string' must not be empty."
     try:
-        with open(_file_path, 'r', encoding='utf-8') as file:
+        with open(_file_path, 'r', encoding='utf-8', newline='') as file:
             content = file.read()
         count = content.count(old_string)
+        if count == 0:
+            return (f"'{old_string}' not found in '{_file_path}': "
+                    "nothing replaced.")
         content = content.replace(old_string, new_string)
-        with open(_file_path, 'w', encoding='utf-8') as file:
-            file.write(content)
+        # Atomic write: never leave a truncated file behind on crash.
+        fd, tmp_name = tempfile.mkstemp(
+            dir=str(_file_path.parent), prefix=_file_path.name + ".",
+            suffix=".tmp")
+        try:
+            with os.fdopen(fd, 'w', encoding='utf-8', newline='') as tmp:
+                tmp.write(content)
+            os.replace(tmp_name, _file_path)
+        except Exception:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
+            raise
         return f"'{count}' occurrences of '{old_string}' have been replaced by '{new_string}'"
     except FileNotFoundError:
         return f"Error: File '{_file_path}' not found."
