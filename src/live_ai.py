@@ -207,7 +207,10 @@ def _truncate_tool_result(text: str, limit: int) -> str:
     head = limit * 3 // 4
     tail = limit // 4
     marker = f"\n… [truncated, {len(text)} chars total] …\n"
-    return text[:head] + marker + text[-tail:]
+    # rstrip/lstrip keep the head/tail cuts clean at the marker boundaries:
+    # trailing/leading whitespace (or a half-flushed buffer artifact) can
+    # never merge into the marker line and be mistaken for payload.
+    return text[:head].rstrip() + marker + text[-tail:].lstrip()
 
 
 def _thinking_token_cap(value) -> int:

@@ -2,6 +2,7 @@ import threading
 import time
 import tomllib
 import json
+import hashlib
 import inspect
 import re
 import sys
@@ -513,10 +514,19 @@ def _print_call_block(name: str, args: list[tuple[str, object]], *,
     if _output_hook is not None:
         _output_hook()
     line_width = _line_width
-    param_lines = [
-        f"  {param} = {repr(value)[:line_width]}{'…' if len(repr(value)) > line_width else ''}"
-        for param, value in args
-    ]
+    param_lines = []
+    for param, value in args:
+        shown = repr(value)
+        checksum = ""
+        if len(shown) > line_width:
+            # Truncated value: append a short checksum of the full payload so
+            # a corrupted/duplicated tool-call argument is detectable by the
+            # agent instead of silently accepted.
+            digest = hashlib.sha1(shown.encode("utf-8")).hexdigest()[:12]
+            checksum = f" [sha1:{digest}]"
+        param_lines.append(
+            f"  {param} = {shown[:line_width]}"
+            f"{'…' if len(shown) > line_width else ''}{checksum}")
     if failed is not None:
         status = f") -> failed in {elapsed:.1f}s: {str(failed)[:100]}"
     else:

@@ -88,7 +88,16 @@ def write_text_file(file: str, content: str, overwrite: bool = False,
             f.write(content)
     except Exception as exc:
         return f"Error: {exc!r}"
-    return f"File created at '{dest_path.resolve()}'"
+    # Read-back verification: catch partial writes / disk-level corruption
+    # at write time instead of silently committing a damaged file.
+    try:
+        with open(dest_path, "r", encoding="utf-8", newline="") as f:
+            if f.read() != content:
+                return (f"Error: verification failed for '{dest_path}' — "
+                        "file content differs from what was written.")
+    except Exception as exc:
+        return f"Error: verification read failed for '{dest_path}': {exc!r}"
+    return f"File created at '{dest_path.resolve()}' (verified)"
 
 
 @dump_func_call

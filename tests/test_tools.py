@@ -175,6 +175,40 @@ def test_write_text_file_append_ignores_overwrite_flag(tmp_path):
     assert target.read_text(encoding="utf-8") == "oldnew"
 
 
+def test_write_text_file_readback_verification(tmp_path):
+    """The tool verifies the write by reading the file back."""
+    target = tmp_path / "a.txt"
+    out = tools.write_text_file(str(target), "payload")
+    assert "(verified)" in out
+    assert target.read_text(encoding="utf-8") == "payload"
+
+
+def test_write_text_file_readback_detects_mismatch(tmp_path, monkeypatch):
+    """A damaged on-disk result is reported as an error, not success."""
+    target = tmp_path / "a.txt"
+    real_open = open
+
+    def fake_open(file, mode="r", **kwargs):
+        handle = real_open(file, mode, **kwargs)
+        if "w" in mode and str(file) == str(target):
+            class Damaged:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *exc):
+                    return False
+
+                def write(self, text):
+                    real_open(target, "w", encoding="utf-8").write(
+                        text.replace("payload", "payl0ad"))
+            return Damaged()
+        return handle
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    out = tools.write_text_file(str(target), "payload")
+    assert "verification failed" in out
+
+
 # ------------------------------------------------------------------ T3 search/replace
 
 

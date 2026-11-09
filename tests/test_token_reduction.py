@@ -44,6 +44,17 @@ def test_truncate_tool_result_reports_original_length():
     assert "[truncated, 12345 chars total]" in result
 
 
+def test_truncate_tool_result_cuts_are_clean_at_marker():
+    """Head/tail cuts are stripped so no fragment can merge into the marker."""
+    text = "A" * 10_000 + "   \n" + "Z" * 10_000
+    result = live_ai_mod._truncate_tool_result(text, 4000)
+    marker_line = f"\n… [truncated, {len(text)} chars total] …\n"
+    assert marker_line in result
+    head, _, tail = result.partition(marker_line)
+    assert head.endswith("A")          # head cut stripped to clean payload
+    assert tail.startswith("Z")        # tail cut stripped to clean payload
+
+
 class _FakeStream:
     """Minimal StreamPrinter stand-in for bare-agent tests."""
 
