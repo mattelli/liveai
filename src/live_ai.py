@@ -2319,6 +2319,9 @@ class Agent(Brain):
         self._active_stream = stream
         parts: list[str] = []
         calls: dict[int, dict] = {}
+        # Last (name, arguments) fragment seen per tool-call slot, used to
+        # drop re-delivered stream chunks (see the dedup below).
+        last_frags: dict[int, tuple[str, str]] = {}
         try:
             for chunk in stream:
                 if self._cancel_requested:
@@ -2340,8 +2343,20 @@ class Agent(Brain):
                     if tc.id:
                         slot["id"] = tc.id
                     if tc.function:
-                        slot["name"] += tc.function.name or ""
-                        slot["arguments"] += tc.function.arguments or ""
+                        name_frag = tc.function.name or ""
+                        args_frag = tc.function.arguments or ""
+                        # Some OpenAI-compatible/streaming endpoints re-deliver
+                        # a chunk (duplicated SSE frame). Blindly appending it
+                        # would duplicate part of the tool-call payload — e.g.
+                        # a write_text_file ``content`` — and the corrupted
+                        # argument is then written verbatim to disk. Drop any
+                        # fragment identical to the one just seen for the same
+                        # slot, so the accumulated payload stays idempotent.
+                        if last_frags.get(tc.index) == (name_frag, args_frag):
+                            continue
+                        last_frags[tc.index] = (name_frag, args_frag)
+                        slot["name"] += name_frag
+                        slot["arguments"] += args_frag
             pending = self._flush_pending_answer()
             if pending:  # trailing partial think tag held back by _split_thinking
                 parts.append(pending)

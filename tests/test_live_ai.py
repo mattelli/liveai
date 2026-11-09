@@ -2005,6 +2005,46 @@ def test_stream_round_without_usage_chunk(monkeypatch):
     assert agent._last_round_usage is None
 
 
+def test_stream_round_deduplicates_repeated_tool_call_fragments(monkeypatch):
+    """A re-delivered stream chunk must not duplicate the tool-call payload.
+
+    Some OpenAI-compatible/streaming endpoints can send the same delta frame
+    twice. Blindly appending both copies would duplicate e.g. a
+    write_text_file ``content`` argument, which is then written verbatim to
+    disk. Each fragment identical to the one just seen for the same slot is
+    dropped, so the accumulated arguments stay idempotent.
+    """
+    agent = _make_act_agent()
+    agent._show_thinking = False
+    agent._pending_answer = ""
+
+    def _tc_args(frag):
+        return [SimpleNamespace(
+            index=0,
+            id="call_0" if frag == "{" else None,
+            function=SimpleNamespace(name="write_text_file",
+                                     arguments=frag))]
+
+    # Chunks whose delta carries the tool-call fragments, including a
+    # duplicated trailing frame (the corruption case).
+    frags = ["{", '"file": "a.rs", ', '"content": "let x = 1;", ',
+             '"overwrite": true}', '"overwrite": true}']  # last one duplicated
+    frames = [SimpleNamespace(
+        choices=[SimpleNamespace(delta=SimpleNamespace(
+            content="", tool_calls=[_tc_args(f)[0]]))]) for f in frags]
+
+    monkeypatch.setattr(agent, "_stream_completion",
+                        lambda tools: iter(frames))
+    text, calls = agent._stream_round([])
+    assert text == ""
+    assert len(calls) == 1
+    args = calls[0]["arguments"]
+    # The duplicated trailing fragment must appear exactly once.
+    assert args.count('"overwrite": true}') == 1
+    assert args == ('{"file": "a.rs", "content": "let x = 1;", '
+                    '"overwrite": true}')
+
+
 def test_act_accumulates_turn_usage(monkeypatch):
     """Multi-round turns sum prompt/completion tokens."""
     agent = _make_act_agent(max_rounds=3)
