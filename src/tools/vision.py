@@ -84,11 +84,15 @@ class VisionTools:
             ],
         })
         try:
-            resp = self._session.client.chat.completions.create(
-                model=self._session.model_name,
-                messages=messages,
-                temperature=self._session.temperature,
-            )
+            kwargs: dict = {
+                "model": self._session.model_name,
+                "messages": messages,
+                "temperature": self._session.temperature,
+            }
+            extra_body = getattr(self._session, "_provider_extra_body", lambda: None)()
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            resp = self._session.client.chat.completions.create(**kwargs)
         except Exception as e:
             messages.pop()  # drop the image turn: provider rejected it
             return f"Error: {e}"

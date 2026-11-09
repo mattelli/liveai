@@ -953,6 +953,104 @@ def test_select_model_defaults_to_brain_connection_fields(monkeypatch, tmp_path)
     assert brain._client.api_key == "key-a"  # from TEST_API_KEY
 
 
+def test_boot_entry_with_provider_sets_routing(monkeypatch, tmp_path):
+    """A models entry with an optional 'provider' is stored on the session."""
+    brain = _switch_brain(monkeypatch, tmp_path, {
+        "glm": {"model": "z-ai/glm-5.3-flash", "provider": "wafer/us"},
+    })
+    assert brain._provider == "wafer/us"
+    assert brain._provider_extra_body() == {
+        "provider": {"only": ["wafer/us"], "allow_fallbacks": False},
+    }
+
+
+def test_boot_entry_without_provider_has_no_routing(monkeypatch, tmp_path):
+    """Entries without 'provider' send completions unchanged (extra_body None)."""
+    brain = _switch_brain(monkeypatch, tmp_path, {"plain": {"model": "plain-model"}})
+    assert brain._provider is None
+    assert brain._provider_extra_body() is None
+
+
+def test_select_model_switches_provider_routing(monkeypatch, tmp_path):
+    """Switching models updates the provider routing for the new entry."""
+    brain = _switch_brain(monkeypatch, tmp_path, {
+        "boot": {"model": "boot-model"},  # no provider
+        "glm": {"model": "z-ai/glm-5.3-flash", "provider": "wafer/us"},
+        "plain": {"model": "plain-model"},  # provider cleared again
+    })
+    assert brain._provider is None
+
+    brain.select_model("glm")
+    assert brain._provider == "wafer/us"
+    assert brain._provider_extra_body() == {
+        "provider": {"only": ["wafer/us"], "allow_fallbacks": False},
+    }
+
+    brain.select_model("plain")
+    assert brain._provider is None
+    assert brain._provider_extra_body() is None
+
+
+def test_stream_completion_sends_provider_extra_body(monkeypatch, tmp_path):
+    """The streamed completion carries the provider routing block in extra_body."""
+    brain = _switch_brain(monkeypatch, tmp_path, {
+        "glm": {"model": "z-ai/glm-5.3-flash", "provider": "wafer/us"},
+    })
+    seen = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return iter([])
+
+    brain._client.chat = SimpleNamespace(completions=FakeCompletions())
+    list(brain._stream_completion())
+
+    assert seen["model"] == "z-ai/glm-5.3-flash"
+    assert seen["extra_body"] == {
+        "provider": {"only": ["wafer/us"], "allow_fallbacks": False},
+    }
+
+
+def test_stream_completion_without_provider_has_no_extra_body(monkeypatch, tmp_path):
+    """No provider -> the completion request carries no extra_body."""
+    brain = _switch_brain(monkeypatch, tmp_path, {"plain": {"model": "plain-model"}})
+    seen = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return iter([])
+
+    brain._client.chat = SimpleNamespace(completions=FakeCompletions())
+    list(brain._stream_completion())
+
+    assert "extra_body" not in seen
+    assert seen["model"] == "plain-model"
+
+
+def test_summarize_messages_sends_provider_extra_body(monkeypatch, tmp_path):
+    """History-compaction summarizer also routes through the configured provider."""
+    brain = _switch_brain(monkeypatch, tmp_path, {
+        "glm": {"model": "z-ai/glm-5.3-flash", "provider": "wafer/us"},
+    })
+    seen = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="summary"))])
+
+    brain._client.chat = SimpleNamespace(completions=FakeCompletions())
+    result = brain._summarize_messages([{"role": "user", "content": "hi"}])
+
+    assert result == "summary"
+    assert seen["extra_body"] == {
+        "provider": {"only": ["wafer/us"], "allow_fallbacks": False},
+    }
+
+
 def test_select_model_missing_api_key_raises_before_switch(monkeypatch, tmp_path):
     brain = _switch_brain(monkeypatch, tmp_path, {
         "boot": {"model": "boot-model"},

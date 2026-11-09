@@ -249,6 +249,41 @@ def test_info_prints_model_info(capsys):
     assert "fake-model-info" in capsys.readouterr().out
 
 
+class ModelListAgent(FakeAgent):
+    """FakeAgent exposing the models-file API for the /model command."""
+
+    def __init__(self):
+        super().__init__()
+        self._model_name = "glm-flash"
+
+    @property
+    def model_name(self):
+        return self._model_name
+
+    def list_models(self):
+        return {
+            "glm-flash": {"model": "z-ai/glm-5.3-flash",
+                          "base_url": "https://openrouter.ai/api/v1",
+                          "provider": "wafer/us"},
+            "plain": {"model": "plain-model"},
+        }
+
+    def select_model(self, name):
+        self._model_name = name
+        return f"Model switched to {name}"
+
+
+def test_model_list_shows_provider_column(capsys):
+    """/model lists each entry's provider (dash when unset)."""
+    it = iter(["/model", "", "/quit"])
+    ConversationSession(ModelListAgent(), lambda: next(it)).run()
+    out = capsys.readouterr().out
+    assert "glm-flash" in out
+    assert "wafer/us" in out
+    assert "plain" in out
+    assert "z-ai/glm-5.3-flash" in out
+
+
 # ----------------------------------------------------------- T9 unknown command
 
 

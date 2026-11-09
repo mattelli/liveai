@@ -575,7 +575,8 @@ class ConversationSession:
         for name, entry in entries.items():
             model = str(entry.get("model") or "")
             base_url = str(entry.get("base_url") or "")
-            rows.append((name, model, base_url))
+            provider = str(entry.get("provider") or "") or ""
+            rows.append((name, model, base_url, provider))
         try:
             from rich.console import Console
             from rich.table import Table
@@ -584,9 +585,10 @@ class ConversationSession:
             table.add_column("name", style="cyan", no_wrap=True)
             table.add_column("model", style="cyan")
             table.add_column("base_url", style="cyan")
-            for name, model, base_url in rows:
+            table.add_column("provider", style="cyan")
+            for name, model, base_url, provider in rows:
                 marker = "→ " if name.lower() == (current or "").lower() else ""
-                table.add_row(f"{marker}{name}", model, base_url)
+                table.add_row(f"{marker}{name}", model, base_url, provider or "-")
             Console().print(table)
         except ImportError:  # pragma: no cover - rich is a hard dependency
             for name, model, base_url in rows:

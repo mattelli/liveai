@@ -7,7 +7,14 @@
   "glm-flash": {
     "api_key_env": "OPENROUTER_API_KEY",
     "base_url": "https://openrouter.ai/api/v1",
-    "model": "z-ai/glm-5.3-flash"
+    "model": "z-ai/glm-5.3-flash",
+    "provider": "relace/fp4"
+  },
+  "deepseek-flash": {
+    "api_key_env": "OPENROUTER_API_KEY",
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "deepseek/deepseek-v4-flash-0731",
+    "provider": "wafer/us"
   },
   "lmstudio-qwen": {
     "api_key_env": "LMSTUDIO_API_KEY",

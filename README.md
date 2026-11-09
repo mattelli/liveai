@@ -547,6 +547,10 @@ models. Each entry carries the connection details of one model:
 - `api_key_env` (optional) — name of the environment variable holding the API
   key (resolved from the environment and `.env`, never stored in the JSON).
 - `base_url` (optional) — the OpenAI-compatible endpoint.
+- `provider` (optional) — OpenRouter-style routing hint (e.g. `"wafer/us"`).
+  When set, every completion request is pinned to that provider with
+  fallbacks disabled (`extra_body={"provider": {"only": ["wafer/us"],
+  "allow_fallbacks": false}}`); entries without it send requests unchanged.
 
 Missing `api_key_env`/`base_url` fall back to the values configured under
 `[brain]` in `config.toml`, so entries of one provider can carry only `model`.

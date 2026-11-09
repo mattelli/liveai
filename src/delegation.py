@@ -209,16 +209,20 @@ def summarize_text(agent, text: str) -> str:
         return summarizer(text)
     from src.live_ai import _PROMPTS
     try:
-        resp = agent.client.chat.completions.create(
-            model=agent.model_name,
-            messages=[
+        kwargs: dict = {
+            "model": agent.model_name,
+            "messages": [
                 {"role": "system", "content": _PROMPTS["summarizer_system"]},
                 {"role": "user",
                  "content": f"Summarize this result concisely:\n\n{text}"},
             ],
-            temperature=0.2,
-            max_tokens=500,
-        )
+            "temperature": 0.2,
+            "max_tokens": 500,
+        }
+        extra_body = getattr(agent, "_provider_extra_body", lambda: None)()
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        resp = agent.client.chat.completions.create(**kwargs)
         return str(resp.choices[0].message.content or "").strip()
     except Exception as exc:
         log.warning("Result summarizer failed: %s", exc)

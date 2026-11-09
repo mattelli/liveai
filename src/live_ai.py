@@ -703,12 +703,13 @@ class OpenAICore:
         except ImportError as exc:
             raise ImportError("pip install openai  # required for the OpenAI-based Brain") from exc
 
-        model, base_url, api_key = self._boot_connection()
+        model, base_url, api_key, provider = self._boot_connection()
 
         self.logger.info("🚀 Connecting to remote model '%s' @ %s ...", model, base_url)
         self._client = OpenAI(base_url=base_url, api_key=api_key)
         self._model_name = model
         self._base_url = base_url
+        self._provider = provider
         self._context_window = self._resolve_context_window(config)
         self._vision = self._resolve_vision_flag(config)
         self._temperature = getattr(config.brain, "temperature", 0.7)
@@ -812,13 +813,16 @@ class OpenAICore:
         """Selectable models from the models JSON file (``{name: entry}``)."""
         return self._load_model_entries()
 
-    def _entry_connection(self, display_name: str, entry: dict) -> tuple[str, str, str]:
-        """Connection triple ``(model, base_url, api_key)`` for a models entry.
+    def _entry_connection(self, display_name: str, entry: dict) -> tuple[str, str, str, str | None]:
+        """Connection tuple ``(model, base_url, api_key, provider)`` for a models entry.
 
         Entry values win; missing ``base_url``/``api_key_env`` fall back to the
         ``[brain]`` config (legacy setups keep them there). The API key is
         resolved from the environment (``.env`` included) exactly as at
-        startup and is never stored in the JSON file.
+        startup and is never stored in the JSON file. ``provider`` is the
+        optional OpenRouter-style routing hint (e.g. ``"wafer/us"``): when
+        set, it is sent as an ``extra_body`` provider-routing block on every
+        completion request; entries without it return ``None``.
         """
         brain = self.config.brain
         model = str(entry.get("model") or "").strip()
@@ -826,6 +830,7 @@ class OpenAICore:
                        or getattr(brain, "base_url", "") or "").strip()
         api_key_env = str(entry.get("api_key_env")
                           or getattr(brain, "api_key_env", "") or "").strip()
+        provider = str(entry.get("provider") or "").strip() or None
         if not model:
             raise ValueError(f"Model entry {display_name!r} has no 'model' id")
         if not base_url:
@@ -842,16 +847,16 @@ class OpenAICore:
                 "environment variable, e.g. put "
                 f"'{api_key_env}=sk-...' in the project .env file "
                 f"or run: setx {api_key_env} 'sk-...'")
-        return model, base_url, api_key
+        return model, base_url, api_key, provider
 
-    def _boot_connection(self) -> tuple[str, str, str]:
-        """Resolve the startup connection: ``(model, base_url, api_key)``.
+    def _boot_connection(self) -> tuple[str, str, str, str | None]:
+        """Resolve the startup connection: ``(model, base_url, api_key, provider)``.
 
         With ``[brain] models_file`` configured, the **first entry** of the
         models JSON file boots the session: the startup model is always one of
         the ``/model``-switchable entries and ``[brain]`` carries no duplicate
         ``model``/``base_url``/``api_key_env``. Without a models file the
-        legacy ``[brain]`` keys are used directly.
+        legacy ``[brain]`` keys are used directly (provider is ``None``).
         """
         brain = self.config.brain
         if getattr(brain, "models_file", None):
@@ -875,7 +880,7 @@ class OpenAICore:
                 f"API key not found: set the '{api_key_env}' environment variable, "
                 f"e.g. put '{api_key_env}=sk-...' in the project .env file "
                 f"or run: setx {api_key_env} 'sk-...'")
-        return model, base_url, api_key
+        return model, base_url, api_key, None
 
     def select_model(self, name: str) -> str:
         """Switch the live session to a model entry from the models JSON file.
@@ -899,7 +904,7 @@ class OpenAICore:
                 f"Unknown model {name!r} in the models file. Available: "
                 + ", ".join(entries))
         display_name, entry = match
-        model, base_url, api_key = self._entry_connection(display_name, entry)
+        model, base_url, api_key, provider = self._entry_connection(display_name, entry)
 
         self.logger.info("🔄 Switching to model '%s' @ %s ...", model, base_url)
         from openai import OpenAI  # installed: __init__ already imported it
@@ -910,6 +915,7 @@ class OpenAICore:
         self._client = client
         self._model_name = model
         self._base_url = base_url
+        self._provider = provider
         self._model_entry = display_name
         self.__dict__.pop("_model_meta", None)
         self._context_window = self._resolve_context_window(self.config)
@@ -1546,6 +1552,24 @@ class Brain(OpenAICore):
         """True while a user cancel (Ctrl+C) is pending for the current turn."""
         return self._cancel_requested
 
+    def _provider_extra_body(self) -> dict | None:
+        """OpenRouter-style ``extra_body`` provider-routing block, or None.
+
+        When the active models.json entry carries an optional ``provider``
+        (e.g. ``"wafer/us"``), every completion request is pinned to that
+        provider with fallbacks disabled, mirroring::
+
+            extra_body={"provider": {"only": ["wafer/us"],
+                                     "allow_fallbacks": False}}
+
+        Entries without a ``provider`` return ``None`` and the request is
+        sent unchanged (provider routing is entirely optional).
+        """
+        provider = getattr(self, "_provider", None)
+        if not provider:
+            return None
+        return {"provider": {"only": [provider], "allow_fallbacks": False}}
+
     def _stream_completion(self, tools: list[dict] | None = None):
         kwargs: dict = {
             "model": self._model_name,
@@ -1557,6 +1581,9 @@ class Brain(OpenAICore):
         }
         if tools:
             kwargs["tools"] = tools
+        extra_body = self._provider_extra_body()
+        if extra_body:
+            kwargs["extra_body"] = extra_body
         self._stream_options_ok = True
         try:
             return self._client.chat.completions.create(
@@ -1588,16 +1615,20 @@ class Brain(OpenAICore):
         summary instead of failing the turn.
         """
         try:
-            resp = self._client.chat.completions.create(
-                model=self._model_name,
-                messages=[
+            kwargs: dict = {
+                "model": self._model_name,
+                "messages": [
                     {"role": "system",
                      "content": self._SUMMARIZER_SYSTEM_PROMPT},
                     *messages,
                 ],
-                temperature=0.2,
-                max_tokens=500,
-            )
+                "temperature": 0.2,
+                "max_tokens": 500,
+            }
+            extra_body = self._provider_extra_body()
+            if extra_body:
+                kwargs["extra_body"] = extra_body
+            resp = self._client.chat.completions.create(**kwargs)
             return str(resp.choices[0].message.content or "")
         except Exception as e:
             self.logger.warning("Compaction summarizer failed: %s", e)
@@ -1830,8 +1861,11 @@ class Brain(OpenAICore):
             f"model={self._model_name}",
             f"base_url={self._base_url} (OpenAI-compatible API)",
         ]
+        provider = getattr(self, "_provider", None)
+        if provider:
+            lines.append(f"provider={provider} (configured routing)")
         if meta.get("owned_by"):
-            lines.append(f"provider={meta['owned_by']}")
+            lines.append(f"server_provider={meta['owned_by']}")
         created = meta.get("created")
         if created:
             if isinstance(created, (int, float)):
