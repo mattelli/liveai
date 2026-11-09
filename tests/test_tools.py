@@ -209,6 +209,31 @@ def test_write_text_file_readback_detects_mismatch(tmp_path, monkeypatch):
     assert "verification failed" in out
 
 
+def test_read_text_file_checksum_off_by_default(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_text("hello", encoding="utf-8")
+    assert tools.read_text_file(str(target)) == "hello"
+
+
+def test_read_text_file_checksum_full_read(tmp_path):
+    import hashlib
+    target = tmp_path / "a.txt"
+    target.write_text("hello", encoding="utf-8")
+    digest = hashlib.sha1(b"hello").hexdigest()[:12]
+    out = tools.read_text_file(str(target), checksum=True)
+    assert out == f"hello\n[sha1:{digest}]"
+
+
+def test_read_text_file_checksum_windowed_read(tmp_path):
+    import hashlib
+    target = tmp_path / "a.txt"
+    target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
+    digest = hashlib.sha1(b"alpha\nbeta").hexdigest()[:12]
+    out = tools.read_text_file(str(target), start_line=1, line_count=2,
+                               checksum=True)
+    assert out.endswith(f"[sha1:{digest}]")
+
+
 # ------------------------------------------------------------------ T3 search/replace
 
 

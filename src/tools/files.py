@@ -1,5 +1,6 @@
 """File tools: read/write text files, search and replace their content."""
 
+import hashlib
 import os
 import tempfile
 from pathlib import Path
@@ -16,7 +17,8 @@ __all__ = [
 @dump_func_call
 def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
                    number_lines: bool = False,
-                   max_file_bytes: int = 5_000_000) -> str:
+                   max_file_bytes: int = 5_000_000,
+                   checksum: bool = False) -> str:
     """
     Read a text file and return its contents as a string.
     Useful when user asks for content description.
@@ -26,6 +28,9 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
     useful to cite exact positions for replace_string_in_file.
     ``max_file_bytes`` (0 = unlimited) caps how many bytes are read;
     the read stops at the cap and the returned text is truncated.
+    With ``checksum`` a ``[sha1:…]`` line of the returned text is appended,
+    giving a reference digest to verify the content against the file on
+    disk (detects transport/assembly corruption of large results).
     """
     file_path = Path(file).resolve()
     if not (file_path.exists() and file_path.is_file()):
@@ -49,11 +54,18 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
             width = len(str(start + len(window)))
             window = [f"{start + i + 1:>{width}}: {line}"
                       for i, line in enumerate(window)]
+        payload = "\n".join(window)  # digest covers content, not UI markers
         if line_count > 0 and start + line_count < len(lines):
             window.append(
                 f"… [windowed: lines {start + 1}-{start + line_count} of "
                 f"{len(lines)} total — raise line_count or re-read for more]")
+        if checksum:
+            digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+            window.append(f"[sha1:{digest}]")
         return "\n".join(window)
+    if checksum:
+        digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+        text += f"\n[sha1:{digest}]"
     return text
 
 
