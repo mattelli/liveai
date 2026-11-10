@@ -291,6 +291,70 @@ def test_replace_string_missing_file(tmp_path):
     )
 
 
+def test_replace_string_lf_old_on_crlf_file(tmp_path):
+    """An agent passing \n-based strings must still patch a CRLF file."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"def foo():\r\n    return 1\r\n\r\ndef bar():\r\n")
+    out = tools.replace_string_in_file(
+        str(target),
+        "def foo():\n    return 1\n\ndef bar():",
+        "def foo():\n    return 42\n\ndef bar():",
+    )
+    assert "1" in out
+    # File stays CRLF and the replacement is applied.
+    assert target.read_bytes() == b"def foo():\r\n    return 42\r\n\r\ndef bar():\r\n"
+
+
+def test_replace_string_crlf_old_on_lf_file(tmp_path):
+    """An agent passing \r\n-based strings must still patch an LF file."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"def foo():\ndef bar():\n")
+    out = tools.replace_string_in_file(
+        str(target),
+        "def foo():\r\ndef bar():",
+        "def foo():\r\n    return 7\r\ndef bar():",
+    )
+    assert "1" in out
+    # File stays LF.
+    assert target.read_bytes() == b"def foo():\n    return 7\ndef bar():\n"
+
+
+def test_replace_string_crlf_file_preserves_dominant_eol(tmp_path):
+    """The dominant line ending of a CRLF file is preserved on tolerant replace."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"a\r\nb\r\nc\r\n")
+    out = tools.replace_string_in_file(str(target), "b\n", "B\n")
+    assert "1" in out
+    assert target.read_bytes() == b"a\r\nB\r\nc\r\n"
+
+
+def test_replace_string_lf_file_preserves_dominant_eol(tmp_path):
+    """The dominant line ending of an LF file is preserved on tolerant replace."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"a\nb\nc\n")
+    out = tools.replace_string_in_file(str(target), "b\r\n", "B\r\n")
+    assert "1" in out
+    assert target.read_bytes() == b"a\nB\nc\n"
+
+
+def test_replace_string_literal_match_still_works(tmp_path):
+    """Exact literal matches keep working and are not normalized away."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"a\r\nb\r\nc\r\n")
+    out = tools.replace_string_in_file(str(target), "b\r\n", "B\r\n")
+    assert "1" in out
+    assert target.read_bytes() == b"a\r\nB\r\nc\r\n"
+
+
+def test_replace_string_not_found_still_reports(tmp_path):
+    """A genuinely absent old_string still reports 'nothing replaced'."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"hello\r\nworld\r\n")
+    out = tools.replace_string_in_file(str(target), "nope\n", "x\n")
+    assert "not found" in out and "nothing replaced" in out
+    assert target.read_bytes() == b"hello\r\nworld\r\n"
+
+
 # ------------------------------------------------------------------ T4 run_command
 
 

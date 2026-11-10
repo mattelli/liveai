@@ -7,6 +7,14 @@ from pathlib import Path
 
 from src.common import dump_func_call, normalize_extensions
 
+
+def _dominant_eol(text: str) -> str:
+    """Return the dominant line ending ("\r\n" or "\n") of *text*."""
+    crlf = text.count("\r\n")
+    lf = text.count("\n") - crlf
+    return "\r\n" if crlf >= lf else "\n"
+
+
 __all__ = [
     "read_text_file", "replace_string_in_file",
     "search_in_file", "search_pattern_in_files",
@@ -224,6 +232,10 @@ def search_pattern_in_files(
 def replace_string_in_file(path: str, old_string: str, new_string: str) -> str:
     """
     Replace all literal occurrences of old_string in a file with new_string and count replacements.
+    Line endings are matched tolerantly: if the literal old_string is not
+    found, the search is retried with normalized (\n) line endings, so an
+    agent that passes \n-based strings still patches a CRLF file (and vice
+    versa).  The file's dominant line ending is preserved.
     """
     _file_path = Path(path).resolve()
     if _file_path.is_dir():
@@ -235,9 +247,22 @@ def replace_string_in_file(path: str, old_string: str, new_string: str) -> str:
             content = file.read()
         count = content.count(old_string)
         if count == 0:
-            return (f"'{old_string}' not found in '{_file_path}': "
-                    "nothing replaced.")
-        content = content.replace(old_string, new_string)
+            # Tolerant retry: the caller may have used \n on a CRLF file
+            # (or \r\n on an LF file).  Normalize both sides, replace,
+            # then re-apply the file's dominant line ending.
+            eol = _dominant_eol(content)
+            content_norm = content.replace("\r\n", "\n")
+            old_norm = old_string.replace("\r\n", "\n")
+            new_norm = new_string.replace("\r\n", "\n")
+            count = content_norm.count(old_norm)
+            if count == 0:
+                return (f"'{old_string}' not found in '{_file_path}': "
+                        "nothing replaced.")
+            content = content_norm.replace(old_norm, new_norm)
+            if eol != "\n":
+                content = content.replace("\n", eol)
+        else:
+            content = content.replace(old_string, new_string)
         # Atomic write: never leave a truncated file behind on crash.
         fd, tmp_name = tempfile.mkstemp(
             dir=str(_file_path.parent), prefix=_file_path.name + ".",
