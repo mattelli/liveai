@@ -69,7 +69,7 @@ def test_read_text_file_missing_returns_error(tmp_path):
 
 def test_read_text_file_window(tmp_path):
     target = tmp_path / "a.txt"
-    target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
+    target.write_bytes(b"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n")
     out = tools.read_text_file(str(target), start_line=3, line_count=2)
     assert out.startswith("line3\nline4")
     assert "windowed" in out  # more lines remain -> marker guides the re-read
@@ -77,14 +77,14 @@ def test_read_text_file_window(tmp_path):
 
 def test_read_text_file_window_exactly_to_end_has_no_marker(tmp_path):
     target = tmp_path / "a.txt"
-    target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
+    target.write_bytes(b"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n")
     out = tools.read_text_file(str(target), start_line=9, line_count=2)
     assert out == "line9\nline10"  # window reaches EOF -> no marker
 
 
 def test_read_text_file_window_to_end(tmp_path):
     target = tmp_path / "a.txt"
-    target.write_text("\n".join(f"line{i}" for i in range(1, 6)), encoding="utf-8")
+    target.write_bytes(b"line1\nline2\nline3\nline4\nline5\n")
     out = tools.read_text_file(str(target), start_line=4)
     assert out == "line4\nline5"
 
@@ -97,7 +97,7 @@ def test_read_text_file_window_past_eof_clamps(tmp_path):
 
 def test_read_text_file_window_marker_when_more_remain(tmp_path):
     target = tmp_path / "a.txt"
-    target.write_text("\n".join(f"line{i}" for i in range(1, 11)), encoding="utf-8")
+    target.write_bytes(b"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\n")
     out = tools.read_text_file(str(target), start_line=1, line_count=3)
     assert "line1\nline2\nline3" in out
     assert "windowed" in out and "10 total" in out
@@ -105,17 +105,46 @@ def test_read_text_file_window_marker_when_more_remain(tmp_path):
 
 def test_read_text_file_number_lines(tmp_path):
     target = tmp_path / "a.txt"
-    target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
+    target.write_bytes(b"alpha\nbeta\ngamma")
     out = tools.read_text_file(str(target), number_lines=True)
     assert out == "1: alpha\n2: beta\n3: gamma"
 
 
 def test_read_text_file_number_lines_with_window(tmp_path):
     target = tmp_path / "a.txt"
-    target.write_text("\n".join(f"line{i}" for i in range(1, 13)), encoding="utf-8")
+    target.write_bytes(b"line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10\nline11\nline12\n")
     out = tools.read_text_file(str(target), start_line=10, line_count=3,
                                number_lines=True)
     assert out == "10: line10\n11: line11\n12: line12"
+
+
+def test_read_text_file_window_preserves_crlf(tmp_path):
+    """Windowed read must keep CRLF (no universal-newline normalisation)."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
+    out = tools.read_text_file(str(target), start_line=1, line_count=3)
+    assert out == "alpha\r\nbeta\r\ngamma"
+
+
+def test_read_text_file_number_lines_preserves_crlf(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"alpha\r\nbeta\r\ngamma\r\n")
+    out = tools.read_text_file(str(target), number_lines=True)
+    assert out == "1: alpha\r\n2: beta\r\n3: gamma"
+
+
+def test_read_text_file_window_crlf_matches_full_read(tmp_path):
+    """A windowed read must expose the same line endings as the full read,
+    so old_string built from either matches replace_string_in_file."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"def foo():\r\n    return 1\r\n\r\ndef bar():\r\n")
+    full = tools.read_text_file(str(target))
+    window = tools.read_text_file(str(target), start_line=1, line_count=4)
+    assert "\r\n" in full
+    assert "\r\n" in window
+    # The snippet an agent would copy from the window exists verbatim on disk.
+    snippet = "def foo():\r\n    return 1\r\n\r\ndef bar():"
+    assert snippet in full
 
 
 # ------------------------------------------------------------------ T2 write_text_file
@@ -227,7 +256,7 @@ def test_read_text_file_checksum_full_read(tmp_path):
 def test_read_text_file_checksum_windowed_read(tmp_path):
     import hashlib
     target = tmp_path / "a.txt"
-    target.write_text("alpha\nbeta\ngamma", encoding="utf-8")
+    target.write_bytes(b"alpha\nbeta\ngamma")
     digest = hashlib.sha1(b"alpha\nbeta").hexdigest()[:12]
     out = tools.read_text_file(str(target), start_line=1, line_count=2,
                                checksum=True)

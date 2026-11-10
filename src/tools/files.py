@@ -38,10 +38,13 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
     try:
         if start_line > 0 or line_count > 0 or number_lines:
             # Stream only the requested window instead of loading the whole
-            # file into memory (important for large files).
-            with open(file_path, "r", encoding="utf-8") as f:
-                lines = [line.rstrip("\n")
-                         for line in f.readlines(max_file_bytes)]
+            # file into memory (important for large files).  newline=""
+            # keeps the original line endings so a CRLF file is reported
+            # as CRLF, consistent with the full read below.
+            with open(file_path, "r", encoding="utf-8", newline="") as f:
+                raw_lines = f.readlines(max_file_bytes)
+            eol = "\r\n" if (raw_lines and raw_lines[0].endswith("\r\n")) else "\n"
+            lines = [line.rstrip("\r\n") for line in raw_lines]
         else:
             with open(file_path, "r", encoding="utf-8", newline="") as f:
                 text = f.read()
@@ -54,7 +57,7 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
             width = len(str(start + len(window)))
             window = [f"{start + i + 1:>{width}}: {line}"
                       for i, line in enumerate(window)]
-        payload = "\n".join(window)  # digest covers content, not UI markers
+        payload = eol.join(window)  # digest covers content, not UI markers
         if line_count > 0 and start + line_count < len(lines):
             window.append(
                 f"… [windowed: lines {start + 1}-{start + line_count} of "
@@ -62,7 +65,7 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
         if checksum:
             digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
             window.append(f"[sha1:{digest}]")
-        return "\n".join(window)
+        return eol.join(window)
     if checksum:
         digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
         text += f"\n[sha1:{digest}]"
