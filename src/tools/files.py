@@ -35,7 +35,9 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
     numbers. number_lines prefixes each line with its number ("12: text"),
     useful to cite exact positions for replace_string_in_file.
     ``max_file_bytes`` (0 = unlimited) caps how many bytes are read;
-    the read stops at the cap and the returned text is truncated.
+    the read stops at the cap and the returned text is truncated, with a
+    ``… [truncated: …]`` notice appended so callers know the output is
+    incomplete rather than silently receiving a partial file.
     With ``checksum`` a ``[sha1:…]`` line of the returned text is appended,
     giving a reference digest to verify the content against the file on
     disk (detects transport/assembly corruption of large results).
@@ -43,22 +45,25 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
     file_path = Path(file).resolve()
     if not (file_path.exists() and file_path.is_file()):
         return f"Unable to read '{file}'"
+    truncated = False
     try:
-        if start_line > 0 or line_count > 0 or number_lines:
-            # Stream only the requested window instead of loading the whole
-            # file into memory (important for large files).  newline=""
-            # keeps the original line endings so a CRLF file is reported
-            # as CRLF, consistent with the full read below.
-            with open(file_path, "r", encoding="utf-8", newline="") as f:
-                raw_lines = f.readlines(max_file_bytes)
-            eol = "\r\n" if (raw_lines and raw_lines[0].endswith("\r\n")) else "\n"
-            lines = [line.rstrip("\r\n") for line in raw_lines]
-        else:
-            with open(file_path, "r", encoding="utf-8", newline="") as f:
-                text = f.read()
+        # Read at most max_file_bytes (0 = unlimited).  f.read(cap) is a hard
+        # cap, unlike f.readlines(cap) which is only a hint and overshoots by
+        # whole lines (a single huge line would bypass the cap entirely).
+        # newline="" keeps the original line endings so a CRLF file is
+        # reported as CRLF.  A peek after the cap tells us whether the file
+        # actually extends beyond it so we can flag truncation.
+        with open(file_path, "r", encoding="utf-8", newline="") as f:
+            text = f.read(max_file_bytes)
+            truncated = bool(f.read(1)) if max_file_bytes else False
     except Exception as exc:
         return f"Error: {exc!r}"
     if start_line > 0 or line_count > 0 or number_lines:
+        eol = _dominant_eol(text)
+        raw_lines = text.split("\n")
+        if raw_lines and raw_lines[-1] == "":
+            raw_lines.pop()
+        lines = [line.rstrip("\r\n") for line in raw_lines]
         start = max(start_line - 1, 0) if start_line > 0 else 0
         window = lines[start:start + line_count] if line_count > 0 else lines[start:]
         if number_lines:
@@ -70,12 +75,22 @@ def read_text_file(file: str, start_line: int = 0, line_count: int = 0,
             window.append(
                 f"… [windowed: lines {start + 1}-{start + line_count} of "
                 f"{len(lines)} total — raise line_count or re-read for more]")
+        if truncated:
+            window.append(
+                f"… [truncated: file exceeds {max_file_bytes} byte cap — "
+                f"raise max_file_bytes or re-read for more]")
         if checksum:
             digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
             window.append(f"[sha1:{digest}]")
         return eol.join(window)
     if checksum:
+        # Digest covers content only, not the appended markers, matching the
+        # windowed branch (payload excludes markers).
         digest = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+    if truncated:
+        text += (f"\n… [truncated: file exceeds {max_file_bytes} byte cap — "
+                 f"raise max_file_bytes or re-read for more]")
+    if checksum:
         text += f"\n[sha1:{digest}]"
     return text
 

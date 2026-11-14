@@ -263,6 +263,47 @@ def test_read_text_file_checksum_windowed_read(tmp_path):
     assert out.endswith(f"[sha1:{digest}]")
 
 
+def test_read_text_file_full_read_truncation_marker(tmp_path):
+    """A full read capped by max_file_bytes must flag the truncation."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"0123456789" * 100)
+    out = tools.read_text_file(str(target), max_file_bytes=50)
+    assert out.startswith("0123456789" * 5)
+    assert "truncated" in out and "50 byte cap" in out
+
+
+def test_read_text_file_full_read_not_truncated_when_under_cap(tmp_path):
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"hello")
+    out = tools.read_text_file(str(target), max_file_bytes=100)
+    assert out == "hello"
+
+
+def test_read_text_file_windowed_truncation_marker(tmp_path):
+    """A windowed read hitting the byte cap must flag the truncation even
+    when number_lines is used (no line_count window marker)."""
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"0123456789" * 100 + b"\n")
+    out = tools.read_text_file(str(target), number_lines=True,
+                               max_file_bytes=50)
+    assert "truncated" in out and "50 byte cap" in out
+
+
+def test_read_text_file_truncation_marker_with_checksum(tmp_path):
+    import hashlib
+    target = tmp_path / "a.txt"
+    target.write_bytes(b"0123456789" * 100)
+    out = tools.read_text_file(str(target), max_file_bytes=50, checksum=True)
+    payload = "0123456789" * 5
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:12]
+    assert out.endswith(f"[sha1:{digest}]")
+    assert "truncated" in out
+    # The digest covers the truncated content, not the appended markers, so
+    # the file on disk (full content) must NOT match it.
+    full_digest = hashlib.sha1(b"0123456789" * 100).hexdigest()[:12]
+    assert digest != full_digest
+
+
 # ------------------------------------------------------------------ T3 search/replace
 
 
