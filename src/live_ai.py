@@ -147,6 +147,15 @@ def _validated_code_theme(value: str | None, default: str = "monokai") -> str:
     return value
 
 
+def _validated_markdown(value) -> bool:
+    """`[ui]` markdown: render the final response as Markdown (default False)."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def __getattr__(name: str):
     """Backward-compatible access to ``SpeechGenerator``.
 
@@ -739,6 +748,7 @@ class OpenAICore:
             self._stream = StreamPrinter(
                 text_color=_validated_style(getattr(ui, "assistant_color", None)),
                 code_theme=_validated_code_theme(getattr(ui, "code_theme", None)),
+                markdown=_validated_markdown(getattr(ui, "markdown", None)),
             )
         self._cancel_requested = False
         self._active_stream = None

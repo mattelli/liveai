@@ -13,6 +13,7 @@ from typing import Callable, Literal
 
 from rich.console import Console
 from rich.syntax import Syntax
+from rich.markdown import Markdown
 
 Colors = Literal['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', "grey", 'white', 'reset']
 
@@ -147,12 +148,24 @@ class StreamPrinter:
     token by token instead of appearing all at once at ``flush()``. Only the
     ambiguous prefix at the start of a line (indentation plus up to two
     backticks) is held back until it can be classified as text or as a fence.
+
+    With ``markdown=True`` the whole stream is buffered and rendered once at
+    ``flush()`` via ``rich.markdown.Markdown``, so headings, bold, lists,
+    tables, links and inline code are actually rendered instead of shown as
+    raw literal text. This trades token-by-token streaming for a complete
+    response rendered at the end of the turn.
     """
 
-    def __init__(self, text_color: Colors = "cyan", code_theme: str = "monokai") -> None:
+    def __init__(self, text_color: Colors = "cyan", code_theme: str = "monokai",
+                 markdown: bool = False) -> None:
         self.console = Console()
         self.text_color = text_color
         self.code_theme = code_theme
+        self.markdown = markdown
+        # Markdown mode: buffer the whole response and render it once at
+        # flush() so headings, lists, tables, links and inline code are
+        # actually rendered (a partial token stream cannot be rendered).
+        self._md_buffer: list[str] = []
         self._line = ""              # current line tail not yet classified/emitted
         self._in_code = False
         self._code_lang = "text"
@@ -175,6 +188,11 @@ class StreamPrinter:
 
     def feed(self, content: str) -> None:
         """Push a streamed fragment, emitting plain text as soon as it is safe."""
+        if self.markdown:
+            # Buffer the whole stream; render once at flush() so Markdown
+            # constructs (headings, lists, tables, links) are rendered.
+            self._md_buffer.append(content)
+            return
         start = 0
         while True:
             newline = content.find("\n", start)
@@ -271,6 +289,9 @@ class StreamPrinter:
 
     def flush(self) -> None:
         """Flush any buffered partial line / unterminated code block."""
+        if self.markdown:
+            self._flush_markdown()
+            return
         line, self._line = self._line, ""
         self._plain_started = False
         if self._in_code:
@@ -281,6 +302,17 @@ class StreamPrinter:
             return
         if line and not line.strip().startswith("```"):
             self._emit(line)
+
+    def _flush_markdown(self) -> None:
+        """Render the buffered response as Markdown (once, at turn end)."""
+        text = "".join(self._md_buffer).strip()
+        self._md_buffer = []
+        if not text:
+            return
+        with self._spin_lock:
+            self._erase_spinner_locked()
+            self.console.print(Markdown(text, code_theme=self.code_theme))
+            self._dirty_line = False
 
     # -------------------------------------------------- activity spinner
 

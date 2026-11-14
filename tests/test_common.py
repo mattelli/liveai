@@ -131,6 +131,72 @@ def test_stream_printer_indent_then_text():
     assert "  hello" in _printed(sp)
 
 
+# -------------------------------------------------------- markdown rendering
+
+
+def _capture_markdown_printer():
+    """StreamPrinter in markdown mode writing into an in-memory console."""
+    sp = StreamPrinter(markdown=True)
+    sp.console = Console(file=io.StringIO(), width=80)
+    return sp
+
+
+def test_markdown_printer_buffers_until_flush():
+    sp = _capture_markdown_printer()
+    sp.feed("# Hello")
+    # Nothing emitted while streaming: markdown needs the whole response.
+    assert _printed(sp) == ""
+    sp.feed("\n\nSome **bold** text")
+    assert _printed(sp) == ""
+    sp.flush()
+    out = _printed(sp)
+    assert "Hello" in out
+    assert "bold" in out
+    assert "#" not in out  # heading marker consumed by the renderer
+
+
+def test_markdown_printer_renders_heading_and_list():
+    sp = _capture_markdown_printer()
+    sp.feed("# Title\n\n- item one\n- item two\n")
+    sp.flush()
+    out = _printed(sp)
+    assert "Title" in out
+    assert "item one" in out
+    assert "item two" in out
+
+
+def test_markdown_printer_renders_code_block():
+    sp = _capture_markdown_printer()
+    sp.feed("```py\nx = 1\n```\n")
+    sp.flush()
+    out = _printed(sp)
+    assert "x = 1" in out
+    assert "```" not in out
+
+
+def test_markdown_printer_empty_flush_is_noop():
+    sp = _capture_markdown_printer()
+    sp.feed("   \n")
+    sp.flush()  # must not raise
+    assert _printed(sp) == ""
+
+
+def test_markdown_printer_renders_table():
+    sp = _capture_markdown_printer()
+    sp.feed("| a | b |\n|---|---|\n| 1 | 2 |\n")
+    sp.flush()
+    out = _printed(sp)
+    assert "a" in out and "b" in out
+    assert "1" in out and "2" in out
+
+
+def test_markdown_printer_non_markdown_default_streams():
+    """Without markdown=True the printer keeps streaming plain text."""
+    sp = _capture_printer()
+    sp.feed("Hello **world**")
+    assert _printed(sp) == "Hello **world**"  # raw literal text, streamed
+
+
 def test_load_config_without_input_block(tmp_path):
     cfg = tmp_path / "config.toml"
     cfg.write_text("[brain]\nmodel = 'x'\n")
