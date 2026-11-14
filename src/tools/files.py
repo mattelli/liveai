@@ -178,7 +178,8 @@ def search_pattern_in_files(
     Search for a pattern in files within a directory recursively.
     Returns a list of the file paths and the line numbers where pattern is found.
     ``include_extensions``/``exclude_extensions`` accept ``py`` or ``.py``.
-    ``exclude_glob`` (default ``".*"``) skips hidden entries.
+    ``exclude_glob`` (default ``".*"``) skips hidden entries at any depth
+    (matched as exact paths).
     ``exclude_dirs`` (default ``"target"``) skips whole build/dependency
     directories (comma-separated names, matched against any path part);
     pass ``""`` to disable.
@@ -196,13 +197,18 @@ def search_pattern_in_files(
         return f"'{search_dir}' does not exist!"
     if not search_dir.is_dir():
         return f"'{search_dir}' is not a directory!"
-    excluded_items = []
+    excluded_paths: list[Path] = []
     if exclude_glob:
-        excluded_items = [f.name for f in search_dir.glob(exclude_glob)]
+        # Recursive glob so hidden entries at any depth are excluded, and
+        # compare resolved paths exactly (no substring false positives). A
+        # matched directory excludes its whole subtree.
+        excluded_paths = [p.resolve() for p in search_dir.rglob(exclude_glob)]
     for file_path in search_dir.rglob("*"):
         if file_path.is_dir():
             continue
-        if any(item in file_path.parts for item in excluded_items):
+        resolved = file_path.resolve()
+        if any(resolved == ex or ex in resolved.parents
+               for ex in excluded_paths):
             continue
         if any(part.lower() in excluded_dir_names
                for part in file_path.parts[:-1]):

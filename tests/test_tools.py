@@ -1149,6 +1149,37 @@ def test_search_pattern_in_files_missing_dir(tmp_path):
     assert "does not exist" in tools.search_pattern_in_files("x", str(tmp_path / "nope"))
 
 
+def test_search_pattern_in_files_exclude_glob_recursive_hidden(tmp_path):
+    """Hidden entries at any depth are excluded, not just the top level."""
+    (tmp_path / "visible.txt").write_text("needle\n", encoding="utf-8")
+    sub = tmp_path / "sub"
+    sub.mkdir()
+    (sub / ".hidden.txt").write_text("needle\n", encoding="utf-8")
+    out = tools.search_pattern_in_files("needle", str(tmp_path),
+                                        exclude_glob=".*")
+    assert "visible.txt" in out
+    assert ".hidden.txt" not in out
+
+
+def test_search_pattern_in_files_exclude_glob_exact_path(tmp_path):
+    """exclude_glob matches exact paths, not substrings of path parts."""
+    (tmp_path / "config.py").write_text("needle\n", encoding="utf-8")
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "inner.py").write_text("needle\n", encoding="utf-8")
+    # exclude_glob="config" must skip only the dir named exactly 'config',
+    # not the file 'config.py' (substring false positive).
+    out = tools.search_pattern_in_files("needle", str(tmp_path),
+                                        exclude_glob="config")
+    assert "config.py" in out
+    assert "inner.py" not in out
+
+
+def test_search_pattern_in_files_exclude_glob_none_disables(tmp_path):
+    (tmp_path / ".hidden.txt").write_text("needle\n", encoding="utf-8")
+    out = tools.search_pattern_in_files("needle", str(tmp_path), exclude_glob=None)
+    assert ".hidden.txt" in out
+
+
 # ------------------------------------------------------------------ T9 capture/cleanup
 
 
