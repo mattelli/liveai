@@ -418,7 +418,7 @@ def monitor_settings(config: SimpleNamespace) -> dict:
     agent = getattr(config, "agent", None)
     # load_config path-resolves keys ending in "_file" (relative to the config
     # dir); keep whatever arrives (str or Path) and default when unset.
-    log_file = getattr(agent, "monitor_log_file", None)
+    log_file = getattr(agent, "monitor_log_file_cwd", None)
     return {
         "monitor": _monitor_flags(getattr(agent, "monitor", None)),
         "monitor_log_file": str(log_file) if log_file else _DEFAULT_MONITOR_LOG_FILE,
@@ -462,7 +462,7 @@ class AgentMonitor:
     Events are plain dicts (JSON-friendly): ``{"ts", "agent", "event", ...}``
     with ``event`` in ``{"start", "answer", "tool_call", "tool_result"}``.
     ``record()`` appends, trims to ``maxlen`` and mirrors every event to the
-    optional JSONL file (``[agent] monitor_log_file``) - a failed write is
+    optional JSONL file (``[agent] monitor_log_file_cwd``) - a failed write is
     logged once and the file sink is dropped (monitoring must never break the
     agents). ``snapshot()`` returns the most recent events oldest-first for
     the UI; ``clear()`` empties the buffer (the file sink is untouched).

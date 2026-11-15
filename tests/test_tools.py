@@ -1833,7 +1833,7 @@ def memory_seam(monkeypatch, tmp_path):
     monkeypatch.setattr(tools.memory, "_config_cache", None)
     monkeypatch.setattr(tools.memory._default, "_summarizer", None)
     tools.memory.configure(SimpleNamespace(
-        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path_cwd=str(tmp_path / "history.txt"),
                               system_prompt="be helpful"),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
     ))
@@ -2060,7 +2060,7 @@ def test_module_default_compact_chat(monkeypatch, tmp_path):
     monkeypatch.setattr(tools.memory, "_history_provider", None)
     monkeypatch.setattr(tools.memory, "_config_cache", None)
     tools.memory.configure(SimpleNamespace(
-        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path_cwd=str(tmp_path / "history.txt"),
                               system_prompt="be helpful"),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
     ))
@@ -2262,7 +2262,7 @@ def test_compact_chat_caps_reseeded_recall(memory_seam, tmp_path, monkeypatch):
                                           encoding="utf-8")
     monkeypatch.setattr(tools.memory, "_config_cache", None)
     tools.memory.configure(SimpleNamespace(
-        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path_cwd=str(tmp_path / "history.txt"),
                               system_prompt="be helpful",
                               max_tool_result_chars=4000),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
@@ -2309,7 +2309,7 @@ def test_compact_chat_caps_oversized_summary(memory_seam, tmp_path, monkeypatch)
 
     monkeypatch.setattr(tools.memory, "_config_cache", None)
     tools.memory.configure(SimpleNamespace(
-        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path_cwd=str(tmp_path / "history.txt"),
                               system_prompt="be helpful",
                               max_tool_result_chars=4000),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
@@ -2369,7 +2369,7 @@ def test_compact_chat_capped_summary_still_counted(memory_seam, tmp_path, monkey
     """The result string reports the pre-cap summarized message count."""
     monkeypatch.setattr(tools.memory, "_config_cache", None)
     tools.memory.configure(SimpleNamespace(
-        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path_cwd=str(tmp_path / "history.txt"),
                               system_prompt="be helpful",
                               max_tool_result_chars=100),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),

@@ -13,7 +13,7 @@ instance so the historical call API and test seams keep working.
 
     [delegation.scheduler]
     enabled = true                # false (or missing section) -> tools are no-ops
-    persist_file = "data/schedule.json"  # resolved relative to the config file
+    persist_file_cwd = ".liveai/schedule.json"  # resolved relative to the launch dir
     on_missed = "skip"            # one-shot tasks missed while the app was off:
                                   # "run" -> execute immediately, "skip" -> drop
 
@@ -81,7 +81,7 @@ def configure(config) -> None:
     section = getattr(getattr(config, "delegation", None), "scheduler", None)
     _CONFIG = {
         "enabled": bool(getattr(section, "enabled", False)),
-        "persist_file": getattr(section, "persist_file", None),
+        "persist_file": getattr(section, "persist_file_cwd", None),
         "on_missed": getattr(section, "on_missed", "skip"),
         "config": config,  # full config: the execution agent needs [brain]
     }

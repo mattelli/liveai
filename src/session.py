@@ -613,9 +613,9 @@ class ConversationSession:
                    "/session load <name|index>", "yellow")
 
     def _sessions_dir(self) -> pathlib.Path | None:
-        """Session folder from ``[brain] sessions_dir`` (None when unset)."""
+        """Session folder from ``[brain] sessions_dir_cwd`` (None when unset)."""
         brain = getattr(getattr(self.agent, "config", None), "brain", None)
-        value = getattr(brain, "sessions_dir", None) if brain is not None else None
+        value = getattr(brain, "sessions_dir_cwd", None) if brain is not None else None
         return pathlib.Path(value) if value else None
 
     def _chat_history(self) -> list[dict] | None:
@@ -632,7 +632,7 @@ class ConversationSession:
         directory = self._sessions_dir()
         if directory is None:
             cprint("No session folder configured: "
-                   "set [brain] sessions_dir in config.toml", "red")
+                   "set [brain] sessions_dir_cwd in config.toml", "red")
             return
         if name:
             stem = safe_filename(name)

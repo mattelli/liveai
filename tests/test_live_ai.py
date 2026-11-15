@@ -355,7 +355,7 @@ def _fake_openai(monkeypatch):
 def _remote_config(**brain_overrides):
     brain = dict(
         model="test-model", system_prompt="s",
-        memory_path="h", temperature=0.6, max_response_tokens=0.2,
+        memory_path_cwd="h", temperature=0.6, max_response_tokens=0.2,
         base_url="https://api.test/v1", api_key_env="TEST_API_KEY",
     )
     brain.update(brain_overrides)

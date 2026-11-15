@@ -29,7 +29,7 @@ def _offline_agent(monkeypatch, tmp_path, agent_overrides=None, **kwargs):
     _fake_openai(monkeypatch)
     monkeypatch.setenv("TEST_API_KEY", "k")
     memory_mod.configure(SimpleNamespace(
-        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path_cwd=str(tmp_path / "history.txt"),
                               system_prompt="be helpful"),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
     ))

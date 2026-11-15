@@ -213,7 +213,7 @@ def test_monitor_settings_keys():
     from types import SimpleNamespace
 
     config = SimpleNamespace(agent=SimpleNamespace(
-        monitor="calls,log", monitor_log_file="logs/sub.jsonl",
+        monitor="calls,log", monitor_log_file_cwd="logs/sub.jsonl",
         monitor_buffer="25"))
     settings = live_ai_mod.monitor_settings(config)
     assert settings["monitor"] == {"calls", "log"}
@@ -227,7 +227,7 @@ def test_monitor_settings_log_file_path_object():
     from types import SimpleNamespace
 
     config = SimpleNamespace(agent=SimpleNamespace(
-        monitor_log_file=_pl.Path("x/y.jsonl")))
+        monitor_log_file_cwd=_pl.Path("x/y.jsonl")))
     assert live_ai_mod.monitor_settings(config)["monitor_log_file"] == str(_pl.Path("x/y.jsonl"))
 
 
@@ -240,7 +240,7 @@ def test_monitor_settings_load_config_round_trip(tmp_path):
         [agent]
         bootstrap_prompt = "hello"
         monitor = "calls, log"
-        monitor_log_file = "logs/agents.jsonl"
+        monitor_log_file_cwd = ".liveai/agents.jsonl"
         monitor_buffer = 50
     """), encoding="utf-8")
     config = load_config(config_file)
@@ -284,7 +284,7 @@ def test_build_monitor_log_flag_only_creates_jsonl_sink(tmp_path):
     log_file = tmp_path / "agents.jsonl"
     try:
         config = SimpleNamespace(agent=SimpleNamespace(
-            monitor="log", monitor_log_file=str(log_file)))
+            monitor="log", monitor_log_file_cwd=str(log_file)))
         monitor = live_ai_mod.build_monitor(config)
         monitor.record("scheduler", "answer", answer="done")
         lines = log_file.read_text(encoding="utf-8").splitlines()
@@ -348,7 +348,7 @@ def _offline_agent(monkeypatch, tmp_path):
     _fake_openai(monkeypatch)
     monkeypatch.setenv("TEST_API_KEY", "k")
     memory_mod.configure(SimpleNamespace(
-        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+        brain=SimpleNamespace(memory_path_cwd=str(tmp_path / "history.txt"),
                               system_prompt="be helpful"),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
     ))

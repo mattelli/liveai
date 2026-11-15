@@ -399,42 +399,34 @@ class StreamPrinter:
             self._spin_suppressed = True
 
 
-# Runtime-state path keys (dotted TOML keys) resolved against the data root
-# (``[paths] data_dir``, a per-launch-directory ``.liveai`` folder) instead of
-# the config directory. Everything else keeps resolving against the config
-# file, so shared assets (``.res/...`` weights, corpora, voices) stay put.
-_STATE_PATH_KEYS = frozenset({
-    ("brain", "memory_path"),
-    ("brain", "sessions_dir"),
-    ("agent", "monitor_log_file"),
-    ("input", "history_file"),
-    ("delegation", "scheduler", "persist_file"),
-    ("paths", "tmp_dir"),
-    ("paths", "behaviour_dir"),
-})
+# Any config key ending in ``_cwd`` is resolved against the *launch*
+# directory (the process cwd), not the config directory. That is the single
+# rule that makes each launch directory keep its own runtime data: the values
+# carry the data-root prefix (e.g. ``memory_path_cwd = ".liveai/memory.log"``).
+# Every other ``*_file`` / ``*_dir`` / ``*_path`` key keeps resolving against
+# the config directory, so shared assets (``.res/...`` weights, corpora,
+# voices) and the config file stay together.
+_CWD_SUFFIX = "_cwd"
 
-# ``[paths] data_dir`` is the only key resolved against the *launch* directory
-# (the process cwd), not the config directory: that is what makes each launch
-# directory keep its own data.
-_CWD_PATH_KEYS = frozenset({("paths", "data_dir")})
-
-_DEFAULT_DATA_DIR = ".liveai"        # per-launch-directory runtime data root
-_DEFAULT_TMP_DIR = "tmp"             # scratch folder under the data root
-_DEFAULT_BEHAVIOUR_DIR = "behaviour"  # markdown instruction folder
+# Defaults for the ``[cwd]`` section, filled in when a key is absent so
+# consumers can always read them. Values are launch-directory-relative.
+_DEFAULT_DATA_DIR_CWD = ".liveai"                 # per-launch runtime data root
+_DEFAULT_TMP_DIR_CWD = ".liveai/tmp"              # scratch folder under it
+_DEFAULT_BEHAVIOUR_DIR_CWD = ".liveai/behaviour"  # markdown instruction folder
 
 
 def ensure_data_dirs(config: SimpleNamespace) -> None:
-    """Create the ``[paths]`` folders (data root, tmp, behaviour) if missing.
+    """Create the ``[cwd]`` folders (data root, tmp, behaviour) if missing.
 
     Best-effort: a read-only or otherwise unusable launch directory must not
     stop the session from starting (the consumers create their own parents
     too), so failures are swallowed.
     """
-    paths = getattr(config, "paths", None)
-    if paths is None:
+    cwd = getattr(config, "cwd", None)
+    if cwd is None:
         return
-    for attr in ("data_dir", "tmp_dir", "behaviour_dir"):
-        value = getattr(paths, attr, None)
+    for attr in ("data_dir_cwd", "tmp_dir_cwd", "behaviour_dir_cwd"):
+        value = getattr(cwd, attr, None)
         if not value:
             continue
         try:
@@ -452,32 +444,28 @@ def load_config(config_path: Path) -> SimpleNamespace:
     * **config directory** - the default for every ``*_file`` / ``*_dir`` /
       ``*_path`` key, so shared assets (``.res/...``) and the config file
       itself stay together.
-    * **data root** - ``[paths] data_dir`` (default ``.liveai``), resolved
-      against the *launch* directory (the process cwd). The runtime-state keys
-      (``memory_path``, ``sessions_dir``, ``monitor_log_file``,
-      ``history_file``, ``persist_file``, ``tmp_dir``, ``behaviour_dir``) are
-      resolved under it, so each launch directory keeps its own data.
+    * **launch directory** (the process cwd) - for every key ending in
+      ``_cwd``. These are the runtime-state paths (``[cwd] data_dir_cwd`` /
+      ``tmp_dir_cwd`` / ``behaviour_dir_cwd``, ``[brain] memory_path_cwd`` /
+      ``sessions_dir_cwd``, ``[agent] monitor_log_file_cwd``,
+      ``[delegation.scheduler] persist_file_cwd``, ``[input]
+      history_file_cwd``); their values carry the data-root prefix, so each
+      launch directory keeps its own data.
 
-    The data root and its ``tmp`` / ``behaviour`` subfolders are created
-    (best-effort) so first-run consumers find them.
+    The ``[cwd]`` defaults are filled in when absent; the folders themselves
+    are created by :func:`ensure_data_dirs` (called by ``main.py``).
     """
     config_dir = config_path.parent.resolve()
     launch_dir = Path.cwd().resolve()
     with open(config_path, "rb") as f:
         data = tomllib.load(f)
 
-    # Fill the [paths] defaults so consumers can always read them, even when
-    # the section (or one of its keys) is absent.
-    paths_section = data.setdefault("paths", {})
-    paths_section.setdefault("data_dir", _DEFAULT_DATA_DIR)
-    paths_section.setdefault("tmp_dir", _DEFAULT_TMP_DIR)
-    paths_section.setdefault("behaviour_dir", _DEFAULT_BEHAVIOUR_DIR)
-
-    data_dir_value = paths_section.get("data_dir")
-    data_root = (
-        (launch_dir / data_dir_value).resolve()
-        if isinstance(data_dir_value, str) else Path(data_dir_value)
-    )
+    # Fill the [cwd] defaults so consumers can always read them, even when the
+    # section (or one of its keys) is absent.
+    cwd_section = data.setdefault("cwd", {})
+    cwd_section.setdefault("data_dir_cwd", _DEFAULT_DATA_DIR_CWD)
+    cwd_section.setdefault("tmp_dir_cwd", _DEFAULT_TMP_DIR_CWD)
+    cwd_section.setdefault("behaviour_dir_cwd", _DEFAULT_BEHAVIOUR_DIR_CWD)
 
     def resolve_path(value, base_dir):
         """Resolve a path string relative to ``base_dir``."""
@@ -490,20 +478,16 @@ def load_config(config_path: Path) -> SimpleNamespace:
         """Recursively convert a dict to a SimpleNamespace, resolving paths.
 
         Only scalar string values are path-resolved; strings inside TOML
-        lists are kept verbatim (they are labels/prompts, not paths). The
-        dotted ``prefix`` selects the base: runtime-state keys resolve under
-        the data root, ``[paths] data_dir`` under the launch directory, and
-        everything else under the config directory.
+        lists are kept verbatim (they are labels/prompts, not paths). Keys
+        ending in ``_cwd`` resolve against the launch directory; every other
+        path key resolves against the config directory.
         """
         result = {}
         for k, v in d.items():
-            key = prefix + (k,)
             if isinstance(v, dict):
-                result[k] = namespace_from_dict(v, base_dir, key)
-            elif key in _CWD_PATH_KEYS:
+                result[k] = namespace_from_dict(v, base_dir, prefix + (k,))
+            elif k.endswith(_CWD_SUFFIX):
                 result[k] = resolve_path(v, launch_dir)
-            elif key in _STATE_PATH_KEYS:
-                result[k] = resolve_path(v, data_root)
             elif k.endswith("_file") or k.endswith("_dir")  or k.endswith("_path"):
                 result[k] = resolve_path(v, base_dir)
             else:

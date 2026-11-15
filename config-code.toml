@@ -1,14 +1,13 @@
 [logging]
 level = "WARNING"
 
-[paths] # runtime data root: a per-launch-directory ".liveai" folder holding
-        # this run's state. Resolved relative to the directory main.py is
-        # launched from (not the config file), so each launch directory keeps
-        # its own data. Shared assets (.res/... weights, corpora, voices) and
-        # the config files stay in the project root.
-data_dir = ".liveai"        # data root; contains memory.log, sessions/, agents.jsonl, input.log, schedule.json, tmp/, behaviour/
-tmp_dir = "tmp"             # scratch folder (under data_dir) for files the agent writes when no explicit path is given
-behaviour_dir = "behaviour" # markdown instruction files for the agent (discovered via the bootstrap prompt)
+[cwd] # runtime data root: paths ending in "_cwd" are resolved relative to the
+      # directory main.py is launched from (not the config file), so each
+      # launch directory keeps its own data. Shared assets (.res/... weights,
+      # corpora, voices) and the config files stay in the project root.
+data_dir_cwd = ".liveai"             # data root; contains memory.log, sessions/, agents.jsonl, input.log, schedule.json, tmp/, behaviour/
+tmp_dir_cwd = ".liveai/tmp"          # scratch folder for files the agent writes when no explicit path is given
+behaviour_dir_cwd = ".liveai/behaviour"  # markdown instruction files for the agent (discovered via the bootstrap prompt)
 
 [brain] # LLM configuration: the model connection (model, base_url, api_key_env) lives in the models JSON file ([brain] models_file); 
 
@@ -18,8 +17,8 @@ behaviour_dir = "behaviour" # markdown instruction files for the agent (discover
 # model = "z-ai/glm-5.3-flash"
 
 system_prompt = "You are a helpful coding agent, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
-memory_path = "memory.log"        # personal memory (under [paths] data_dir)
-sessions_dir = "sessions"          # folder for /session store|list|load chat session files (JSON; under [paths] data_dir)
+memory_path_cwd = ".liveai/memory.log"  # personal memory (relative to the launch dir)
+sessions_dir_cwd = ".liveai/sessions"   # folder for /session store|list|load chat session files (JSON)
 models_file = "models.json"        # models: first entry boots, /model switches (JSON: name -> {api_key_env, base_url, model})
 max_response_tokens = 0.1          # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
 temperature = 0.6                  # randomness (0 = deterministic, 1 = random)
@@ -39,14 +38,14 @@ max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
 tool_doc_chars = 300       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
 tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
 monitor = "log"                                  # scheduled-task monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
-monitor_log_file = "agents.jsonl"                # JSONL event log path (monitor = "log"; under [paths] data_dir)
+monitor_log_file_cwd = ".liveai/agents.jsonl"    # JSONL event log path (monitor = "log"; relative to the launch dir)
 monitor_buffer = 200                             # in-memory events kept for the agent_activity tool
 
 [delegation] # background/delegated work: scheduler, notifications, sub-agents (all keys optional)
 
 [delegation.scheduler] # schedule agent prompts for a future time (all keys optional)
 enabled = false                      # false (or missing section) -> tools are no-ops
-persist_file = "schedule.json"       # task persistence (survives restarts; under [paths] data_dir)
+persist_file_cwd = ".liveai/schedule.json"  # task persistence (survives restarts; relative to the launch dir)
 on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
 
 [delegation.notify] # terminal hint when a background task completes (all keys optional)
@@ -81,7 +80,7 @@ show_thinking = true        # Chain-of-thought visualization, reasoning is displ
 max_thinking_tokens = 0     # max tokens of thinking to visualize (0 = unlimited)
 
 [input] # Interactive chat input (prompt_toolkit). All keys optional.
-history_file = "input.log"       # prompt_toolkit history (under [paths] data_dir); "." or empty disables persistence
+history_file_cwd = ".liveai/input.log"  # prompt_toolkit history (relative to the launch dir); "." or empty disables persistence
 prompt_toolkit = true            # false -> builtin input() fallback
 auto_suggest = true              # inline history suggestions
 completion = true                # complete /slash commands with Tab

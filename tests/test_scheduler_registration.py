@@ -63,13 +63,13 @@ def test_config_parses_scheduler_section(tmp_path):
     config_file.write_text(
         "[delegation.scheduler]\n"
         'enabled = true\n'
-        'persist_file = "data/schedule.json"\n'
+        'persist_file_cwd = ".liveai/schedule.json"\n'
         'on_missed = "run"\n',
         encoding="utf-8")
     config = load_config(config_file)
     section = config.delegation.scheduler
     assert section.enabled is True
-    assert str(section.persist_file).endswith("schedule.json")  # path resolved
+    assert str(section.persist_file_cwd).endswith("schedule.json")  # path resolved
     assert section.on_missed == "run"
 
 
@@ -85,7 +85,7 @@ def test_configure_with_real_config_shape(tmp_path):
     from types import SimpleNamespace
 
     config = SimpleNamespace(delegation=SimpleNamespace(scheduler=SimpleNamespace(
-        enabled=True, persist_file=str(tmp_path / "schedule.json"),
+        enabled=True, persist_file_cwd=str(tmp_path / "schedule.json"),
         on_missed="skip")))
     scheduler_module.configure(config)
     try:

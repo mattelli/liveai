@@ -172,7 +172,7 @@ def test_chat_reader_uses_input_config(monkeypatch):
 
     cfg = types.SimpleNamespace(
         input=types.SimpleNamespace(
-            history_file=".chat_history", auto_suggest=False,
+            history_file_cwd=".liveai/.chat_history", auto_suggest=False,
             completion=False, multiline=True, explicit_paste=False,
         )
     )

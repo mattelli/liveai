@@ -268,7 +268,7 @@ def test_configure_reads_section():
     from types import SimpleNamespace
     scheduler_module.configure(SimpleNamespace(delegation=SimpleNamespace(
         scheduler=SimpleNamespace(
-        enabled=True, persist_file="data/schedule.json", on_missed="run"))))
+        enabled=True, persist_file_cwd="data/schedule.json", on_missed="run"))))
     assert scheduler_module._CONFIG["enabled"] is True
     assert scheduler_module._CONFIG["persist_file"] == "data/schedule.json"
     assert scheduler_module._CONFIG["on_missed"] == "run"

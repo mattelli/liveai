@@ -590,7 +590,7 @@ class SessionAgent(FakeAgent):
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
         ]
-        self.config = SimpleNamespace(brain=SimpleNamespace(sessions_dir=sessions_dir))
+        self.config = SimpleNamespace(brain=SimpleNamespace(sessions_dir_cwd=sessions_dir))
         self._model_name = "fake-model"
 
     @property
