@@ -24,6 +24,8 @@
 
    In the plan, split the implementation into simple tasks, and specify that
    **one commit shall be done per task**.
+   **proceed one task at the time and commit, ask confirmation before start with the next task**.
+   **detail what has been done in each commit message**.
 
    **If NO**, always ask the user whether the changes can be committed.
 
