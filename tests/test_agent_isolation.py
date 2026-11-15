@@ -103,6 +103,39 @@ def test_compact_chat_in_memory_topic():
     assert "compact_chat" in _TOOL_TOPICS["memory"]
 
 
+def test_isolated_agent_binds_its_own_summarizer(monkeypatch, tmp_path):
+    """An isolated agent's compact_chat uses the LLM summarizer, not the fallback."""
+    agent = _offline_agent(monkeypatch, tmp_path, isolated_tools=True)
+    compact = [t for t in agent.tools if t.__name__ == "compact_chat"][0]
+    instance = compact.__self__
+
+    assert instance._summarizer is not None
+    assert instance._summarizer == agent._summarize_messages
+    # the instance is also kept for auto-compaction
+    assert agent._memory_tools is instance
+
+
+def test_isolated_agent_compact_chat_uses_bound_summarizer(monkeypatch, tmp_path):
+    """End to end: the per-agent summarizer produces the injected summary."""
+    agent = _offline_agent(monkeypatch, tmp_path, isolated_tools=True)
+    compact = [t for t in agent.tools if t.__name__ == "compact_chat"][0]
+    instance = compact.__self__
+    seen = []
+    instance.bind_summarizer(lambda old: seen.append(list(old)) or "MODEL SUMMARY")
+    agent._messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+
+    result = compact()
+
+    assert result.startswith("Chat compacted:")
+    assert "(extractive fallback)" not in result
+    assert "MODEL SUMMARY" in agent._messages[2]["content"]
+    assert seen  # the bound summarizer was actually called
+
+
 # ------------------------------------------------------ task 3: quiet mode
 
 

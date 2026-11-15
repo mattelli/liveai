@@ -1503,15 +1503,26 @@ class Brain(OpenAICore):
     def _auto_compact(self) -> str:
         """One automatic compaction via the memory tool (auto_compaction).
 
-        Calls the module-default ``compact_chat`` with the configured
-        ``[brain] compact_keep_messages``. Never raises: any failure returns
-        an empty string so the caller falls back to the plain pruning path.
+        Uses this agent's own ``MemoryTools`` instance when it has one
+        (isolated agents bind their history there) and the module-default
+        ``compact_chat`` otherwise (main agent), with the configured
+        ``[brain] compact_keep_messages``. Never raises: any failure, and any
+        "nothing to do" outcome, returns an empty string so the caller falls
+        back to the plain pruning path and does not log a bogus
+        "auto-compacted" line.
         """
         try:
             from src.tools import memory as memory_tools
             keep = getattr(self, "_compact_keep_messages", 40)
-            result = memory_tools.compact_chat(keep)
-            return result if not result.startswith("Error:") else ""
+            instance = getattr(self, "_memory_tools", None)
+            compact = (instance.compact_chat if instance is not None
+                       else memory_tools.compact_chat)
+            result = compact(keep)
+            if result.startswith("Error:"):
+                return ""
+            if result.startswith("Context is already compact"):
+                return ""
+            return result
         except Exception as e:
             self.logger.warning("Auto-compaction failed: %s", e)
             return ""
@@ -2002,7 +2013,14 @@ class Agent(Brain):
         memory = memory_mod.MemoryTools()
         vision = vision_mod.VisionTools()
         memory.bind_history(lambda: self._messages)
+        # Same summarizer as the main agent, but on this agent's own instance:
+        # without it the per-agent compact_chat would always use the extractive
+        # fallback, and auto-compaction could not use this agent's history.
+        memory.bind_summarizer(self._summarize_messages)
         vision.bind_session(self)
+        # Kept for _auto_compact: it must compact *this* agent's history, not
+        # the module-default one (which is never bound for isolated agents).
+        self._memory_tools = memory
         per_agent = {
             memory_mod.recall_memory: memory.recall_memory,
             memory_mod.store_memory: memory.store_memory,

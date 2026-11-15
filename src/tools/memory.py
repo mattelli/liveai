@@ -331,7 +331,9 @@ class MemoryTools:
         range it replaces (the extractive fallback is exempt: it is a
         content-preserving last resort whose output is about as long as its
         input). ``keep_last`` is clamped so at least 2 recent messages are
-        kept and at least one message stays summaryable.
+        kept and at least one message stays summaryable. The result string
+        reports " (extractive fallback)" when no bound summarizer produced the
+        summary, so a silent degradation to the fallback is visible.
         """
         try:
             provider = self._history_provider
@@ -402,9 +404,10 @@ class MemoryTools:
                 return "Context is already compact; nothing to do."
 
             messages[:] = new_history  # in place: same list object for the session
+            note = "" if used_bound else " (extractive fallback)"
             return (
                 f"Chat compacted: {len(old)} messages summarized into 1, "
-                f"{len(recent)} kept."
+                f"{len(recent)} kept.{note}"
             )
         except Exception as e:
             return f"Error: {e}"

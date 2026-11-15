@@ -2537,6 +2537,37 @@ def test_for_owner_returns_isolated_base_instance(memory_seam):
     assert instance._history_provider is None  # not the module global
 
 
+def test_compact_chat_reports_extractive_fallback(memory_seam):
+    """A silent degradation to the fallback is visible in the result string."""
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "")  # LLM summarizer failed
+
+    result = memory_seam.compact_chat()
+
+    assert result.startswith("Chat compacted:")
+    assert result.endswith("(extractive fallback)")
+    assert "old 0" in messages[2]["content"]  # extractive text was used
+
+
+def test_compact_chat_no_fallback_note_with_bound_summarizer(memory_seam):
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "MODEL SUMMARY")
+
+    result = memory_seam.compact_chat()
+
+    assert "(extractive fallback)" not in result
+
+
 # ------------------------------------------------------------------ T16 speech
 
 

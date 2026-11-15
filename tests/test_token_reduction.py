@@ -479,6 +479,40 @@ def test_auto_compact_error_result_is_empty(monkeypatch):
     assert agent._auto_compact() == ""
 
 
+def test_auto_compact_maps_nothing_to_do_to_empty(monkeypatch, caplog):
+    """A no-op compaction must not be reported as an auto-compaction."""
+    import src.tools.memory as memory_mod
+    monkeypatch.setattr(memory_mod, "compact_chat",
+                        lambda keep_last=4: "Context is already compact; nothing to do.")
+    agent = _BareAgent()
+    agent._compact_keep_messages = 4
+
+    with caplog.at_level("INFO"):
+        assert agent._auto_compact() == ""
+
+    assert "auto-compacted" not in caplog.text
+
+
+def test_auto_compact_uses_agent_instance_when_present(monkeypatch):
+    """An isolated agent compacts its own history, not the module default."""
+    import src.tools.memory as memory_mod
+    monkeypatch.setattr(memory_mod, "compact_chat",
+                        lambda keep_last=4: "Chat compacted: module default")
+    seen = {}
+
+    class _Instance:
+        def compact_chat(self, keep_last=4):
+            seen["keep"] = keep_last
+            return "Chat compacted: own instance"
+
+    agent = _BareAgent()
+    agent._compact_keep_messages = 6
+    agent._memory_tools = _Instance()
+
+    assert agent._auto_compact() == "Chat compacted: own instance"
+    assert seen == {"keep": 6}
+
+
 def test_compact_keep_messages_defaults_to_context_keep():
     agent = _BareAgent()
     agent._compact_keep_messages = 40
