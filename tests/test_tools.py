@@ -2314,9 +2314,11 @@ def test_compact_chat_caps_oversized_summary(memory_seam, tmp_path, monkeypatch)
                               max_tool_result_chars=4000),
         agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
     ))
+    # the summarized range must be larger than the summary, otherwise the
+    # growth guard (T5) correctly refuses the compaction
     messages = (
         [{"role": "system", "content": "be helpful"}]
-        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "old " + "x" * 2000} for _ in range(6)]
         + [{"role": "user", "content": "recent"}]
     )
     memory_seam.bind_history(lambda: messages)
@@ -2335,13 +2337,15 @@ def test_compact_chat_summary_uncapped_when_limit_zero(memory_seam):
     """max_tool_result_chars = 0 keeps the historical uncapped behavior."""
     messages = (
         [{"role": "system", "content": "be helpful"}]
-        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "old " + "x" * 20_000} for _ in range(6)]
         + [{"role": "user", "content": "recent"}]
     )
     memory_seam.bind_history(lambda: messages)
     memory_seam.bind_summarizer(lambda old: "Q" * 50_000)
 
-    memory_seam.compact_chat()
+    # keep_last=2 -> the summarized range (5 messages, ~100k chars) is larger
+    # than the summary, so the growth guard (T5) lets the compaction through
+    memory_seam.compact_chat(keep_last=2)
 
     injected = messages[2]["content"]
     assert "[truncated," not in injected
@@ -2372,7 +2376,7 @@ def test_compact_chat_capped_summary_still_counted(memory_seam, tmp_path, monkey
     ))
     messages = (
         [{"role": "system", "content": "be helpful"}]
-        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "old " + "x" * 2000} for _ in range(6)]
         + [{"role": "user", "content": "recent"}]
     )
     memory_seam.bind_history(lambda: messages)
@@ -2450,6 +2454,87 @@ def test_is_summary_helper(memory_seam):
     assert memory_seam._default._is_summary("[Compacted context on x] y")
     assert not memory_seam._default._is_summary("hello")
     assert not memory_seam._default._is_summary(None)
+
+
+# ------------------------------- T15g compaction: idempotence and growth guard
+
+
+def test_compact_chat_is_idempotent(memory_seam):
+    """A second /compact with no new messages must be a no-op."""
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "SUMMARY")
+
+    first = memory_seam.compact_chat()
+    assert first.startswith("Chat compacted:")
+    snapshot = list(messages)
+
+    second = memory_seam.compact_chat()
+
+    assert second == "Context is already compact; nothing to do."
+    assert messages == snapshot  # untouched by the second call
+
+
+def test_compact_chat_does_not_grow_tiny_history(memory_seam):
+    """A summary longer than what it replaces must not be injected."""
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": "a"} for _ in range(4)]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "S" * 5000)
+    snapshot = list(messages)
+
+    result = memory_seam.compact_chat(keep_last=2)
+
+    assert result == "Context is already compact; nothing to do."
+    assert messages == snapshot
+
+
+def test_compact_chat_skips_when_summary_not_smaller(memory_seam):
+    """The char guard rejects a replacement that is not strictly smaller."""
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": "x"} for _ in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "S" * 10_000)
+    snapshot = list(messages)
+
+    result = memory_seam.compact_chat(keep_last=2)
+
+    assert result == "Context is already compact; nothing to do."
+    assert messages == snapshot
+
+
+def test_compact_chat_clamps_huge_keep_last(memory_seam):
+    """A keep_last larger than the history is clamped, not an error."""
+    messages = [{"role": "user", "content": f"m{i}"} for i in range(10)]
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "SUMMARY")
+    snapshot = list(messages)
+
+    result = memory_seam.compact_chat(keep_last=10_000)
+
+    assert result == "Context is already compact; nothing to do."
+    assert messages == snapshot
+
+
+def test_for_owner_returns_isolated_base_instance(memory_seam):
+    """for_owner never returns the module-default subclass (shared global)."""
+    from src.tools.memory import MemoryTools
+
+    instance = memory_seam._default.for_owner(None)
+
+    assert type(instance) is MemoryTools
+    assert instance._history_provider is None
+    memory_seam.bind_history(lambda: [{"role": "user", "content": "x"}])
+    assert instance._history_provider is None  # not the module global
 
 
 # ------------------------------------------------------------------ T16 speech

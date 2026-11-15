@@ -91,7 +91,15 @@ class MemoryTools:
         self._summarizer = None        # callable messages -> summary text
 
     def for_owner(self, agent) -> "MemoryTools":
-        """Fresh instance for a specific agent (per-agent tool isolation)."""
+        """Fresh instance for a specific agent (per-agent tool isolation).
+
+        Always a base :class:`MemoryTools`, never ``type(self)``: the
+        module-default subclass re-shares the module global through its
+        ``_history_provider`` property, so it must never be handed to a
+        pooled agent. The ``agent`` argument is accepted for the uniform
+        ``for_owner(agent)`` tool-factory API and is otherwise unused (the
+        caller binds the history/summarizer afterwards).
+        """
         return MemoryTools()
 
     def bind_history(self, provider) -> None:
@@ -172,6 +180,11 @@ class MemoryTools:
         """True when ``content`` is a compaction summary, not user text."""
         return (isinstance(content, str)
                 and content.startswith(cls._SUMMARY_PREFIX))
+
+    @staticmethod
+    def _history_chars(messages: list[dict]) -> int:
+        """Total text length of a history (cheap size proxy for the guards)."""
+        return sum(len(str(m.get("content") or "")) for m in messages)
 
     @dump_func_call
     def recall_memory(self) -> str:
@@ -309,9 +322,16 @@ class MemoryTools:
         (``_head_len``), so the personal data is never duplicated into the
         summary. The summary itself is capped with ``[brain]
         max_tool_result_chars`` (0 = uncapped) before it is injected, so a
-        summarizer that ignores ``max_tokens`` cannot bloat the history. When
-        the boundary would leave nothing to summarize, the history is left
-        untouched.
+        summarizer that ignores ``max_tokens`` cannot bloat the history.
+
+        The operation is idempotent and never grows the history: it is a
+        no-op returning "Context is already compact; nothing to do." when the
+        boundary would leave nothing to summarize, when the range is only a
+        previous summary, or when a *model* summary is not smaller than the
+        range it replaces (the extractive fallback is exempt: it is a
+        content-preserving last resort whose output is about as long as its
+        input). ``keep_last`` is clamped so at least 2 recent messages are
+        kept and at least one message stays summaryable.
         """
         try:
             provider = self._history_provider
@@ -322,7 +342,10 @@ class MemoryTools:
                 keep = int(keep_last)
             except (TypeError, ValueError):
                 keep = 4
-            keep = max(2, keep)
+            # Clamp: at least 2 recent messages are kept, and at least one
+            # message must stay summaryable (a huge keep_last is a no-op, not
+            # an error).
+            keep = max(2, min(keep, max(2, len(messages) - 1)))
             # At least one summaryable message beyond the kept recent turns.
             if len(messages) < keep + 2:
                 return "Context is already compact; nothing to do."
@@ -341,15 +364,21 @@ class MemoryTools:
             recent = list(messages[start:])
             if not old:
                 return "Context is already compact; nothing to do."
-            summarizer = self._summarizer or self._fallback_summary
-            summary = (summarizer(old) or "").strip()
-            if not summary:
-                summary = self._fallback_summary(old) or "(empty summary)"
+            # Idempotence: nothing new to summarize when the range is only a
+            # previous summary (a second /compact with no new messages must
+            # not re-summarize the summary).
+            if all(self._is_summary(m.get("content")) for m in old):
+                return "Context is already compact; nothing to do."
             # A bound summarizer may ignore max_tokens (custom provider,
             # overrunning local model); cap the text before it enters the
             # history so an oversized summary cannot defeat the compaction.
             # 0/unset = uncapped (the historical behavior).
             summary_limit = self._config("brain", "max_tool_result_chars", 0) or 0
+            bound = self._summarizer
+            summary = (bound(old) or "").strip() if bound is not None else ""
+            used_bound = bool(summary)
+            if not summary:
+                summary = self._fallback_summary(old) or "(empty summary)"
             summary = truncate_text(summary, int(summary_limit))
 
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -362,6 +391,15 @@ class MemoryTools:
                 ),
             })
             new_history.extend(recent)
+
+            # Growth guard: a *model* summary must be smaller than the range
+            # it replaces, otherwise the compaction would grow the context
+            # instead of shrinking it. The extractive fallback is exempt: it
+            # is a content-preserving last resort whose output is by
+            # construction about as long as its input, so second-guessing it
+            # would disable /compact entirely without an LLM.
+            if used_bound and len(summary) >= self._history_chars(old):
+                return "Context is already compact; nothing to do."
 
             messages[:] = new_history  # in place: same list object for the session
             return (
