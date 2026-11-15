@@ -2384,6 +2384,74 @@ def test_compact_chat_capped_summary_still_counted(memory_seam, tmp_path, monkey
     assert result == "Chat compacted: 5 messages summarized into 1, 2 kept."
 
 
+# --------------------------------- T15f compaction: summary is not user text
+
+
+def test_store_memory_ignores_compaction_summary(memory_seam, tmp_path):
+    """A [Compacted context ...] message is never captured as personal data."""
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "my name is Max, remember this personal note"},
+        {"role": "user", "content": "[Compacted context on 2026-01-01 10:00] "
+                                    "Summary of the earlier conversation:\nstuff"},
+    ]
+    memory_seam.bind_history(lambda: messages)
+
+    memory_seam.store_memory()
+
+    text = (tmp_path / "history.txt").read_text(encoding="utf-8")
+    assert "personal note" in text
+    assert "Compacted context" not in text
+
+
+def test_store_memory_ignores_recall_seed(memory_seam):
+    """A freshly cleared chat has no user message to store (seed excluded)."""
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "No personal data found!"},
+    ]
+    memory_seam.bind_history(lambda: messages)
+
+    assert memory_seam.store_memory() == "Error: no user message found to store."
+
+
+def test_clear_chat_does_not_replay_summary(memory_seam):
+    """clear_chat keeps the last real user message, not the summary."""
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "real question"},
+        {"role": "user", "content": "[Compacted context on 2026-01-01 10:00] "
+                                    "Summary of the earlier conversation:\nstuff"},
+    ]
+    memory_seam.bind_history(lambda: messages)
+
+    memory_seam.clear_chat()
+
+    assert messages[0] == {"role": "system", "content": "be helpful"}
+    assert messages[1] == {"role": "user", "content": "No personal data found!"}
+    assert messages[2] == {"role": "user", "content": "real question"}
+
+
+def test_store_memory_explicit_content_still_wins(memory_seam, tmp_path):
+    """An explicit content argument is stored verbatim, filters aside."""
+    messages = [
+        {"role": "system", "content": "be helpful"},
+        {"role": "user", "content": "[Compacted context on 2026-01-01 10:00] x"},
+    ]
+    memory_seam.bind_history(lambda: messages)
+
+    memory_seam.store_memory("explicit personal note")
+
+    text = (tmp_path / "history.txt").read_text(encoding="utf-8")
+    assert "explicit personal note" in text
+
+
+def test_is_summary_helper(memory_seam):
+    assert memory_seam._default._is_summary("[Compacted context on x] y")
+    assert not memory_seam._default._is_summary("hello")
+    assert not memory_seam._default._is_summary(None)
+
+
 # ------------------------------------------------------------------ T16 speech
 
 

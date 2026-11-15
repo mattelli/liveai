@@ -152,17 +152,26 @@ class MemoryTools:
         return head
 
     def _shaped_user_messages(self) -> list[str]:
-        """User messages of the live history (text at ``content[0]["text"]``)."""
+        """Selectable user messages of the live history (as plain text).
+
+        Excludes the re-seeded head (``_head_len``) and compaction summaries
+        (``_is_summary``), so ``store_memory`` never captures the recalled
+        personal data or a ``[Compacted context ...]`` summary as if the user
+        had written it.
+        """
         messages = self._history_provider() if self._history_provider else []
-        shaped = [
-            {"role": m["role"], "content": [{"text": m["content"]}]}
-            for m in messages
-            if isinstance(m.get("content"), str)
+        head = self._head_len(messages)
+        return [
+            m["content"] for m in messages[head:]
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+            and not self._is_summary(m.get("content"))
         ]
-        try:
-            return [m["content"][0]["text"] for m in shaped if m["role"] == "user"]
-        except Exception:
-            return []
+
+    @classmethod
+    def _is_summary(cls, content) -> bool:
+        """True when ``content`` is a compaction summary, not user text."""
+        return (isinstance(content, str)
+                and content.startswith(cls._SUMMARY_PREFIX))
 
     @dump_func_call
     def recall_memory(self) -> str:
@@ -180,7 +189,8 @@ class MemoryTools:
         prompted text is "personal" or ask to save/remember something about them.
         Pass the personal text in ``content``; when omitted, the last user message
         of the conversation is stored, preferring messages that mention
-        "personal". Returns the file path written.
+        "personal". The re-seeded head (recalled personal data) and compaction
+        summaries are never captured. Returns the file path written.
         """
         try:
             text = (content or "").strip()
@@ -223,7 +233,11 @@ class MemoryTools:
                 (m["content"] for m in messages if m["role"] == "system"),
                 system_prompt,
             )
-            user_msgs = [m["content"] for m in messages if m["role"] == "user"]
+            user_msgs = [
+                m["content"] for m in messages
+                if m.get("role") == "user" and isinstance(m.get("content"), str)
+                and not self._is_summary(m.get("content"))
+            ]
             messages.clear()  # in place: the session keeps the same list object
             messages.append({"role": "system", "content": system})
             messages.append({"role": "user", "content": self._read_memory()})

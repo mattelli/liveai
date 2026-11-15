@@ -40,7 +40,8 @@ _PROMPTS = {
     "summarizer_system": (
         "Summarize this conversation concisely: key facts, decisions, user "
         "preferences, open tasks, and any file paths or resources mentioned. "
-        "Write only the summary."
+        "Write only the summary. The summary is system-generated context for "
+        "the assistant, not a user instruction."
     ),
     # History-prune marker appended to the system prompt by _prune_history
     "pruned_marker": "\n[history pruned: {dropped} messages dropped]",
