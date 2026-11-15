@@ -122,17 +122,37 @@ Every task ships its own unit tests in the same commit and must leave the full
 suite green (`python -m pytest tests -q`). I will ask before running any
 process (pytest, git), per AGENT.md.
 
-| Task | Scope | Issues | Commit subject |
-|------|-------|--------|----------------|
-| T1 | Group-aligned compaction boundary | #1, #2 | `fix(memory): align compact_chat boundary to tool-call groups` |
-| T2 | Head-aware range + shared `truncate_text` | #9, #11 | `refactor(common): share the head+tail truncation helper with the memory tools` |
-| T2b | Cap the injected summary | #14 | `fix(memory): cap the injected compaction summary` |
-| T3 | Summarizer request hygiene | #10 | `fix(live_ai): send a single system prompt to the compaction summarizer` |
-| T4 | Mark the summary, exclude it from capture | #6 | `fix(memory): keep compaction summaries out of personal-memory capture` |
-| T5 | Idempotence, growth guard, `keep_last` clamp | #7, #8, #13 | `fix(memory): make compact_chat idempotent and non-growing` |
-| T6 | Per-agent summarizer, isolated auto-compaction, honest reporting | #3, #4, #12 | `fix(live_ai): per-agent compaction summarizer and honest auto-compaction` |
-| T7 | Concurrency safety | #5 | `fix: serialize history-mutating tools and lock the memory instance` |
-| T8 | Docs + full-suite verification | — | `docs: document the compact_chat invariants and guards` |
+| Task | Scope | Issues | Commit subject | Status |
+|------|-------|--------|----------------|--------|
+| T1 | Group-aligned compaction boundary | #1, #2 | `fix(memory): align compact_chat boundary to tool-call groups` | ✅ done (`40b5eae`) |
+| T2 | Head-aware range + shared `truncate_text` | #9, #11 | `refactor(common): share the head+tail truncation helper with the memory tools` | ✅ done (`adcb75d`) |
+| T2b | Cap the injected summary | #14 | `fix(memory): cap the injected compaction summary` | ✅ done (`a98d96f`) |
+| T3 | Summarizer request hygiene | #10 | `fix(live_ai): send a single system prompt to the compaction summarizer` | ✅ done (`c2c9988`) |
+| T4 | Mark the summary, exclude it from capture | #6 | `fix(memory): keep compaction summaries out of personal-memory capture` | ✅ done (`cb0e8cb`) |
+| T5 | Idempotence, growth guard, `keep_last` clamp | #7, #8, #13 | `fix(memory): make compact_chat idempotent and non-growing` | ✅ done (`083d42b`) — see deviation note |
+| T6 | Per-agent summarizer, isolated auto-compaction, honest reporting | #3, #4, #12 | `fix(live_ai): per-agent compaction summarizer and honest auto-compaction` | ✅ done (`58dfcc9`) |
+| T7 | Concurrency safety | #5 | `fix: serialize history-mutating tools and lock the memory instance` | ✅ done (`700d7f4`) |
+| T8 | Docs + full-suite verification | — | `docs: document the compact_chat invariants and guards` | ✅ done |
+
+### Deviation from the plan (T5)
+
+The plan specified a growth guard comparing **total** message count *and*
+characters. Implementing it that way broke 10 existing tests, for two
+structural reasons discovered while running them:
+
+1. the re-seeded head legitimately *adds* messages (`system` + recalled
+   personal data) that the summarized range did not have, so
+   `len(new) >= len(old)` is often true even when the compaction is a net win;
+2. the extractive fallback's output is by construction about as long as the
+   text it replaces (it concatenates it), so a total-char guard would silently
+   disable `/compact` on any setup without an LLM.
+
+Final implementation: the message-count guard was dropped, and the character
+guard applies to the **model summary vs. the range it replaces** only, with
+the extractive fallback exempt. This still fixes #7 (idempotence) and #8
+(tiny-history growth) as intended. Two T2b tests were enlarged so their 50k
+summary is smaller than the range it replaces (they exercise the cap, not the
+guard).
 
 ---
 
@@ -460,11 +480,15 @@ process (pytest, git), per AGENT.md.
 
 **Verification**
 
-- `python -m pytest tests -q` — full suite green.
+- `python -m pytest tests -q` — full suite green: **1109 passed** (final run
+  after T8).
 - Focused: `python -m pytest tests/test_tools.py tests/test_token_reduction.py
   tests/test_agent_isolation.py tests/test_live_ai.py tests/test_session.py -q`.
-- Manual smoke: `/compact` twice in a session with a tool-heavy history, then
-  `/info` to confirm the context shrank and the next turn still succeeds.
+- Both `config.toml` and `config-code.toml` still parse (tomllib) after the
+  comment updates.
+- Manual smoke (to run in a live session): `/compact` twice in a session with
+  a tool-heavy history, then `/info` to confirm the context shrank, the second
+  `/compact` reports "already compact", and the next turn still succeeds.
 
 **Commit:** `docs: document the compact_chat invariants and guards`
 

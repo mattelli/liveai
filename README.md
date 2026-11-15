@@ -711,7 +711,27 @@ unset) keep that cost bounded:
   the last `compact_keep_messages` turns stay verbatim. Legacy pruning still
   runs afterwards if usage remains above the ratio. You can also compact
   manually with the `/compact [keep_last]` command or let the model call the
-  `compact_chat` tool.
+  `compact_chat` tool. Compaction is safe by construction:
+  - the split is *group-aligned*: a tool round is never cut in half, so the
+    resulting history stays valid for OpenAI-compatible servers (no orphan
+    `tool` result, no dangling `assistant(tool_calls)`);
+  - the re-seeded head (system prompt + recalled personal data) is never
+    summarized, so the personal data is not duplicated into the summary; the
+    summary itself is capped with `max_tool_result_chars` (0 = uncapped) and
+    the re-seeded recall text with the same limit;
+  - the summary is a `[Compacted context ...]` **user** message (mid-history
+    `system` messages are rejected by some servers) but is excluded from
+    personal-memory capture (`store_memory`) and from the `clear_chat` replay;
+  - it is idempotent and never grows the history: a second `/compact` with no
+    new messages, a range that is only a previous summary, or a *model*
+    summary that is not smaller than the range it replaces are all no-ops
+    ("Context is already compact; nothing to do."); the result string reports
+    " (extractive fallback)" when no bound summarizer produced the summary;
+  - isolated (background) agents get their own `MemoryTools` instance *and*
+    their own summarizer binding, and auto-compaction uses that instance;
+  - a round containing `clear_chat`/`compact_chat` always runs sequentially
+    (never in the `max_parallel_tools` pool), and the memory instance is
+    lock-guarded, so a compaction cannot race the session or its own round.
 - The scheduler execution agent inherits the same settings (it copies the
   config). Recommended
   starting values: `max_tool_result_chars = 4000`, `tool_doc_chars = 300`,
