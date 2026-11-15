@@ -311,6 +311,9 @@ class StreamPrinter:
             return
         with self._spin_lock:
             self._erase_spinner_locked()
+            if self._thinking_pending:  # first answer text after the 💭 dump
+                self._thinking_pending = False
+                self.console.print(end="\n\n")  # blank line: thinking | answer
             self.console.print(Markdown(text, code_theme=self.code_theme))
             self._dirty_line = False
 

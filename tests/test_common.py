@@ -190,6 +190,44 @@ def test_markdown_printer_renders_table():
     assert "1" in out and "2" in out
 
 
+def test_markdown_printer_blank_line_between_thinking_and_answer():
+    """A 💭 dump is separated from the Markdown answer by a blank line.
+
+    Markdown mode buffers the whole stream and renders once at flush(), so
+    the thinking/answer separator must fire there (the streaming path does
+    it in _emit, which markdown mode never reaches).
+    """
+    sp = _capture_markdown_printer()
+    sp.feed_thinking("pondering")
+    sp.feed("# Hello")
+    sp.flush()
+    out = _printed(sp)
+    assert "pondering" in out
+    assert "Hello" in out
+    assert out.index("pondering") < out.rindex("Hello")
+    assert out.count("\n\n") == 1
+
+
+def test_markdown_printer_no_separator_without_thinking():
+    """Without a 💭 dump the Markdown answer gets no leading blank line."""
+    sp = _capture_markdown_printer()
+    sp.feed("# Hello")
+    sp.flush()
+    assert "\n\n" not in _printed(sp)
+
+
+def test_markdown_printer_separator_fires_once_across_flushes():
+    """The separator is consumed by the first flush; later flushes are plain."""
+    sp = _capture_markdown_printer()
+    sp.feed_thinking("pondering")
+    sp.feed("first")
+    sp.flush()
+    sp.feed("second")
+    sp.flush()
+    out = _printed(sp)
+    assert out.count("\n\n") == 1
+
+
 def test_markdown_printer_non_markdown_default_streams():
     """Without markdown=True the printer keeps streaming plain text."""
     sp = _capture_printer()
