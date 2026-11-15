@@ -2088,6 +2088,126 @@ def test_compact_chat_falls_back_when_llm_summarizer_fails(memory_seam):
     assert "[Compacted context on " in messages[2]["content"]
 
 
+# ---------------------------------------------- T15c compaction: group boundary
+
+
+def _tool_round(call_id, name="t", arguments="{}", result="r"):
+    """One complete tool round: assistant(tool_calls) + its tool result."""
+    return [
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": call_id, "type": "function",
+                         "function": {"name": name, "arguments": arguments}}]},
+        {"role": "tool", "tool_call_id": call_id, "content": result},
+    ]
+
+
+def _assert_no_orphan_tool_messages(messages):
+    """Every ``tool`` message must follow its ``assistant(tool_calls)`` parent."""
+    seen_ids = set()
+    for message in messages:
+        role = message.get("role")
+        if role == "assistant":
+            for call in message.get("tool_calls") or []:
+                seen_ids.add(call.get("id"))
+        elif role == "tool":
+            assert message.get("tool_call_id") in seen_ids, (
+                f"orphan tool result: {message.get('tool_call_id')}")
+
+
+def _assert_no_dangling_tool_calls(messages):
+    """Every ``assistant(tool_calls)`` id must have its ``tool`` result."""
+    answered = {m.get("tool_call_id") for m in messages if m.get("role") == "tool"}
+    for message in messages:
+        if message.get("role") == "assistant":
+            for call in message.get("tool_calls") or []:
+                assert call.get("id") in answered, (
+                    f"dangling tool_calls: {call.get('id')}")
+
+
+def test_compact_chat_never_orphans_tool_result(memory_seam):
+    """The kept tail must not start with a tool result whose parent was cut."""
+    # 3 complete rounds (indices: 0 system, 1 user, 2/3 round c1, 4/5 c2, 6/7 c3).
+    # keep_last=3 -> naive start 5 is the ``tool`` of round c2 -> walked back to
+    # 4 (its ``assistant(tool_calls)``), so the round is never split.
+    messages = (
+        [{"role": "system", "content": "be helpful"},
+         {"role": "user", "content": "do three things"}]
+        + _tool_round("c1")
+        + _tool_round("c2")
+        + _tool_round("c3")
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "SUMMARY")
+
+    memory_seam.compact_chat(keep_last=3)
+
+    assert messages[0] == {"role": "system", "content": "be helpful"}
+    assert messages[1] == {"role": "user", "content": "No personal data found!"}
+    assert messages[2]["content"].startswith("[Compacted context on ")
+    # the kept tail starts on the assistant(tool_calls) of round c2, not on a tool
+    assert messages[3]["role"] == "assistant"
+    assert messages[3]["tool_calls"][0]["id"] == "c2"
+    _assert_no_orphan_tool_messages(messages)
+    _assert_no_dangling_tool_calls(messages)
+
+
+def test_compact_chat_summarizer_receives_group_complete_range(memory_seam):
+    """The summarized range must not end with a dangling assistant(tool_calls)."""
+    messages = (
+        [{"role": "system", "content": "be helpful"},
+         {"role": "user", "content": "do three things"}]
+        + _tool_round("c1")
+        + _tool_round("c2")
+        + _tool_round("c3")
+    )
+    memory_seam.bind_history(lambda: messages)
+    seen = []
+    memory_seam.bind_summarizer(lambda old: seen.append(list(old)) or "SUMMARY")
+
+    memory_seam.compact_chat(keep_last=3)
+
+    assert len(seen) == 1
+    summarized = seen[0]
+    assert summarized[0]["role"] == "system"
+    assert summarized[-1]["role"] == "tool"  # ends on a complete round
+    _assert_no_orphan_tool_messages(summarized)
+    _assert_no_dangling_tool_calls(summarized)
+
+
+def test_compact_chat_no_op_when_only_tool_tail_prunable(memory_seam):
+    """A single round that cannot be split leaves the history untouched."""
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + _tool_round("c1")
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "SUMMARY")
+    snapshot = list(messages)
+
+    # keep_last=2 -> naive start index 1 is the ``tool`` message; walking back
+    # reaches index 0, so there is nothing left to summarize.
+    result = memory_seam.compact_chat(keep_last=2)
+
+    assert result == "Context is already compact; nothing to do."
+    assert messages == snapshot
+
+
+def test_group_aligned_start_never_splits_a_round(memory_seam):
+    """Unit-level check of the boundary helper."""
+    from src.tools.memory import _group_aligned_start
+
+    messages = (
+        [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}]
+        + _tool_round("c1") + _tool_round("c2")
+    )
+    # naive start 3 -> messages[3] is the tool of round c1 -> walk back to 2
+    assert _group_aligned_start(messages, 3) == 2
+    # naive start 2 -> messages[2] is the assistant of round c1 -> no walk back
+    assert _group_aligned_start(messages, 4) == 2
+    # nothing to summarize
+    assert _group_aligned_start(messages, 100) == 0
+
+
 # ------------------------------------------------------------------ T16 speech
 
 

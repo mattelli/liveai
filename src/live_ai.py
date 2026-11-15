@@ -1431,6 +1431,10 @@ class Brain(OpenAICore):
         keep-window) may be dropped. A leading orphan ``tool`` message
         (already template-invalid on its own) is dropped alone to unblock
         pruning. Returns None when nothing can be dropped.
+
+        The tail-side counterpart of this invariant lives in
+        ``src.tools.memory._group_aligned_start`` (history compaction): keep
+        both in sync.
         """
         limit = len(messages) - keep  # exclusive droppable boundary
         if start >= limit:

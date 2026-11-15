@@ -52,6 +52,33 @@ def configure(config) -> None:
     }
 
 
+def _group_aligned_start(messages: list[dict], keep: int) -> int:
+    """First index of the kept tail: never splits a tool-call group.
+
+    ``compact_chat`` keeps ``messages[start:]`` verbatim and summarizes
+    everything before ``start``. Starting from ``len(messages) - keep`` the
+    index is walked *backwards* (keeping more messages) while the tail would
+    begin with a ``role == "tool"`` message: such a message answers an
+    ``assistant``/``tool_calls`` message that would otherwise land in the
+    summarized range, and OpenAI-compatible servers reject the resulting orphan
+    tool result ("messages with role 'tool' must be a response to a preceding
+    message with 'tool_calls'").
+
+    Tool results are contiguous, so a tail that does *not* start with a
+    ``tool`` message also guarantees the summarized range does not end with a
+    dangling ``assistant(tool_calls)``. Returns ``0`` when nothing can be
+    summarized (the whole history would have to stay verbatim).
+
+    Mirrors ``Agent._next_prunable_group_end`` (``src/live_ai.py``): both keep
+    the "never split a tool round" invariant, one walking from the head, one
+    from the tail.
+    """
+    start = max(0, len(messages) - max(1, keep))
+    while start > 0 and messages[start].get("role") == "tool":
+        start -= 1
+    return start
+
+
 class MemoryTools:
     """Per-agent personal-memory tools (own history binding, no shared state).
 
@@ -226,6 +253,12 @@ class MemoryTools:
         preserved; the history is shrunk in place (the session keeps the same
         list object). Pass ``keep_last`` to control how many recent messages
         are kept (minimum 2, default 4).
+
+        The kept tail is group-aligned (``_group_aligned_start``): a tool round
+        is never split, so the resulting history stays valid for
+        OpenAI-compatible servers (no orphan ``tool`` result, no dangling
+        ``assistant(tool_calls)``). When the boundary would leave nothing to
+        summarize, the history is left untouched.
         """
         try:
             provider = self._history_provider
@@ -241,8 +274,16 @@ class MemoryTools:
             if len(messages) < keep + 2:
                 return "Context is already compact; nothing to do."
 
-            old = messages[:-keep]
-            recent = list(messages[-keep:])
+            # Group-aligned split: the kept tail never starts with an orphan
+            # ``tool`` message (whose ``assistant``/``tool_calls`` parent would
+            # be summarized away) and the summarized range never ends with a
+            # dangling ``assistant(tool_calls)`` (which would make the
+            # summarizer request invalid). See ``_group_aligned_start``.
+            start = _group_aligned_start(messages, keep)
+            old = messages[:start]
+            recent = list(messages[start:])
+            if not old:
+                return "Context is already compact; nothing to do."
             summarizer = self._summarizer or self._fallback_summary
             summary = (summarizer(old) or "").strip()
             if not summary:
