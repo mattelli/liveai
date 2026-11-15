@@ -686,17 +686,33 @@ def bind_scheduler(scheduler: "Scheduler") -> None:
 
 
 def schedule_task(prompt: str, at: str, repeat: str = "") -> str:
-    """Schedule a prompt to run at a future time (module-default instance)."""
+    """Schedule a prompt to run at a future time.
+
+    Useful when the user asks to schedule, remind or run something later or
+    repeatedly. ``at`` is a datetime (ISO 8601 or 'YYYY-MM-DD HH:MM', local
+    time); ``repeat`` optionally makes it recurring: 'daily', 'hourly',
+    'every 30m' or a 5-field cron expression like '0 9 * * MON'. Returns a
+    confirmation with the task id; list/cancel with list_scheduled_tasks /
+    cancel_scheduled_task.
+    """
     return _default.schedule_task(prompt, at, repeat)
 
 
 def list_scheduled_tasks() -> str:
-    """List the scheduled tasks (module-default instance)."""
+    """List the scheduled tasks.
+
+    Shows each task's id, next run time, recurrence and prompt. Useful when
+    the user asks what is scheduled.
+    """
     return _default.list_scheduled_tasks()
 
 
 def cancel_scheduled_task(task_id: str) -> str:
-    """Cancel a scheduled task by id (module-default instance)."""
+    """Cancel a scheduled task by id.
+
+    Ids come from list_scheduled_tasks. Useful when the user asks to cancel or
+    unschedule a task.
+    """
     return _default.cancel_scheduled_task(task_id)
 
 

@@ -454,17 +454,32 @@ def bind_history(provider) -> None:
 
 
 def recall_memory() -> str:
-    """Read users personal data from file (module-default instance)."""
+    """Read users personal data from file.
+
+    Useful when the users ask to recall their personal data.
+    """
     return _default.recall_memory()
 
 
 def store_memory(content: str = "") -> str:
-    """Store the user personal content (module-default instance)."""
+    """Store the user personal content to a text file for later recall.
+
+    Useful when the users explicitly mention that the prompted text is
+    "personal" or ask to save/remember something about them. Pass the personal
+    text in ``content``; when omitted, the last user message of the
+    conversation is stored, preferring messages that mention "personal". The
+    re-seeded head (recalled personal data) and compaction summaries are never
+    captured. Returns the file path written.
+    """
     return _default.store_memory(content)
 
 
 def clear_chat() -> str:
-    """Clean the conversation history (module-default instance)."""
+    """Clean the conversation history.
+
+    Useful when user ask for cleaning conversation history. The system prompt
+    and the recalled personal data are kept; the history is cleared in place.
+    """
     return _default.clear_chat()
 
 
@@ -474,5 +489,12 @@ def bind_summarizer(provider) -> None:
 
 
 def compact_chat(keep_last: int = 4) -> str:
-    """Compact the conversation history into a summary (module-default)."""
+    """Compact the conversation history into a summary.
+
+    Useful when the conversation history grows long: summarize the oldest
+    messages and keep only the most recent turns verbatim. The system prompt
+    and the recalled personal data are preserved; the history is shrunk in
+    place (the session keeps the same list object). Pass ``keep_last`` to
+    control how many recent messages are kept (minimum 2, default 4).
+    """
     return _default.compact_chat(keep_last)

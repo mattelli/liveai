@@ -1951,6 +1951,47 @@ def test_recall_memory_missing_file(memory_seam):
     assert memory_seam.recall_memory() == "No personal data found!"
 
 
+def test_memory_tool_descriptions_reach_the_model():
+    """The registered module-level tools must carry their real docstrings.
+
+    Regression guard: the module-default wrappers once had one-line stubs
+    ("... (module-default instance)."), so the JSON schema sent to the model
+    lost the usage guidance and the model stopped calling store_memory.
+    """
+    from src.live_ai import OpenAICore
+
+    expected = {
+        "store_memory": "personal",
+        "recall_memory": "personal data",
+        "clear_chat": "conversation history",
+        "compact_chat": "summarize",
+    }
+    for name, needle in expected.items():
+        tool = getattr(tools, name)
+        description = OpenAICore._openai_tool_definition(
+            tool, max_doc_chars=200)["function"]["description"]
+        assert "module-default" not in description, name
+        assert needle in description, f"{name}: {description!r}"
+
+
+def test_scheduler_tool_descriptions_reach_the_model():
+    """Same regression guard for the scheduler/vision module-default wrappers."""
+    from src.live_ai import OpenAICore
+
+    expected = {
+        "schedule_task": "schedule",
+        "list_scheduled_tasks": "scheduled tasks",
+        "cancel_scheduled_task": "cancel",
+        "image_response": "image",
+    }
+    for name, needle in expected.items():
+        tool = getattr(tools, name)
+        description = OpenAICore._openai_tool_definition(
+            tool, max_doc_chars=200)["function"]["description"]
+        assert "module-default" not in description, name
+        assert needle in description, f"{name}: {description!r}"
+
+
 def test_store_memory_appends_personal_messages(memory_seam, tmp_path):
     messages = [
         {"role": "system", "content": "be helpful"},

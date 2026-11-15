@@ -129,5 +129,8 @@ def bind_session(session) -> None:
 
 
 def image_response(image: str, prompt: str = "describe the image") -> str:
-    """Provide text response form an input image (module-default instance)."""
+    """Provide text response form an input image.
+
+    Useful when user asks for getting a description of the input image content.
+    """
     return _default.image_response(image, prompt)
