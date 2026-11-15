@@ -240,7 +240,7 @@ def test_monitor_settings_load_config_round_trip(tmp_path):
         [agent]
         bootstrap_prompt = "hello"
         monitor = "calls, log"
-        monitor_log_file_cwd = ".liveai/agents.jsonl"
+        monitor_log_file_cwd = "agents.jsonl"
         monitor_buffer = 50
     """), encoding="utf-8")
     config = load_config(config_file)

@@ -247,9 +247,9 @@ def test_load_config_without_input_block(tmp_path):
 def test_load_config_resolves_input_history_file(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)  # _cwd paths are per launch directory
     cfg = tmp_path / "config.toml"
-    cfg.write_text('[input]\nhistory_file_cwd = ".liveai/.chat_history"\n')
+    cfg.write_text('[input]\nhistory_file_cwd = ".chat_history"\n')
     ns = load_config(cfg)
-    # Keys ending in _cwd resolve against the launch directory (cwd), not the
+    # Non-data_dir _cwd keys resolve under the data root (cwd/.liveai), not the
     # config directory.
     assert ns.input.history_file_cwd == (tmp_path / ".liveai" / ".chat_history").resolve()
 
@@ -264,14 +264,14 @@ def test_load_config_cwd_defaults(tmp_path, monkeypatch):
     assert ns.cwd.behaviour_dir_cwd == (tmp_path / ".liveai" / "behaviour").resolve()
 
 
-def test_load_config_cwd_keys_resolve_against_launch_dir(tmp_path, monkeypatch):
+def test_load_config_cwd_keys_resolve_under_data_root(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = tmp_path / "config.toml"
     cfg.write_text(
-        '[brain]\nmemory_path_cwd = ".liveai/memory.log"\nsessions_dir_cwd = ".liveai/sessions"\n'
-        '[agent]\nmonitor_log_file_cwd = ".liveai/agents.jsonl"\n'
-        '[input]\nhistory_file_cwd = ".liveai/input.log"\n'
-        '[delegation.scheduler]\npersist_file_cwd = ".liveai/schedule.json"\n'
+        '[brain]\nmemory_path_cwd = "memory.log"\nsessions_dir_cwd = "sessions"\n'
+        '[agent]\nmonitor_log_file_cwd = "agents.jsonl"\n'
+        '[input]\nhistory_file_cwd = "input.log"\n'
+        '[delegation.scheduler]\npersist_file_cwd = "schedule.json"\n'
     )
     ns = load_config(cfg)
     root = (tmp_path / ".liveai").resolve()
@@ -280,6 +280,20 @@ def test_load_config_cwd_keys_resolve_against_launch_dir(tmp_path, monkeypatch):
     assert ns.agent.monitor_log_file_cwd == root / "agents.jsonl"
     assert ns.input.history_file_cwd == root / "input.log"
     assert ns.delegation.scheduler.persist_file_cwd == root / "schedule.json"
+
+
+def test_load_config_data_dir_cwd_is_the_root(tmp_path, monkeypatch):
+    # data_dir_cwd resolves against the launch dir; the other _cwd keys follow
+    # it, so a custom data root moves every state file with it.
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[cwd]\ndata_dir_cwd = ".state"\n'
+        '[brain]\nmemory_path_cwd = "memory.log"\n'
+    )
+    ns = load_config(cfg)
+    assert ns.cwd.data_dir_cwd == (tmp_path / ".state").resolve()
+    assert ns.brain.memory_path_cwd == (tmp_path / ".state" / "memory.log").resolve()
 
 
 def test_load_config_assets_still_resolve_against_config_dir(tmp_path, monkeypatch):
@@ -292,7 +306,7 @@ def test_load_config_assets_still_resolve_against_config_dir(tmp_path, monkeypat
     monkeypatch.chdir(launch)
     cfg = cfg_dir / "config.toml"
     cfg.write_text(
-        '[brain]\nmemory_path_cwd = ".liveai/memory.log"\n'
+        '[brain]\nmemory_path_cwd = "memory.log"\n'
         '[embedding]\nmodel_path = ".res/models/st"\ncorpora_dir = ".res/corpora"\n'
         '[image_gen]\nout_dir = ".out_images"\n'
     )
@@ -307,9 +321,9 @@ def test_load_config_custom_cwd_section(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     cfg = tmp_path / "config.toml"
     cfg.write_text(
-        '[cwd]\ndata_dir_cwd = ".state"\ntmp_dir_cwd = ".state/scratch"\n'
-        'behaviour_dir_cwd = ".state/rules"\n'
-        '[brain]\nmemory_path_cwd = ".state/memory.log"\n'
+        '[cwd]\ndata_dir_cwd = ".state"\ntmp_dir_cwd = "scratch"\n'
+        'behaviour_dir_cwd = "rules"\n'
+        '[brain]\nmemory_path_cwd = "memory.log"\n'
     )
     ns = load_config(cfg)
     root = (tmp_path / ".state").resolve()

@@ -26,14 +26,13 @@ Shared **assets** stay in the project root `.res/` (model weights, corpora,
 voices, embeddings), and the **config files stay in the project root**
 (shared).
 
-**Resolution rule (refinement):** every config key whose name ends in
-**`_cwd`** is resolved against the **launch directory** (`Path.cwd()`); every
-other `*_file` / `*_dir` / `*_path` key keeps resolving against the **config
-directory**. The `_cwd` values carry the data-root prefix themselves
-(`memory_path_cwd = ".liveai/memory.log"`), so no allow-list or data-root
-computation is needed — the suffix alone selects the base. The `[cwd]`
-section holds the three folder keys (`data_dir_cwd`, `tmp_dir_cwd`,
-`behaviour_dir_cwd`).
+**Resolution rule (refinement):** `[cwd] data_dir_cwd` is the **data root**,
+resolved against the **launch directory** (`Path.cwd()`). Every **other** key
+ending in `_cwd` is resolved **under that data root**, so its value stays
+short (`memory_path_cwd = "memory.log"` -> `<launch>/.liveai/memory.log`).
+Every other `*_file` / `*_dir` / `*_path` key keeps resolving against the
+**config directory**. The `[cwd]` section holds the three folder keys
+(`data_dir_cwd`, `tmp_dir_cwd`, `behaviour_dir_cwd`).
 
 ## Current behavior
 
@@ -66,11 +65,12 @@ Consumers (all receive already-absolute paths via `configure()`):
 
 ## Expected behavior
 
-1. `load_config` resolves any key ending in `_cwd` against the **launch cwd**
-   (`Path.cwd()`); all other path keys resolve against the config directory.
-2. The `[cwd]` defaults (`data_dir_cwd = ".liveai"`,
-   `tmp_dir_cwd = ".liveai/tmp"`, `behaviour_dir_cwd = ".liveai/behaviour"`)
-   are filled in when the section/key is absent.
+1. `load_config` resolves `[cwd] data_dir_cwd` against the **launch cwd**
+   (`Path.cwd()`), then resolves every other `_cwd` key **under that data
+   root**; all other path keys resolve against the config directory.
+2. The `[cwd]` defaults (`data_dir_cwd = ".liveai"`, `tmp_dir_cwd = "tmp"`,
+   `behaviour_dir_cwd = "behaviour"`) are filled in when the section/key is
+   absent.
 3. `ensure_data_dirs(config)` creates the data root and its `tmp` /
    `behaviour` subfolders (best-effort), called by `main.py` after
    `load_config`.
@@ -87,9 +87,9 @@ Consumers (all receive already-absolute paths via `configure()`):
 
 ## Design notes
 
-- **Single rule, no allow-list.** The `_cwd` suffix alone selects the launch
-  directory base; the earlier `_STATE_PATH_KEYS` allow-list and the
-  `data_root` computation are dropped.
+- **Single rule, no allow-list.** `data_dir_cwd` selects the data root; every
+  other `_cwd` key is resolved under it, so values stay short and the data
+  root is defined once. The earlier `_STATE_PATH_KEYS` allow-list is dropped.
 - **Out of scope:** an `LIVEAI_DATA_DIR` env override (not requested); moving
   `.res/` assets; migrating existing root state.
 

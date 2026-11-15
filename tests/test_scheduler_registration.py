@@ -63,7 +63,7 @@ def test_config_parses_scheduler_section(tmp_path):
     config_file.write_text(
         "[delegation.scheduler]\n"
         'enabled = true\n'
-        'persist_file_cwd = ".liveai/schedule.json"\n'
+        'persist_file_cwd = "schedule.json"\n'
         'on_missed = "run"\n',
         encoding="utf-8")
     config = load_config(config_file)
