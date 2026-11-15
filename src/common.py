@@ -439,6 +439,42 @@ def ensure_data_dirs(config: SimpleNamespace) -> None:
             pass
 
 
+# ``[cwd] tmp_dir_cwd`` injected by ``main.py`` via :func:`configure_paths`.
+# Tools that write scratch files without an explicit destination use it instead
+# of the process cwd, so agent output lands in the run's data root.
+_tmp_dir: Path | None = None
+
+
+def configure_paths(config) -> None:
+    """Inject the ``[cwd]`` tmp folder for tools that default to a scratch dir.
+
+    Called by ``main.py`` after ``load_config``. A missing section/key keeps
+    the historical default (the process cwd).
+    """
+    global _tmp_dir
+    cwd = getattr(config, "cwd", None)
+    value = getattr(cwd, "tmp_dir_cwd", None) if cwd is not None else None
+    _tmp_dir = Path(value) if value else None
+
+
+def configured_tmp_dir() -> Path | None:
+    """The ``[cwd] tmp_dir_cwd`` folder, or ``None`` when not configured."""
+    return _tmp_dir
+
+
+def default_out_dir() -> Path:
+    """Default destination for scratch files: ``[cwd] tmp_dir_cwd`` or cwd.
+
+    The folder is created (best-effort) so callers can write into it directly.
+    """
+    out = _tmp_dir if _tmp_dir is not None else Path.cwd()
+    try:
+        out.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return out
+
+
 def load_config(config_path: Path) -> SimpleNamespace:
     """
     Load config.toml and return an object with attributes from the config file.

@@ -5,7 +5,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
-from src.common import dump_func_call, safe_filename
+from src.common import default_out_dir, dump_func_call, safe_filename
 
 __all__ = [
     "download_file", "extract_webpage", "format_search_results", "web_books",
@@ -242,10 +242,11 @@ def download_file(
     """
     Download a file such as a picture, movie, audio or any other file from a URL
     and save it on disk. The file is streamed in chunks to ``out_dir`` (default:
-    current working directory) under ``filename`` when given, else the name
-    suggested by the Content-Disposition header or the URL itself (missing
-    extensions are completed from the Content-Type). Existing files are only
-    replaced when ``overwrite`` is True. Returns the saved path and its size.
+    the run's tmp folder from ``[cwd] tmp_dir_cwd``) under ``filename`` when
+    given, else the name suggested by the Content-Disposition header or the URL
+    itself (missing extensions are completed from the Content-Type). Existing
+    files are only replaced when ``overwrite`` is True. Returns the saved path
+    and its size.
     """
     import requests
 
@@ -260,7 +261,7 @@ def download_file(
     name = filename or _suggested_name(url, headers)
     name = _with_extension(name or f"downloaded_{datetime.now():%Y%m%d_%H%M%S}",
                            headers.get("content-type", ""))
-    out_directory = Path(out_dir) if out_dir is not None else Path.cwd()
+    out_directory = Path(out_dir) if out_dir is not None else default_out_dir()
     dest_path = out_directory / safe_filename(name)
     if dest_path.exists():
         if dest_path.is_dir():

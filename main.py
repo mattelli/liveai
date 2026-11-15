@@ -28,6 +28,9 @@ def main(argv=None) -> int:
     from src.common import ensure_data_dirs  # create the [paths] folders
     ensure_data_dirs(config)
 
+    from src.common import configure_paths  # inject [cwd] tmp dir for scratch output
+    configure_paths(config)
+
     from src.tools import configure as configure_tools  # inject config into tool modules
     configure_tools(config)
     from src.common import configure_ui  # inject [ui] display settings

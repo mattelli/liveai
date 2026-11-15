@@ -75,9 +75,10 @@ Consumers (all receive already-absolute paths via `configure()`):
    `behaviour` subfolders (best-effort), called by `main.py` after
    `load_config`.
 4. Tools that currently default to `Path.cwd()` for scratch output
-   (`download_file`, `save_financial_chart`, `extract_archive` default dest,
-   the `pyeval` sandbox) default to `[cwd] tmp_dir_cwd` instead. Explicit
-   `out_dir` arguments still win.
+   (`download_file`, `save_financial_chart`, the `pyeval` sandbox) default to
+   `[cwd] tmp_dir_cwd` instead. Explicit `out_dir` arguments still win.
+   (`extract_archive` already defaults *beside the archive*, not to the cwd,
+   so it is left unchanged.)
 5. `behaviour/` holds markdown instruction files; they are discovered by the
    agent through the **bootstrap prompt** (the prompt tells the agent to read
    the markdown files in the behaviour folder). No automatic prompt injection
@@ -103,9 +104,9 @@ Consumers (all receive already-absolute paths via `configure()`):
   - missing `[cwd]` section falls back to the defaults;
   - `ensure_data_dirs` creates the folders and tolerates a config without
     `[cwd]`.
-- Unit tests for the tmp defaults: `download_file`, `save_financial_chart`,
-  `extract_archive` and the `pyeval` sandbox write under the configured
-  `tmp_dir_cwd` when `out_dir`/dest is omitted, and honor an explicit value.
+- Unit tests for the tmp defaults: `download_file`, `save_financial_chart`
+  and the `pyeval` sandbox write under the configured `tmp_dir_cwd` when
+  `out_dir`/dest is omitted, and honor an explicit value.
 - Integration: `main.py --config <tmp config>` creates `.liveai/` in the cwd
   and the session/memory/monitor files land there.
 - Full suite: `python -m pytest tests -q` green.
@@ -117,10 +118,9 @@ Consumers (all receive already-absolute paths via `configure()`):
    consumers and the affected tests. — DONE
 2. **Config files.** Add the `[cwd]` block and rename the state keys to the
    `_cwd` form in `config.toml` and `config-code.toml`. — DONE
-3. **tmp_dir wiring.** Make `download_file`, `save_financial_chart`,
-   `extract_archive` (default destination) and the `pyeval` sandbox default to
-   `[cwd] tmp_dir_cwd` instead of `Path.cwd()`. Explicit arguments still win.
-   Tests per tool.
+3. **tmp_dir wiring.** Make `download_file`, `save_financial_chart` and the
+   `pyeval` sandbox default to `[cwd] tmp_dir_cwd` instead of `Path.cwd()`.
+   Explicit arguments still win. Tests per tool. — DONE
 4. **behaviour_dir.** Ensure the folder is created; update the bootstrap
    prompt in both config files to instruct the agent to read the markdown
    files in the behaviour folder; document the convention. Tests: folder

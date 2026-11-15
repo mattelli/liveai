@@ -660,6 +660,62 @@ def test_download_file_network_error(monkeypatch):
     assert "Error fetching URL" in tools.download_file("https://host/x")
 
 
+def test_download_file_defaults_to_configured_tmp_dir(tmp_path, monkeypatch):
+    # No out_dir -> the run's [cwd] tmp_dir_cwd, not the process cwd.
+    import src.common as common
+    tmp_dir = tmp_path / "scratch"
+    monkeypatch.setattr(common, "_tmp_dir", tmp_dir)
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(chunks=(b"data",)),
+    )
+    out = tools.download_file("https://host/pictures/pic.jpg")
+    assert (tmp_dir / "pic.jpg").read_bytes() == b"data"
+    assert str(tmp_dir) in out
+
+
+def test_download_file_explicit_out_dir_wins_over_tmp(tmp_path, monkeypatch):
+    import src.common as common
+    monkeypatch.setattr(common, "_tmp_dir", tmp_path / "scratch")
+    monkeypatch.setattr(
+        tools.requests, "get",
+        lambda url, timeout, stream, headers=None: FakeStreamResponse(chunks=(b"x",)),
+    )
+    explicit = tmp_path / "explicit"
+    out = tools.download_file("https://host/pictures/pic.jpg", out_dir=str(explicit))
+    assert (explicit / "pic.jpg").exists()
+    assert not (tmp_path / "scratch" / "pic.jpg").exists()
+
+
+def test_default_out_dir_falls_back_to_cwd(tmp_path, monkeypatch):
+    import src.common as common
+    monkeypatch.setattr(common, "_tmp_dir", None)
+    monkeypatch.chdir(tmp_path)
+    assert common.default_out_dir() == tmp_path.resolve()
+
+
+def test_default_out_dir_uses_and_creates_tmp_dir(tmp_path, monkeypatch):
+    import src.common as common
+    tmp_dir = tmp_path / "nested" / "scratch"
+    monkeypatch.setattr(common, "_tmp_dir", tmp_dir)
+    assert common.default_out_dir() == tmp_dir
+    assert tmp_dir.is_dir()  # created on demand
+
+
+def test_configure_paths_reads_cwd_tmp_dir(tmp_path):
+    import src.common as common
+    from types import SimpleNamespace
+    previous = common.configured_tmp_dir()
+    try:
+        common.configure_paths(SimpleNamespace(
+            cwd=SimpleNamespace(tmp_dir_cwd=tmp_path / "t")))
+        assert common.configured_tmp_dir() == tmp_path / "t"
+        common.configure_paths(SimpleNamespace())  # no [cwd] -> cwd fallback
+        assert common.configured_tmp_dir() is None
+    finally:
+        common._tmp_dir = previous
+
+
 def test_suggested_name_variants():
     assert tools.web._suggested_name("https://h/dir/a%20b.png", {}) == "a b.png"
     assert tools.web._suggested_name("https://h/dir/file.bin", {"content-disposition": ""}) == "file.bin"
@@ -860,6 +916,57 @@ def test_zip_files_extension_filters(tmp_path):
     tools.zip_files(str(no_log), str(tmp_path / "no_log.zip"), exclude_extensions="log, .bin")
     with __import__("zipfile").ZipFile(tmp_path / "no_log.zip") as zf:
         assert zf.namelist() == ["keep.txt"]
+
+
+def test_save_financial_chart_defaults_to_tmp_dir(tmp_path, monkeypatch):
+    # No out_dir -> the run's [cwd] tmp_dir_cwd, not the process cwd. savefig is
+    # stubbed (this asserts path resolution, not image encoding).
+    import matplotlib.pyplot as plt
+    import src.common as common
+    import src.tools.finance as finance_mod
+    tmp_dir = tmp_path / "scratch"
+    monkeypatch.setattr(common, "_tmp_dir", tmp_dir)
+    frame = pd.DataFrame({
+        "Date": pd.to_datetime(["2024-01-01", "2024-02-01"]),
+        "Open": [1.0, 2.0], "Close": [1.5, 2.5],
+    })
+    monkeypatch.setattr(finance_mod, "fetch_financial_data",
+                        lambda *a, **k: frame)
+    saved = {}
+
+    def fake_savefig(fname=None, format=None):
+        saved["path"] = Path(fname)
+        Path(fname).write_bytes(b"jpg")
+
+    monkeypatch.setattr(plt, "savefig", fake_savefig)
+    out = finance_mod.save_financial_chart("AAPL")
+    assert saved["path"] == tmp_dir / "AAPL.jpg"
+    assert (tmp_dir / "AAPL.jpg").exists()
+    assert str(tmp_dir) in out
+
+
+def test_save_financial_chart_explicit_out_dir_wins(tmp_path, monkeypatch):
+    import matplotlib.pyplot as plt
+    import src.common as common
+    import src.tools.finance as finance_mod
+    monkeypatch.setattr(common, "_tmp_dir", tmp_path / "scratch")
+    frame = pd.DataFrame({
+        "Date": pd.to_datetime(["2024-01-01"]), "Open": [1.0], "Close": [1.5],
+    })
+    monkeypatch.setattr(finance_mod, "fetch_financial_data",
+                        lambda *a, **k: frame)
+    saved = {}
+
+    def fake_savefig(fname=None, format=None):
+        saved["path"] = Path(fname)
+        Path(fname).write_bytes(b"jpg")
+
+    monkeypatch.setattr(plt, "savefig", fake_savefig)
+    explicit = tmp_path / "explicit"
+    finance_mod.save_financial_chart("AAPL", out_dir=str(explicit))
+    assert saved["path"] == explicit / "AAPL.jpg"
+    assert (explicit / "AAPL.jpg").exists()
+    assert not (tmp_path / "scratch" / "AAPL.jpg").exists()
 
 
 def test_zip_files_exclude_glob_skips_hidden(tmp_path):

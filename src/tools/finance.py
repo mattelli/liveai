@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from src.common import dump_func_call, safe_filename
+from src.common import default_out_dir, dump_func_call, safe_filename
 
 __all__ = [
     "ValidYF", "fetch_financial_data", "save_financial_chart",
@@ -121,7 +121,7 @@ def save_financial_chart(
         data = fetch_financial_data(symbol, interval, period, to_string=False)
         if isinstance(data, str):
             return data
-        out_directory = Path(out_dir) if out_dir is not None else Path.cwd()
+        out_directory = Path(out_dir) if out_dir is not None else default_out_dir()
         out_directory.mkdir(parents=True, exist_ok=True)
         plt.figure(figsize=(12, 6))
         plt.plot(

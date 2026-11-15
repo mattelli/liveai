@@ -1,7 +1,8 @@
 """Sandboxed Python evaluation tool (port of smolagents ``PythonInterpreterTool``).
 
 Runs a generated snippet in a *subprocess* with a restricted environment:
-temporary working directory, no inherited shell, hard timeout, capped output
+a scratch working directory (the run's ``[cwd] tmp_dir_cwd``, falling back to
+a fresh temporary directory), no inherited shell, hard timeout, capped output
 and the exit status in the result. It is registered **only** for isolated
 (background) agents — the interactive main agent already has ``run_command``
 and is user-supervised.
@@ -16,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 from logging import getLogger
+
+from src.common import configured_tmp_dir
 
 __all__ = ["python_eval"]
 
@@ -50,7 +53,13 @@ def python_eval(code: str, timeout_s: float = _DEFAULT_TIMEOUT_S) -> str:
     except (TypeError, ValueError):
         timeout_s = _DEFAULT_TIMEOUT_S
     try:
-        with tempfile.TemporaryDirectory() as tmp_dir:
+        # Run in a unique scratch subfolder of the run's tmp dir (when
+        # configured), so snippet files never pollute the process cwd and are
+        # still cleaned up afterwards. Without a configured tmp dir, fall back
+        # to the system temporary directory.
+        parent = configured_tmp_dir()
+        with tempfile.TemporaryDirectory(
+                dir=str(parent) if parent is not None else None) as tmp_dir:
             completed = subprocess.run(
                 [sys.executable, "-I", "-c", code],
                 cwd=tmp_dir,

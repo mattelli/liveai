@@ -64,3 +64,24 @@ def test_python_eval_isolated_agents_only():
 
 def test_pyeval_exported_from_tools_package():
     assert hasattr(tools_mod, "python_eval")
+
+
+def test_python_eval_runs_in_configured_tmp_dir(tmp_path, monkeypatch):
+    # With [cwd] tmp_dir_cwd configured, the sandbox scratch dir lives under it
+    # (and is cleaned up afterwards), never in the process cwd.
+    import src.common as common
+    tmp_dir = tmp_path / "scratch"
+    tmp_dir.mkdir()
+    monkeypatch.setattr(common, "_tmp_dir", tmp_dir)
+    result = pyeval_mod.python_eval("import os; print(os.getcwd())")
+    assert "[exit 0]" in result
+    assert str(tmp_dir) in result
+    # the unique scratch subfolder was removed on exit
+    assert list(tmp_dir.iterdir()) == []
+
+
+def test_python_eval_falls_back_to_system_temp(monkeypatch):
+    import src.common as common
+    monkeypatch.setattr(common, "_tmp_dir", None)
+    result = pyeval_mod.python_eval("print('ok')")
+    assert "ok" in result and "[exit 0]" in result
