@@ -1,12 +1,7 @@
 [logging]
 level = "WARNING"
 
-[cwd] # runtime data root: paths ending in "_cwd" are resolved relative to the
-      # directory main.py is launched from (not the config file), so each
-      # launch directory keeps its own data. data_dir_cwd is the data root
-      # itself; every other *_cwd key is resolved under it (values stay short).
-      # Shared assets (.res/... weights, corpora, voices) and the config files
-      # stay in the project root.
+[cwd] # runtime data root: paths ending in "_cwd" are resolved relative to the directory main.py is launched from (not the config file)
 data_dir_cwd = ".liveai"             # data root; holds memory.log, sessions/, agents.jsonl, input.log, schedule.json, tmp/, behaviour/
 tmp_dir_cwd = "tmp"                  # scratch folder (under data_dir_cwd) for files the agent writes when no explicit path is given
 behaviour_dir_cwd = "behaviour"      # markdown instruction files (under data_dir_cwd) for the agent (discovered via the bootstrap prompt)
@@ -35,7 +30,7 @@ auto_compaction = false            # run compact_chat (summary) instead of plain
 # context_window = 8192
 
 [agent] # agent configuration
-bootstrap_prompt = "Read %LIVEAI_DIR%\\AGENT.md (Windows), or $LIVEAI_DIR/AGENT.md (Unix-like), and follow its instructions. If no AGENT.md is found, proceed by announcing 'No agent instructions found.' Then read every markdown file in {behaviour_dir} (if any) and follow the instructions they contain."
+bootstrap_prompt = "Read AGENT.md in {behaviour_dir} and follow its instructions. If no AGENT.md is found, proceed by announcing 'No agent instructions found.'"
 max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
 tool_doc_chars = 300       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
 tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
