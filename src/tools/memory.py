@@ -236,23 +236,25 @@ class MemoryTools:
     # ---------------------------------------------------------------- compaction
 
     _SUMMARY_PREFIX = "[Compacted context"
+    _FALLBACK_SUMMARY_LIMIT = 2000  # extractive fallback cap (chars)
 
-    @staticmethod
-    def _fallback_summary(messages: list[dict]) -> str:
+    @classmethod
+    def _fallback_summary(cls, messages: list[dict]) -> str:
         """Extractive fallback: join message texts, head+tail truncated.
 
         Used when no summarizer is bound, keeping ``compact_chat`` usable and
-        unit-testable without an LLM.
+        unit-testable without an LLM. Truncation goes through the shared
+        :func:`src.common.truncate_text` helper, so the marker reports the
+        original length and the format matches the tool-result capping.
         """
         texts = [
             m.get("content") or "" for m in messages
             if isinstance(m.get("content"), str)
         ]
         joined = "\n".join(t.strip() for t in texts if t.strip())
-        limit = 2000
-        if len(joined) <= limit:
-            return joined or "(no content)"
-        return joined[:limit // 2] + "\n[...]" + joined[-limit // 2:]
+        if not joined:
+            return "(no content)"
+        return truncate_text(joined, cls._FALLBACK_SUMMARY_LIMIT)
 
     def _reseeded_head(self, messages: list[dict]) -> list[dict]:
         """``[system, recalled personal data]`` head, like ``clear_chat``.
@@ -291,8 +293,11 @@ class MemoryTools:
         ``assistant(tool_calls)``). The re-seeded head (system prompt +
         recalled personal data) is excluded from the summarized range
         (``_head_len``), so the personal data is never duplicated into the
-        summary. When the boundary would leave nothing to summarize, the
-        history is left untouched.
+        summary. The summary itself is capped with ``[brain]
+        max_tool_result_chars`` (0 = uncapped) before it is injected, so a
+        summarizer that ignores ``max_tokens`` cannot bloat the history. When
+        the boundary would leave nothing to summarize, the history is left
+        untouched.
         """
         try:
             provider = self._history_provider
@@ -326,6 +331,12 @@ class MemoryTools:
             summary = (summarizer(old) or "").strip()
             if not summary:
                 summary = self._fallback_summary(old) or "(empty summary)"
+            # A bound summarizer may ignore max_tokens (custom provider,
+            # overrunning local model); cap the text before it enters the
+            # history so an oversized summary cannot defeat the compaction.
+            # 0/unset = uncapped (the historical behavior).
+            summary_limit = self._config("brain", "max_tool_result_chars", 0) or 0
+            summary = truncate_text(summary, int(summary_limit))
 
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
             new_history = self._reseeded_head(messages)

@@ -2300,6 +2300,90 @@ def test_recall_memory_not_dumped_when_called_internally(memory_seam, monkeypatc
     assert calls == ["compact_chat"]  # only the tool's own block
 
 
+# --------------------------------------- T15e compaction: summary length cap
+
+
+def test_compact_chat_caps_oversized_summary(memory_seam, tmp_path, monkeypatch):
+    """A summarizer that ignores max_tokens cannot bloat the history."""
+    from src.common import truncate_text
+
+    monkeypatch.setattr(tools.memory, "_config_cache", None)
+    tools.memory.configure(SimpleNamespace(
+        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+                              system_prompt="be helpful",
+                              max_tool_result_chars=4000),
+        agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
+    ))
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "S" * 50_000)
+
+    memory_seam.compact_chat()
+
+    injected = messages[2]["content"]
+    assert "[truncated, 50000 chars total]" in injected
+    # the summary body is exactly the shared-helper truncation of the raw text
+    body = injected.split("earlier conversation:\n", 1)[1]
+    assert body == truncate_text("S" * 50_000, 4000)
+
+
+def test_compact_chat_summary_uncapped_when_limit_zero(memory_seam):
+    """max_tool_result_chars = 0 keeps the historical uncapped behavior."""
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "Q" * 50_000)
+
+    memory_seam.compact_chat()
+
+    injected = messages[2]["content"]
+    assert "[truncated," not in injected
+    assert injected.count("Q") == 50_000
+
+
+def test_fallback_summary_uses_shared_marker():
+    """The extractive fallback uses the shared marker, not the old '[...]'."""
+    from src.tools.memory import MemoryTools
+
+    long_messages = [{"role": "user", "content": "A" * 10_000 + "Z" * 10_000}]
+    summary = MemoryTools._fallback_summary(long_messages)
+    assert "[truncated, 20000 chars total]" in summary
+    assert "\n[...]\n" not in summary
+    # short input: returned as-is, empty input: placeholder
+    assert MemoryTools._fallback_summary([{"role": "user", "content": "hi"}]) == "hi"
+    assert MemoryTools._fallback_summary([]) == "(no content)"
+
+
+def test_compact_chat_capped_summary_still_counted(memory_seam, tmp_path, monkeypatch):
+    """The result string reports the pre-cap summarized message count."""
+    monkeypatch.setattr(tools.memory, "_config_cache", None)
+    tools.memory.configure(SimpleNamespace(
+        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+                              system_prompt="be helpful",
+                              max_tool_result_chars=100),
+        agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
+    ))
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "S" * 50_000)
+
+    result = memory_seam.compact_chat(keep_last=2)
+
+    # head = system; old = messages[1:6] = "old 0".."old 4" -> 5 summarized
+    assert result == "Chat compacted: 5 messages summarized into 1, 2 kept."
+
+
 # ------------------------------------------------------------------ T16 speech
 
 
