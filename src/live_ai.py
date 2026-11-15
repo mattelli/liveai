@@ -54,6 +54,11 @@ _PROMPTS = {
 # template and break user/assistant role alternation on the next request.
 CANCELLED_PLACEHOLDER = _PROMPTS["cancelled_placeholder"]
 
+# Tools that rewrite the live message list in place (src.tools.memory): a round
+# carrying one of them is executed sequentially, never in the tool pool (see
+# Agent._execute_tool_calls).
+_HISTORY_MUTATING_TOOLS = frozenset({"clear_chat", "compact_chat"})
+
 
 @dataclass
 class ActResult:
@@ -2639,9 +2644,17 @@ class Agent(Brain):
         it and the round carries more than one call; sequential
         otherwise. Per-call durations land on ``_last_tool_durations``
         for the step record.
+
+        A round that contains a history-mutating tool (``clear_chat``,
+        ``compact_chat``) always runs sequentially: those tools rewrite the
+        live message list in place, so running them next to a sibling call
+        (or letting ``_run_tool_calls`` append their results concurrently)
+        could lose or interleave messages.
         """
         self._last_tool_durations: list[float] = []
-        if len(tool_calls) < 2 or self._max_parallel_tools < 2:
+        serial = any(call.get("name") in _HISTORY_MUTATING_TOOLS
+                     for call in tool_calls)
+        if serial or len(tool_calls) < 2 or self._max_parallel_tools < 2:
             results = []
             for call in tool_calls:
                 started = time.perf_counter()

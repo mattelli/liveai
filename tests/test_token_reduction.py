@@ -513,6 +513,103 @@ def test_auto_compact_uses_agent_instance_when_present(monkeypatch):
     assert seen == {"keep": 6}
 
 
+# ------------------------------------- history-mutating tools run sequentially
+
+
+def test_history_mutating_tools_run_sequentially(monkeypatch):
+    """A round with clear_chat/compact_chat never goes through the pool."""
+    agent = _BareAgent()
+    agent._max_parallel_tools = 4
+    agent._messages = []
+    calls = []
+
+    def fake_execute(call):
+        calls.append(call["name"])
+        return "ok"
+
+    monkeypatch.setattr(agent, "_execute_tool", fake_execute)
+
+    def boom(*args, **kwargs):
+        raise AssertionError("the tool pool must not be used")
+
+    monkeypatch.setattr(live_ai_mod, "ThreadPoolExecutor", boom)
+    tool_calls = [
+        {"id": "c1", "name": "compact_chat", "arguments": "{}"},
+        {"id": "c2", "name": "web_search", "arguments": "{}"},
+    ]
+    results = agent._execute_tool_calls(tool_calls)
+
+    assert results == ["ok", "ok"]
+    assert calls == ["compact_chat", "web_search"]  # in call order
+
+
+def test_plain_round_still_uses_the_pool(monkeypatch):
+    """Without a history-mutating tool the pool path is unchanged."""
+    agent = _BareAgent()
+    agent._max_parallel_tools = 4
+    agent._messages = []
+    used = {}
+
+    class _Pool:
+        def __init__(self, max_workers):
+            used["workers"] = max_workers
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def submit(self, fn, *args):
+            class _F:
+                def result(self_inner):
+                    return "pooled"
+            return _F()
+
+    monkeypatch.setattr(live_ai_mod, "ThreadPoolExecutor", _Pool)
+    tool_calls = [
+        {"id": "c1", "name": "web_search", "arguments": "{}"},
+        {"id": "c2", "name": "web_news", "arguments": "{}"},
+    ]
+    results = agent._execute_tool_calls(tool_calls)
+
+    assert results == ["pooled", "pooled"]
+    assert used == {"workers": 2}
+
+
+def test_compact_chat_is_reentrant_under_lock():
+    """Two threads compacting the same instance leave a valid history."""
+    import threading
+    from src.tools.memory import MemoryTools
+
+    instance = MemoryTools()
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    instance.bind_history(lambda: messages)
+    instance.bind_summarizer(lambda old: "SUMMARY")
+    errors = []
+
+    def run():
+        try:
+            instance.compact_chat()
+        except Exception as exc:  # pragma: no cover - failure path
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors
+    # the history stayed structurally valid: one system head, no orphan tool
+    assert messages[0]["role"] == "system"
+    assert all(m["role"] != "tool" for m in messages)
+
+
 def test_compact_keep_messages_defaults_to_context_keep():
     agent = _BareAgent()
     agent._compact_keep_messages = 40

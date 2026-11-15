@@ -26,6 +26,7 @@ existing callers and tests.
 from __future__ import annotations
 
 import pathlib
+import threading
 from datetime import datetime
 
 from src.common import dump_func_call, truncate_text
@@ -89,6 +90,12 @@ class MemoryTools:
     def __init__(self) -> None:
         self._history_provider = None  # callable returning the live messages list
         self._summarizer = None        # callable messages -> summary text
+        # Serializes the read-modify-write of the live history (clear_chat,
+        # compact_chat): the module-default instance is shared by the session
+        # thread (Ctrl+C, /compact) and the agent turn, and the tool executor
+        # may run several calls of one round in parallel. Reentrant so a tool
+        # calling another mutator on the same instance cannot deadlock.
+        self._lock = threading.RLock()
 
     def for_owner(self, agent) -> "MemoryTools":
         """Fresh instance for a specific agent (per-agent tool isolation).
@@ -237,26 +244,27 @@ class MemoryTools:
         Useful when user ask for cleaning conversation history.
         """
         try:
-            provider = self._history_provider
-            if provider is None:
-                return "Error: no chat session is bound."
-            messages = provider()
-            system_prompt = self._config("brain", "system_prompt", "")
-            system = next(
-                (m["content"] for m in messages if m["role"] == "system"),
-                system_prompt,
-            )
-            user_msgs = [
-                m["content"] for m in messages
-                if m.get("role") == "user" and isinstance(m.get("content"), str)
-                and not self._is_summary(m.get("content"))
-            ]
-            messages.clear()  # in place: the session keeps the same list object
-            messages.append({"role": "system", "content": system})
-            messages.append({"role": "user", "content": self._read_memory()})
-            if user_msgs:
-                messages.append({"role": "user", "content": user_msgs[-1]})
-            return "Chat cleared successfully"
+            with self._lock:
+                provider = self._history_provider
+                if provider is None:
+                    return "Error: no chat session is bound."
+                messages = provider()
+                system_prompt = self._config("brain", "system_prompt", "")
+                system = next(
+                    (m["content"] for m in messages if m["role"] == "system"),
+                    system_prompt,
+                )
+                user_msgs = [
+                    m["content"] for m in messages
+                    if m.get("role") == "user" and isinstance(m.get("content"), str)
+                    and not self._is_summary(m.get("content"))
+                ]
+                messages.clear()  # in place: the session keeps the same list object
+                messages.append({"role": "system", "content": system})
+                messages.append({"role": "user", "content": self._read_memory()})
+                if user_msgs:
+                    messages.append({"role": "user", "content": user_msgs[-1]})
+                return "Chat cleared successfully"
         except Exception as e:
             return f"Error: {e}"
 
@@ -335,6 +343,11 @@ class MemoryTools:
         reports " (extractive fallback)" when no bound summarizer produced the
         summary, so a silent degradation to the fallback is visible.
         """
+        with self._lock:
+            return self._compact_chat(keep_last)
+
+    def _compact_chat(self, keep_last: int = 4) -> str:
+        """Locked body of :meth:`compact_chat` (see its docstring)."""
         try:
             provider = self._history_provider
             if provider is None:
