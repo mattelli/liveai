@@ -112,9 +112,10 @@ Consumers (all receive already-absolute paths via `configure()`):
 - Unit tests for the bootstrap placeholders: `{behaviour_dir}` / `{data_dir}`
   substituted with the resolved `[cwd]` paths, other braces left untouched,
   and a missing `[cwd]` section keeping the prompt verbatim.
-- Integration: `main.py --config <tmp config>` creates `.liveai/` in the cwd
-  and the session/memory/monitor files land there.
-- Full suite: `python -m pytest tests -q` green.
+- Integration: `main.py --config <tmp config> --tools-list` launched from a
+  different directory creates `.liveai/` (with `tmp/` and `behaviour/`) in the
+  **launch** directory, not the project root. Verified manually.
+- Full suite: `python -m pytest tests -q` -> 1130 passed.
 
 ## Tasks (one commit each)
 
@@ -132,4 +133,4 @@ Consumers (all receive already-absolute paths via `configure()`):
    created, prompt text present. — DONE
 5. **Docs + `.gitignore`.** README section on the `.liveai` data root and the
    assets-vs-state split; add `.liveai/` to `.gitignore`; record the
-   verification run.
+   verification run. — DONE

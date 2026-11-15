@@ -7,6 +7,56 @@ Mic → Whisper (STT) → LLM (OpenAI-compatible API) → Piper (TTS)
 Chat mode is supported, several tools are available.
 
 
+## Runtime data root (`.liveai`)
+
+Every run keeps its own runtime state in a **`.liveai/` folder created in the
+directory `main.py` is launched from** (not the project root), so several
+sessions started from different folders never share files:
+
+```
+<cwd>/.liveai/
+├── memory.log      # personal memory            ([brain] memory_path_cwd)
+├── sessions/       # /session store|list|load   ([brain] sessions_dir_cwd)
+├── agents.jsonl    # activity monitor log       ([agent] monitor_log_file_cwd)
+├── input.log       # prompt_toolkit history     ([input] history_file_cwd)
+├── schedule.json   # task persistence           ([delegation.scheduler] persist_file_cwd)
+├── tmp/            # scratch output (downloads, charts, sandbox)  ([cwd] tmp_dir_cwd)
+└── behaviour/      # markdown instruction files ([cwd] behaviour_dir_cwd)
+```
+
+**Assets vs. state.** Shared assets stay in the project root `.res/` (model
+weights, corpora, voices, embeddings) and the config files stay in the project
+root too; only *per-run state* moves into `.liveai/`.
+
+**Resolution rule.** Any config key ending in `_cwd` is resolved relative to
+the launch directory, while every other `*_file` / `*_dir` / `*_path` key
+resolves relative to the config file. `[cwd] data_dir_cwd` is the data root
+itself; every **other** `_cwd` key is resolved *under* it, so the values stay
+short and the root is defined once:
+
+```toml
+[cwd]
+data_dir_cwd = ".liveai"       # the data root (relative to the launch directory)
+tmp_dir_cwd = "tmp"            # -> <cwd>/.liveai/tmp
+behaviour_dir_cwd = "behaviour"  # -> <cwd>/.liveai/behaviour
+
+[brain]
+memory_path_cwd = "memory.log" # -> <cwd>/.liveai/memory.log
+sessions_dir_cwd = "sessions"
+```
+
+Change `data_dir_cwd` in one place and every state file follows.
+
+**Behaviour folder.** Put free-form markdown instruction files in
+`<cwd>/.liveai/behaviour/`; the `[agent] bootstrap_prompt` references the
+folder with a `{behaviour_dir}` placeholder (resolved at startup), so the
+agent reads them on the first turn. No files → nothing to follow.
+
+The data root and its `tmp` / `behaviour` subfolders are created on startup;
+existing root-level `memory.log` / `.sessions/` / `input.log` are **not**
+migrated (move them manually if needed).
+
+
 ## Whisper
 Whisper is a pre-trained model for automatic speech recognition (ASR) and speech translation. 
 See [Whisper](https://huggingface.co/openai/whisper-medium)
@@ -468,8 +518,8 @@ as its input layer, so the same behaviour works on Windows and POSIX:
 
 - **Line editing** — arrows, Home/End, word operations, Ctrl-K/U/W, selection.
 - **Persistent history** — Up/Down recalls previous turns, and history survives
-  across sessions. It is stored in `.chat_history` (git-ignored). Delete the file
-  to reset; it has no size cap.
+  across sessions. It is stored in `<cwd>/.liveai/input.log` (git-ignored).
+  Delete the file to reset; it has no size cap.
 - **Inline history suggestions** — faint grey text suggests a previous entry;
   press Right/End to accept.
 - **Multi-line paste** — pasting a block inserts it as one buffer; Enter submits
@@ -484,7 +534,7 @@ Configure via the `[input]` block in `config.toml` (all keys optional):
 
 ```toml
 [input]
-history_file = ".chat_history"   # relative to config.toml; empty/omitted -> in-memory
+history_file_cwd = "input.log"   # under [cwd] data_dir_cwd; empty/omitted -> in-memory
 prompt_toolkit = true            # false -> builtin input() fallback
 auto_suggest = true
 completion = true
@@ -529,12 +579,12 @@ The full chat history can be saved to and restored from JSON files with the
   stored one; `<name>` is the file name with or without the `.json` suffix,
   or the 1-based index shown by `/session list`.
 
-The storage folder comes from `[brain] sessions_dir` in `config.toml`
-(resolved relative to the config file and created on first store):
+The storage folder comes from `[brain] sessions_dir_cwd` in `config.toml`
+(resolved under `[cwd] data_dir_cwd`, created on first store):
 
 ```toml
 [brain]
-sessions_dir = ".sessions"
+sessions_dir_cwd = "sessions"   # -> <cwd>/.liveai/sessions
 ```
 
 ## Model switching (`/model`)
@@ -753,7 +803,7 @@ visible through independent, combinable flags
 ```toml
 [agent]
 monitor = "calls,log"                 # "calls" and/or "log"; empty = quiet
-# monitor_log_file = "/agents.jsonl"  # JSONL event log path (monitor = "log")
+# monitor_log_file_cwd = "agents.jsonl"  # JSONL event log path (monitor = "log"; under [cwd] data_dir_cwd)
 # monitor_buffer = 100                # in-memory events kept for the agent_activity tool
 ```
 
@@ -762,7 +812,8 @@ monitor = "calls,log"                 # "calls" and/or "log"; empty = quiet
   (e.g. `[CALL] web_search (scheduler)(...`). The main agent's own
   `[CALL]` blocks are unchanged.
 - `log` — every agent event is appended as one JSON object per line to
-  `monitor_log_file` (default `agents.jsonl`): run `start`/`answer`
+  `monitor_log_file_cwd` (default `agents.jsonl`, under `[cwd] data_dir_cwd`):
+  run `start`/`answer`
   (with prompt/answer and duration) and per-tool-call `tool_call`/`tool_result`
   events. Lines are written atomically under a lock, so worker threads never
   interleave half-lines; the file is created lazily and a write failure
@@ -896,7 +947,7 @@ The feature ships off by default; enable it in `config.toml`:
 ```
 [delegation.scheduler]
 enabled = true                       # false/missing -> tools are no-ops
-persist_file = "data/schedule.json"  # task persistence (survives restarts)
+persist_file_cwd = "schedule.json"   # task persistence (survives restarts; under [cwd] data_dir_cwd)
 on_missed = "skip"                   # missed one-shots after a restart:
                                      # "run" executes them, "skip" drops them
 ```

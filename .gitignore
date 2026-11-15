@@ -6,6 +6,10 @@ __pycache__/
 .Python
 .*/
 
+# Runtime data root (per launch directory): memory.log, sessions/, tmp/,
+# behaviour/, agents.jsonl, input.log, schedule.json
+.liveai/
+
 
 # Logs
 *.log
