@@ -244,11 +244,97 @@ def test_load_config_without_input_block(tmp_path):
     assert not hasattr(ns, "input")
 
 
-def test_load_config_resolves_input_history_file(tmp_path):
+def test_load_config_resolves_input_history_file(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # data root is per launch directory
     cfg = tmp_path / "config.toml"
     cfg.write_text('[input]\nhistory_file = ".chat_history"\n')
     ns = load_config(cfg)
-    assert ns.input.history_file == (tmp_path / ".chat_history").resolve()
+    # Runtime-state keys resolve under the data root (cwd/.liveai), not the
+    # config directory.
+    assert ns.input.history_file == (tmp_path / ".liveai" / ".chat_history").resolve()
+
+
+def test_load_config_data_root_defaults(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[brain]\nmodel = 'x'\n")
+    ns = load_config(cfg)
+    assert ns.paths.data_dir == (tmp_path / ".liveai").resolve()
+    assert ns.paths.tmp_dir == (tmp_path / ".liveai" / "tmp").resolve()
+    assert ns.paths.behaviour_dir == (tmp_path / ".liveai" / "behaviour").resolve()
+
+
+def test_load_config_state_keys_resolve_under_data_root(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[brain]\nmemory_path = "memory.log"\nsessions_dir = "sessions"\n'
+        '[agent]\nmonitor_log_file = "agents.jsonl"\n'
+        '[input]\nhistory_file = "input.log"\n'
+        '[delegation.scheduler]\npersist_file = "schedule.json"\n'
+    )
+    ns = load_config(cfg)
+    root = (tmp_path / ".liveai").resolve()
+    assert ns.brain.memory_path == root / "memory.log"
+    assert ns.brain.sessions_dir == root / "sessions"
+    assert ns.agent.monitor_log_file == root / "agents.jsonl"
+    assert ns.input.history_file == root / "input.log"
+    assert ns.delegation.scheduler.persist_file == root / "schedule.json"
+
+
+def test_load_config_assets_still_resolve_against_config_dir(tmp_path, monkeypatch):
+    # The launch directory differs from the config directory: assets must
+    # follow the config file, state must follow the launch directory.
+    launch = tmp_path / "launch"
+    launch.mkdir()
+    cfg_dir = tmp_path / "proj"
+    cfg_dir.mkdir()
+    monkeypatch.chdir(launch)
+    cfg = cfg_dir / "config.toml"
+    cfg.write_text(
+        '[brain]\nmemory_path = "memory.log"\n'
+        '[embedding]\nmodel_path = ".res/models/st"\ncorpora_dir = ".res/corpora"\n'
+        '[image_gen]\nout_dir = ".out_images"\n'
+    )
+    ns = load_config(cfg)
+    assert ns.embedding.model_path == (cfg_dir / ".res/models/st").resolve()
+    assert ns.embedding.corpora_dir == (cfg_dir / ".res/corpora").resolve()
+    assert ns.image_gen.out_dir == (cfg_dir / ".out_images").resolve()
+    assert ns.brain.memory_path == (launch / ".liveai" / "memory.log").resolve()
+
+
+def test_load_config_custom_paths_section(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[paths]\ndata_dir = ".state"\ntmp_dir = "scratch"\n'
+        'behaviour_dir = "rules"\n'
+        '[brain]\nmemory_path = "memory.log"\n'
+    )
+    ns = load_config(cfg)
+    root = (tmp_path / ".state").resolve()
+    assert ns.paths.data_dir == root
+    assert ns.paths.tmp_dir == root / "scratch"
+    assert ns.paths.behaviour_dir == root / "rules"
+    assert ns.brain.memory_path == root / "memory.log"
+
+
+def test_ensure_data_dirs_creates_folders(tmp_path, monkeypatch):
+    from src.common import ensure_data_dirs
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[brain]\nmodel = 'x'\n")
+    ns = load_config(cfg)
+    ensure_data_dirs(ns)
+    assert (tmp_path / ".liveai").is_dir()
+    assert (tmp_path / ".liveai" / "tmp").is_dir()
+    assert (tmp_path / ".liveai" / "behaviour").is_dir()
+
+
+def test_ensure_data_dirs_tolerates_missing_paths():
+    from types import SimpleNamespace
+    from src.common import ensure_data_dirs
+    ensure_data_dirs(SimpleNamespace())  # no [paths] -> no-op, no raise
 
 
 def test_load_config_resolves_summarization_model_path(tmp_path):

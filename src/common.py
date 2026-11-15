@@ -399,32 +399,111 @@ class StreamPrinter:
             self._spin_suppressed = True
 
 
+# Runtime-state path keys (dotted TOML keys) resolved against the data root
+# (``[paths] data_dir``, a per-launch-directory ``.liveai`` folder) instead of
+# the config directory. Everything else keeps resolving against the config
+# file, so shared assets (``.res/...`` weights, corpora, voices) stay put.
+_STATE_PATH_KEYS = frozenset({
+    ("brain", "memory_path"),
+    ("brain", "sessions_dir"),
+    ("agent", "monitor_log_file"),
+    ("input", "history_file"),
+    ("delegation", "scheduler", "persist_file"),
+    ("paths", "tmp_dir"),
+    ("paths", "behaviour_dir"),
+})
+
+# ``[paths] data_dir`` is the only key resolved against the *launch* directory
+# (the process cwd), not the config directory: that is what makes each launch
+# directory keep its own data.
+_CWD_PATH_KEYS = frozenset({("paths", "data_dir")})
+
+_DEFAULT_DATA_DIR = ".liveai"        # per-launch-directory runtime data root
+_DEFAULT_TMP_DIR = "tmp"             # scratch folder under the data root
+_DEFAULT_BEHAVIOUR_DIR = "behaviour"  # markdown instruction folder
+
+
+def ensure_data_dirs(config: SimpleNamespace) -> None:
+    """Create the ``[paths]`` folders (data root, tmp, behaviour) if missing.
+
+    Best-effort: a read-only or otherwise unusable launch directory must not
+    stop the session from starting (the consumers create their own parents
+    too), so failures are swallowed.
+    """
+    paths = getattr(config, "paths", None)
+    if paths is None:
+        return
+    for attr in ("data_dir", "tmp_dir", "behaviour_dir"):
+        value = getattr(paths, attr, None)
+        if not value:
+            continue
+        try:
+            Path(value).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+
+
 def load_config(config_path: Path) -> SimpleNamespace:
     """
     Load config.toml and return an object with attributes from the config file.
-    Paths are resolved relative to the config file's parent directory.
+
+    Two path bases are used:
+
+    * **config directory** - the default for every ``*_file`` / ``*_dir`` /
+      ``*_path`` key, so shared assets (``.res/...``) and the config file
+      itself stay together.
+    * **data root** - ``[paths] data_dir`` (default ``.liveai``), resolved
+      against the *launch* directory (the process cwd). The runtime-state keys
+      (``memory_path``, ``sessions_dir``, ``monitor_log_file``,
+      ``history_file``, ``persist_file``, ``tmp_dir``, ``behaviour_dir``) are
+      resolved under it, so each launch directory keeps its own data.
+
+    The data root and its ``tmp`` / ``behaviour`` subfolders are created
+    (best-effort) so first-run consumers find them.
     """
     config_dir = config_path.parent.resolve()
+    launch_dir = Path.cwd().resolve()
     with open(config_path, "rb") as f:
         data = tomllib.load(f)
 
+    # Fill the [paths] defaults so consumers can always read them, even when
+    # the section (or one of its keys) is absent.
+    paths_section = data.setdefault("paths", {})
+    paths_section.setdefault("data_dir", _DEFAULT_DATA_DIR)
+    paths_section.setdefault("tmp_dir", _DEFAULT_TMP_DIR)
+    paths_section.setdefault("behaviour_dir", _DEFAULT_BEHAVIOUR_DIR)
+
+    data_dir_value = paths_section.get("data_dir")
+    data_root = (
+        (launch_dir / data_dir_value).resolve()
+        if isinstance(data_dir_value, str) else Path(data_dir_value)
+    )
+
     def resolve_path(value, base_dir):
-        """Resolve a path string relative to the config directory."""
+        """Resolve a path string relative to ``base_dir``."""
         if isinstance(value, str):
-            # Resolve relative paths against config directory
             return (base_dir / value).resolve()
         return value
 
-    def namespace_from_dict(d: dict, base_dir: Path) -> SimpleNamespace:
+    def namespace_from_dict(d: dict, base_dir: Path,
+                            prefix: tuple = ()) -> SimpleNamespace:
         """Recursively convert a dict to a SimpleNamespace, resolving paths.
 
         Only scalar string values are path-resolved; strings inside TOML
-        lists are kept verbatim (they are labels/prompts, not paths).
+        lists are kept verbatim (they are labels/prompts, not paths). The
+        dotted ``prefix`` selects the base: runtime-state keys resolve under
+        the data root, ``[paths] data_dir`` under the launch directory, and
+        everything else under the config directory.
         """
         result = {}
         for k, v in d.items():
+            key = prefix + (k,)
             if isinstance(v, dict):
-                result[k] = namespace_from_dict(v, base_dir)
+                result[k] = namespace_from_dict(v, base_dir, key)
+            elif key in _CWD_PATH_KEYS:
+                result[k] = resolve_path(v, launch_dir)
+            elif key in _STATE_PATH_KEYS:
+                result[k] = resolve_path(v, data_root)
             elif k.endswith("_file") or k.endswith("_dir")  or k.endswith("_path"):
                 result[k] = resolve_path(v, base_dir)
             else:

@@ -25,6 +25,9 @@ def main(argv=None) -> int:
     args = parse_args(argv)
     config = load_config(args.config)
 
+    from src.common import ensure_data_dirs  # create the [paths] folders
+    ensure_data_dirs(config)
+
     from src.tools import configure as configure_tools  # inject config into tool modules
     configure_tools(config)
     from src.common import configure_ui  # inject [ui] display settings
