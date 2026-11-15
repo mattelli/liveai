@@ -470,6 +470,35 @@ def safe_filename(symbol: str) -> str:
     return cleaned or "symbol"
 
 
+def truncate_text(text: str, limit: int) -> str:
+    """Cap a long text before it is stored in the chat history.
+
+    ``limit <= 0`` (unset) or a short-enough text is returned unchanged.
+    Oversized texts keep the **head and the tail** — ``head = limit * 3 // 4``
+    chars, ``tail = limit // 4`` chars — joined by an explicit truncation
+    marker carrying the original length. Head+tail matters for append-ordered
+    files read whole by tools (e.g. ``recall_memory`` returns the entire
+    ``memory.log``, oldest entries first): head-only truncation would
+    silently drop the *most recent* entries, so the tail must survive too.
+    The marker tells the model the text was cut so it can re-query with a
+    targeted tool (``search_in_file``, ``query_document``, ``summarize_doc``)
+    instead of re-reading everything. Truncation is preferred over eager
+    summarization: it is free, deterministic and never distorts what it keeps.
+
+    Shared by the tool-result capping (``src.live_ai``) and the history
+    compaction (``src.tools.memory``): one format, one marker.
+    """
+    if limit <= 0 or len(text) <= limit:
+        return text
+    head = limit * 3 // 4
+    tail = limit // 4
+    marker = f"\n… [truncated, {len(text)} chars total] …\n"
+    # rstrip/lstrip keep the head/tail cuts clean at the marker boundaries:
+    # trailing/leading whitespace (or a half-flushed buffer artifact) can
+    # never merge into the marker line and be mistaken for payload.
+    return text[:head].rstrip() + marker + text[-tail:].lstrip()
+
+
 def dump_func_call(func):
     """
     Decorator to print the function call as a multi-line block: one

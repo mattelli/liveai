@@ -28,7 +28,7 @@ from __future__ import annotations
 import pathlib
 from datetime import datetime
 
-from src.common import dump_func_call
+from src.common import dump_func_call, truncate_text
 
 __all__ = [
     "MemoryTools", "configure", "bind_history", "bind_summarizer",
@@ -121,6 +121,36 @@ class MemoryTools:
     def _history_file(self) -> pathlib.Path:
         return pathlib.Path(self._config("brain", "memory_path", "")).resolve()
 
+    def _read_memory(self) -> str:
+        """Raw personal-memory text (undecorated, no ``[CALL]`` dump).
+
+        Internal counterpart of :meth:`recall_memory`: the decorated tool is
+        for the model, while the compaction/clear paths read the file directly
+        so an internal read never prints a nested tool-call block.
+        """
+        history = self._history_file()
+        if not history.exists():
+            return "No personal data found!"
+        return history.read_text(encoding="utf-8")
+
+    def _head_len(self, messages: list[dict]) -> int:
+        """Length of the re-seeded head: ``[system, recalled personal data]``.
+
+        ``clear_chat``/``_reseeded_head`` always put the system prompt first
+        and the recalled personal data right after it. Compaction must not
+        summarize that head (the personal data would be duplicated into the
+        summary and the system prompt re-summarized), so the summarized range
+        starts after it. Returns 0 for a history with no recognizable head.
+        """
+        if not messages:
+            return 0
+        head = 1 if messages[0].get("role") == "system" else 0
+        if (head == 1 and len(messages) > 1
+                and messages[1].get("role") == "user"
+                and messages[1].get("content") == self._read_memory()):
+            head = 2
+        return head
+
     def _shaped_user_messages(self) -> list[str]:
         """User messages of the live history (text at ``content[0]["text"]``)."""
         messages = self._history_provider() if self._history_provider else []
@@ -140,11 +170,7 @@ class MemoryTools:
         Read users personal data from file.
         Useful when the users ask to recall their personal data.
         """
-        history = self._history_file()
-        if not history.exists():
-            return "No personal data found!"
-        else:
-            return history.read_text(encoding="utf-8")
+        return self._read_memory()
 
     @dump_func_call
     def store_memory(self, content: str = "") -> str:
@@ -200,7 +226,7 @@ class MemoryTools:
             user_msgs = [m["content"] for m in messages if m["role"] == "user"]
             messages.clear()  # in place: the session keeps the same list object
             messages.append({"role": "system", "content": system})
-            messages.append({"role": "user", "content": self.recall_memory()})
+            messages.append({"role": "user", "content": self._read_memory()})
             if user_msgs:
                 messages.append({"role": "user", "content": user_msgs[-1]})
             return "Chat cleared successfully"
@@ -232,16 +258,21 @@ class MemoryTools:
         """``[system, recalled personal data]`` head, like ``clear_chat``.
 
         Preserves the live system message (falls back to the ``[brain]``
-        system_prompt when absent) and the personal-memory seeding.
+        system_prompt when absent) and the personal-memory seeding. The
+        personal data is read undecorated (no nested ``[CALL]`` block) and
+        capped with ``[brain] max_tool_result_chars`` (0 = uncapped), so a
+        large ``memory.log`` cannot bloat the history on every compaction.
         """
         system_prompt = self._config("brain", "system_prompt", "")
         system = next(
             (m["content"] for m in messages if m["role"] == "system"),
             system_prompt,
         )
+        limit = self._config("brain", "max_tool_result_chars", 0) or 0
         return [
             {"role": "system", "content": system},
-            {"role": "user", "content": self.recall_memory()},
+            {"role": "user",
+             "content": truncate_text(self._read_memory(), int(limit))},
         ]
 
     @dump_func_call
@@ -257,8 +288,11 @@ class MemoryTools:
         The kept tail is group-aligned (``_group_aligned_start``): a tool round
         is never split, so the resulting history stays valid for
         OpenAI-compatible servers (no orphan ``tool`` result, no dangling
-        ``assistant(tool_calls)``). When the boundary would leave nothing to
-        summarize, the history is left untouched.
+        ``assistant(tool_calls)``). The re-seeded head (system prompt +
+        recalled personal data) is excluded from the summarized range
+        (``_head_len``), so the personal data is never duplicated into the
+        summary. When the boundary would leave nothing to summarize, the
+        history is left untouched.
         """
         try:
             provider = self._history_provider
@@ -280,7 +314,11 @@ class MemoryTools:
             # dangling ``assistant(tool_calls)`` (which would make the
             # summarizer request invalid). See ``_group_aligned_start``.
             start = _group_aligned_start(messages, keep)
-            old = messages[:start]
+            # The re-seeded head (system prompt + recalled personal data) is
+            # never summarized: the personal data would be duplicated into the
+            # summary and the system prompt re-summarized. See ``_head_len``.
+            head = self._head_len(messages)
+            old = messages[head:start]
             recent = list(messages[start:])
             if not old:
                 return "Context is already compact; nothing to do."

@@ -55,6 +55,14 @@ def test_truncate_tool_result_cuts_are_clean_at_marker():
     assert tail.startswith("Z")        # tail cut stripped to clean payload
 
 
+def test_truncate_tool_result_delegates_to_common():
+    """The historical private name is a thin wrapper over common.truncate_text."""
+    from src.common import truncate_text
+
+    text = "HEAD" + "m" * 10_000 + "TAIL"
+    assert live_ai_mod._truncate_tool_result(text, 4000) == truncate_text(text, 4000)
+
+
 class _FakeStream:
     """Minimal StreamPrinter stand-in for bare-agent tests."""
 

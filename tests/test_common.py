@@ -4,7 +4,9 @@ from pathlib import Path
 
 from rich.console import Console
 
-from src.common import _SPIN_FRAMES, StreamPrinter, cprint, load_config, prompt_input
+from src.common import (
+    _SPIN_FRAMES, StreamPrinter, cprint, load_config, prompt_input, truncate_text,
+)
 
 
 def test_prompt_input_returns_line(monkeypatch):
@@ -509,3 +511,51 @@ def test_stream_printer_blank_line_between_thinking_and_answer(capsys):
     out = sink.getvalue()
     assert "the answer more" in out
     assert out.count("\n\n") == 1
+
+
+
+# ------------------------------------------------ truncate_text (shared helper)
+
+
+def test_truncate_text_unchanged_under_limit():
+    assert truncate_text("hello", 4000) == "hello"
+
+
+def test_truncate_text_unchanged_when_disabled():
+    text = "x" * 50_000
+    assert truncate_text(text, 0) == text
+    assert truncate_text(text, -5) == text
+
+
+def test_truncate_text_keeps_head_and_tail():
+    text = "HEAD" + "m" * 10_000 + "TAIL"
+    result = truncate_text(text, 4000)
+    assert len(result) < len(text)
+    assert result.startswith("HEAD")
+    assert result.endswith("TAIL")
+    assert f"[truncated, {len(text)} chars total]" in result
+
+
+def test_truncate_text_head_tail_split_is_three_quarters():
+    text = "A" * 10_000 + "Z" * 10_000
+    result = truncate_text(text, 4000)
+    assert result.startswith("A" * 3000)      # head = limit * 3 // 4
+    assert result.endswith("Z" * 1000)        # tail = limit // 4
+    assert "A" * 3001 not in result           # middle content dropped
+
+
+def test_truncate_text_reports_original_length():
+    text = "y" * 12_345
+    result = truncate_text(text, 1000)
+    assert "[truncated, 12345 chars total]" in result
+
+
+def test_truncate_text_cuts_are_clean_at_marker():
+    """Head/tail cuts are stripped so no fragment can merge into the marker."""
+    text = "A" * 10_000 + "   \n" + "Z" * 10_000
+    result = truncate_text(text, 4000)
+    marker_line = f"\n… [truncated, {len(text)} chars total] …\n"
+    assert marker_line in result
+    head, _, tail = result.partition(marker_line)
+    assert head.endswith("A")          # head cut stripped to clean payload
+    assert tail.startswith("Z")        # tail cut stripped to clean payload

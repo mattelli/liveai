@@ -13,7 +13,9 @@ from typing import Any, Callable, Literal, Union, get_args, get_origin, get_type
 from logging import getLogger
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
-from src.common import SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter
+from src.common import (
+    SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter, truncate_text,
+)
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
     read_text_file, write_text_file, run_command, spawn_process,
@@ -199,27 +201,13 @@ def _response_token_cap(max_response_tokens: float, context_window: int) -> int:
 def _truncate_tool_result(text: str, limit: int) -> str:
     """Cap a tool result before it is stored in the chat history.
 
-    ``limit <= 0`` (unset) or a short-enough result is returned unchanged.
-    Oversized results keep the **head and the tail** — ``head = limit * 3 // 4``
-    chars, ``tail = limit // 4`` chars — joined by an explicit truncation
-    marker carrying the original length. Head+tail matters for append-ordered
-    files read whole by tools (e.g. ``recall_memory`` returns the entire
-    ``memory.log``, oldest entries first): head-only truncation would
-    silently drop the *most recent* entries, so the tail must survive too.
-    The marker tells the model the result was cut so it can re-query with a
-    targeted tool (``search_in_file``, ``query_document``, ``summarize_doc``)
-    instead of re-reading everything. Truncation is preferred over eager
-    summarization: it is free, deterministic and never distorts what it keeps.
+    Thin wrapper over :func:`src.common.truncate_text` (kept for the
+    historical private name and the test seam): ``limit <= 0`` (unset) or a
+    short-enough result is returned unchanged, oversized results keep the head
+    (75%) and the tail (25%) joined by an explicit truncation marker carrying
+    the original length. See ``truncate_text`` for the rationale.
     """
-    if limit <= 0 or len(text) <= limit:
-        return text
-    head = limit * 3 // 4
-    tail = limit // 4
-    marker = f"\n… [truncated, {len(text)} chars total] …\n"
-    # rstrip/lstrip keep the head/tail cuts clean at the marker boundaries:
-    # trailing/leading whitespace (or a half-flushed buffer artifact) can
-    # never merge into the marker line and be mistaken for payload.
-    return text[:head].rstrip() + marker + text[-tail:].lstrip()
+    return truncate_text(text, limit)
 
 
 def _thinking_token_cap(value) -> int:

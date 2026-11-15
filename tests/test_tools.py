@@ -1971,7 +1971,9 @@ def test_compact_chat_keeps_recent_turns_and_summary(memory_seam):
 
     result = memory_seam.compact_chat(keep_last=2)
 
-    assert result == "Chat compacted: 13 messages summarized into 1, 2 kept."
+    # 12 = the 12 non-head messages before the kept tail: the system prompt is
+    # part of the re-seeded head and is never summarized (T2).
+    assert result == "Chat compacted: 12 messages summarized into 1, 2 kept."
     assert messages[0] == {"role": "system", "content": "be helpful"}
     assert messages[1] == {"role": "user", "content": "No personal data found!"}
     assert messages[2]["role"] == "user"
@@ -2012,6 +2014,7 @@ def test_compact_chat_uses_bound_summarizer(memory_seam):
     memory_seam.compact_chat(keep_last=1)  # clamped to minimum 2
 
     # the summarizer received exactly the non-recent messages, not the head copy
+    # (the system prompt belongs to the re-seeded head, so it is excluded too)
     assert seen == [[{"role": "user", "content": f"old {i}"} for i in range(5)]]
 
 
@@ -2168,7 +2171,8 @@ def test_compact_chat_summarizer_receives_group_complete_range(memory_seam):
 
     assert len(seen) == 1
     summarized = seen[0]
-    assert summarized[0]["role"] == "system"
+    # the head (system prompt) is excluded from the summarized range (T2)
+    assert all(m["role"] != "system" for m in summarized)
     assert summarized[-1]["role"] == "tool"  # ends on a complete round
     _assert_no_orphan_tool_messages(summarized)
     _assert_no_dangling_tool_calls(summarized)
@@ -2206,6 +2210,94 @@ def test_group_aligned_start_never_splits_a_round(memory_seam):
     assert _group_aligned_start(messages, 4) == 2
     # nothing to summarize
     assert _group_aligned_start(messages, 100) == 0
+
+
+# ------------------------------------------- T15d compaction: head handling
+
+
+def test_compact_chat_does_not_duplicate_personal_data(memory_seam, tmp_path):
+    """The recalled personal data lives in the head only, never in the summary."""
+    memory_text = "stored personal data"
+    (tmp_path / "history.txt").write_text(memory_text, encoding="utf-8")
+    messages = (
+        [{"role": "system", "content": "be helpful"},
+         {"role": "user", "content": memory_text}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    seen = []
+    memory_seam.bind_summarizer(lambda old: seen.append(list(old)) or "SUMMARY")
+
+    memory_seam.compact_chat()
+
+    # the head is preserved verbatim, exactly once
+    assert messages[0] == {"role": "system", "content": "be helpful"}
+    assert messages[1] == {"role": "user", "content": memory_text}
+    assert sum(1 for m in messages if m.get("content") == memory_text) == 1
+    # the summarized range starts after the head: no system prompt, no seed
+    assert seen and all(m["role"] != "system" for m in seen[0])
+    assert all(m.get("content") != memory_text for m in seen[0])
+
+
+def test_compact_chat_excludes_system_prompt_from_summary(memory_seam):
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    seen = []
+    memory_seam.bind_summarizer(lambda old: seen.append(list(old)) or "SUMMARY")
+
+    memory_seam.compact_chat()
+
+    assert seen and all(m["role"] != "system" for m in seen[0])
+    assert messages[0] == {"role": "system", "content": "be helpful"}
+
+
+def test_compact_chat_caps_reseeded_recall(memory_seam, tmp_path, monkeypatch):
+    """A large memory.log is truncated when re-seeded into the head."""
+    (tmp_path / "history.txt").write_text("H" * 10_000 + "T" * 10_000,
+                                          encoding="utf-8")
+    monkeypatch.setattr(tools.memory, "_config_cache", None)
+    tools.memory.configure(SimpleNamespace(
+        brain=SimpleNamespace(memory_path=str(tmp_path / "history.txt"),
+                              system_prompt="be helpful",
+                              max_tool_result_chars=4000),
+        agent=SimpleNamespace(bootstrap_prompt="bootstrap"),
+    ))
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "SUMMARY")
+
+    memory_seam.compact_chat()
+
+    seeded = messages[1]["content"]
+    assert "[truncated, 20000 chars total]" in seeded
+    assert len(seeded) < 20000
+
+
+def test_recall_memory_not_dumped_when_called_internally(memory_seam, monkeypatch):
+    """compact_chat reads the memory file directly (no nested [CALL] block)."""
+    calls = []
+    monkeypatch.setattr("src.common._print_call_block",
+                        lambda *a, **k: calls.append(a[0]))
+    messages = (
+        [{"role": "system", "content": "be helpful"}]
+        + [{"role": "user", "content": f"old {i}"} for i in range(6)]
+        + [{"role": "user", "content": "recent"}]
+    )
+    memory_seam.bind_history(lambda: messages)
+    memory_seam.bind_summarizer(lambda old: "SUMMARY")
+
+    memory_seam.compact_chat()
+
+    assert calls == ["compact_chat"]  # only the tool's own block
 
 
 # ------------------------------------------------------------------ T16 speech
