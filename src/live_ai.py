@@ -1609,12 +1609,33 @@ class Brain(OpenAICore):
 
     _SUMMARIZER_SYSTEM_PROMPT = _PROMPTS["summarizer_system"]
 
+    @staticmethod
+    def _summarizer_body(messages: list[dict]) -> list[dict]:
+        """Conversation body of a summarizer request (leading head dropped).
+
+        The range handed over by ``compact_chat`` may start with the original
+        system prompt (the history head) and - after a group-aligned split -
+        with tool results whose ``assistant``/``tool_calls`` parent stayed in
+        the summarized range. Neither belongs in a one-shot summarizer
+        request: the system prompt would duplicate the summarizer prompt (two
+        system messages, paid for twice), and a leading ``tool`` message is
+        rejected by OpenAI-compatible servers. Both are dropped, so the
+        request carries exactly one system message and starts with a
+        user/assistant turn.
+        """
+        body = list(messages)
+        while body and body[0].get("role") in ("system", "tool"):
+            body.pop(0)
+        return body
+
     def _summarize_messages(self, messages: list[dict]) -> str:
         """Summarize messages via the chat model (for history compaction).
 
-        Non-interactive one-shot call with tool use disabled. Returns an empty
-        string on any failure so the caller falls back to the extractive
-        summary instead of failing the turn.
+        Non-interactive one-shot call with tool use disabled. The received
+        messages are reduced to their conversation body
+        (``_summarizer_body``) before the summarizer system prompt is
+        prepended. Returns an empty string on any failure so the caller falls
+        back to the extractive summary instead of failing the turn.
         """
         try:
             kwargs: dict = {
@@ -1622,7 +1643,7 @@ class Brain(OpenAICore):
                 "messages": [
                     {"role": "system",
                      "content": self._SUMMARIZER_SYSTEM_PROMPT},
-                    *messages,
+                    *self._summarizer_body(messages),
                 ],
                 "temperature": 0.2,
                 "max_tokens": 500,

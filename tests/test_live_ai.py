@@ -1051,6 +1051,90 @@ def test_summarize_messages_sends_provider_extra_body(monkeypatch, tmp_path):
     }
 
 
+def test_summarize_messages_single_system_prompt(monkeypatch, tmp_path):
+    """The request carries exactly one system message (the summarizer prompt)."""
+    brain = _switch_brain(monkeypatch, tmp_path, {"boot": {"model": "m"}})
+    seen = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="summary"))])
+
+    brain._client.chat = SimpleNamespace(completions=FakeCompletions())
+    brain._summarize_messages([
+        {"role": "system", "content": "original system prompt"},
+        {"role": "user", "content": "hi"},
+    ])
+
+    sent = seen["messages"]
+    assert [m["role"] for m in sent].count("system") == 1
+    assert sent[0] == {"role": "system",
+                       "content": brain._SUMMARIZER_SYSTEM_PROMPT}
+    assert sent[1] == {"role": "user", "content": "hi"}
+
+
+def test_summarize_messages_drops_leading_tool_messages(monkeypatch, tmp_path):
+    """A leading orphan tool result never reaches the summarizer request."""
+    brain = _switch_brain(monkeypatch, tmp_path, {"boot": {"model": "m"}})
+    seen = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="summary"))])
+
+    brain._client.chat = SimpleNamespace(completions=FakeCompletions())
+    brain._summarize_messages([
+        {"role": "tool", "tool_call_id": "c1", "content": "orphan result"},
+        {"role": "system", "content": "also dropped"},
+        {"role": "user", "content": "hi"},
+    ])
+
+    sent = seen["messages"]
+    assert sent[0]["role"] == "system"
+    assert sent[1] == {"role": "user", "content": "hi"}
+    assert all(m["role"] != "tool" for m in sent)
+
+
+def test_summarize_messages_keeps_conversation_body(monkeypatch, tmp_path):
+    """User/assistant/tool messages after the head are forwarded in order."""
+    brain = _switch_brain(monkeypatch, tmp_path, {"boot": {"model": "m"}})
+    seen = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            seen.update(kwargs)
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="summary"))])
+
+    brain._client.chat = SimpleNamespace(completions=FakeCompletions())
+    body = [
+        {"role": "user", "content": "q1"},
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "t", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "r1"},
+        {"role": "assistant", "content": "a1"},
+    ]
+    brain._summarize_messages(body)
+
+    assert seen["messages"][1:] == body
+
+
+def test_summarize_messages_returns_empty_on_failure(monkeypatch, tmp_path):
+    brain = _switch_brain(monkeypatch, tmp_path, {"boot": {"model": "m"}})
+
+    class BoomCompletions:
+        def create(self, **kwargs):
+            raise RuntimeError("no model")
+
+    brain._client.chat = SimpleNamespace(completions=BoomCompletions())
+    assert brain._summarize_messages([{"role": "user", "content": "hi"}]) == ""
+
+
 def test_select_model_missing_api_key_raises_before_switch(monkeypatch, tmp_path):
     brain = _switch_brain(monkeypatch, tmp_path, {
         "boot": {"model": "boot-model"},
