@@ -35,7 +35,7 @@ auto_compaction = false            # run compact_chat (summary) instead of plain
 # context_window = 8192
 
 [agent] # agent configuration
-bootstrap_prompt = "Read %LIVEAI_DIR%\\AGENT.md (Windows), or $LIVEAI_DIR/AGENT.md (Unix-like), and follow its instructions. If no AGENT.md is found, proceed by announcing 'No agent instructions found.'"
+bootstrap_prompt = "Read %LIVEAI_DIR%\\AGENT.md (Windows), or $LIVEAI_DIR/AGENT.md (Unix-like), and follow its instructions. If no AGENT.md is found, proceed by announcing 'No agent instructions found.' Then read every markdown file in {behaviour_dir} (if any) and follow the instructions they contain."
 max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
 tool_doc_chars = 300       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
 tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")

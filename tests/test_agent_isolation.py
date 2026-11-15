@@ -267,3 +267,65 @@ def test_max_act_rounds_load_config_round_trip(tmp_path):
     assert (rounds if rounds > 0 else live_ai_mod.Agent.MAX_ACT_ROUNDS) == 100
 
 
+# ------------------------------------------------- bootstrap placeholders
+
+
+class _BootstrapProbe:
+    """Borrows the real Agent.bootstrap with a recorded act() and config."""
+
+    bootstrap = live_ai_mod.Agent.bootstrap
+
+    def __init__(self, config):
+        self.config = config
+        self.acted = []
+
+    def act(self, prompt):
+        self.acted.append(prompt)
+
+
+def _cwd_config(tmp_path, prompt):
+    return SimpleNamespace(
+        agent=SimpleNamespace(bootstrap_prompt=prompt),
+        cwd=SimpleNamespace(
+            data_dir_cwd=tmp_path / ".liveai",
+            behaviour_dir_cwd=tmp_path / ".liveai" / "behaviour",
+        ),
+    )
+
+
+def test_bootstrap_substitutes_behaviour_dir(tmp_path):
+    probe = _BootstrapProbe(_cwd_config(
+        tmp_path, "Read every markdown file in {behaviour_dir} and follow it."))
+    probe.bootstrap()
+    assert probe.acted == [
+        f"Read every markdown file in {tmp_path / '.liveai' / 'behaviour'} and follow it."]
+
+
+def test_bootstrap_substitutes_data_dir(tmp_path):
+    probe = _BootstrapProbe(_cwd_config(tmp_path, "Data root is {data_dir}."))
+    probe.bootstrap()
+    assert probe.acted == [f"Data root is {tmp_path / '.liveai'}."]
+
+
+def test_bootstrap_leaves_other_braces_untouched(tmp_path):
+    # str.replace (not str.format): unrelated braces survive verbatim.
+    probe = _BootstrapProbe(_cwd_config(
+        tmp_path, "Keep {unknown} and {behaviour_dir}."))
+    probe.bootstrap()
+    assert probe.acted == [
+        f"Keep {{unknown}} and {tmp_path / '.liveai' / 'behaviour'}."]
+
+
+def test_bootstrap_without_cwd_section_keeps_prompt(tmp_path):
+    config = SimpleNamespace(agent=SimpleNamespace(bootstrap_prompt="plain"))
+    probe = _BootstrapProbe(config)
+    probe.bootstrap()
+    assert probe.acted == ["plain"]
+
+
+def test_bootstrap_empty_prompt_is_noop(tmp_path):
+    probe = _BootstrapProbe(_cwd_config(tmp_path, ""))
+    probe.bootstrap()
+    assert probe.acted == []
+
+

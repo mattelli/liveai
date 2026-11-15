@@ -2256,9 +2256,24 @@ class Agent(Brain):
                 f"{len(extra_impls)} tool(s) injected: {tools}")
 
     def bootstrap(self) -> None:
-        """Run the configured bootstrap prompt (called by the session, not on init)."""
-        if self.config.agent.bootstrap_prompt:
-            self.act(self.config.agent.bootstrap_prompt)
+        """Run the configured bootstrap prompt (called by the session, not on init).
+
+        ``{behaviour_dir}`` / ``{data_dir}`` placeholders in the prompt are
+        replaced with the resolved ``[cwd]`` paths, so the prompt can point the
+        agent at the run's behaviour folder without hardcoding a location.
+        Substitution is a literal ``str.replace`` (not ``str.format``), so any
+        other braces in the prompt are left untouched.
+        """
+        prompt = self.config.agent.bootstrap_prompt
+        if not prompt:
+            return
+        cwd = getattr(self.config, "cwd", None)
+        for placeholder, attr in (("{behaviour_dir}", "behaviour_dir_cwd"),
+                                  ("{data_dir}", "data_dir_cwd")):
+            value = getattr(cwd, attr, None) if cwd is not None else None
+            if value:
+                prompt = prompt.replace(placeholder, str(value))
+        self.act(prompt)
 
     ## runtime tool toggling (/tools on|off) ##
 

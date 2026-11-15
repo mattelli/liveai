@@ -80,9 +80,11 @@ Consumers (all receive already-absolute paths via `configure()`):
    (`extract_archive` already defaults *beside the archive*, not to the cwd,
    so it is left unchanged.)
 5. `behaviour/` holds markdown instruction files; they are discovered by the
-   agent through the **bootstrap prompt** (the prompt tells the agent to read
-   the markdown files in the behaviour folder). No automatic prompt injection
-   — discovery stays agent-driven.
+   agent through the **bootstrap prompt**. The prompt references the folder
+   with a `{behaviour_dir}` placeholder, which `Agent.bootstrap()` replaces
+   with the resolved `[cwd] behaviour_dir_cwd` path (literal `str.replace`, so
+   other braces are untouched). No automatic prompt injection — discovery
+   stays agent-driven.
 6. Existing root-level `memory.log`, `.sessions/`, `input.log` are **not**
    migrated; runs start fresh in `.liveai/` (manual migration by the user).
 
@@ -107,6 +109,9 @@ Consumers (all receive already-absolute paths via `configure()`):
 - Unit tests for the tmp defaults: `download_file`, `save_financial_chart`
   and the `pyeval` sandbox write under the configured `tmp_dir_cwd` when
   `out_dir`/dest is omitted, and honor an explicit value.
+- Unit tests for the bootstrap placeholders: `{behaviour_dir}` / `{data_dir}`
+  substituted with the resolved `[cwd]` paths, other braces left untouched,
+  and a missing `[cwd]` section keeping the prompt verbatim.
 - Integration: `main.py --config <tmp config>` creates `.liveai/` in the cwd
   and the session/memory/monitor files land there.
 - Full suite: `python -m pytest tests -q` green.
@@ -124,7 +129,7 @@ Consumers (all receive already-absolute paths via `configure()`):
 4. **behaviour_dir.** Ensure the folder is created; update the bootstrap
    prompt in both config files to instruct the agent to read the markdown
    files in the behaviour folder; document the convention. Tests: folder
-   created, prompt text present.
+   created, prompt text present. — DONE
 5. **Docs + `.gitignore`.** README section on the `.liveai` data root and the
    assets-vs-state split; add `.liveai/` to `.gitignore`; record the
    verification run.
