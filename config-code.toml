@@ -56,12 +56,12 @@ terminal = false    # print "🔔 task completed" when a scheduled task or sub-a
 # cannot delegate. Each child gets its own tool instances (memory/vision).
 summarize_results = false            # true -> long child results are condensed by an LLM summary before being shown
 # summarize_max_chars = 800          # results longer than this get summarized (0 = summarize everything)
-# [delegation.agents.researcher]
-# tool_groups = "web, files"         # tool topics for this child (see [agent] tool_groups)
-# model = "ternary-bonsai"           # models.json entry name; unset = the main model
-# system_prompt = "You are a research assistant. Be concise and cite sources."
-# max_act_rounds = 50                # child round budget (default: Agent class default)
-# description = "web research"       # shown to the main agent in its prompt
+[delegation.agents.researcher]
+description = "researcher"           # shown to the main agent in its prompt
+tool_groups = "files, web, system"   # tool topics for this child (see [agent] tool_groups)
+model = "ternary-bonsai"             # models.json entry name; unset = the main model
+system_prompt = "You are a research assistant. Be concise and cite sources."
+max_act_rounds = 50                  # child round budget (default: Agent class default)
 
 [ui] # chat appearance (all keys optional)
 prompt = "You (hint '/') ›"      # chat-mode input label
@@ -74,7 +74,7 @@ banner_logo = false         # false -> hide the ASCII-art logo inside the banner
 call_lines_max = 6          # max lines of the [CALL] tool-call block; extra params elided; 0 = skip the dump entirely
 line_width = 120            # max width of each parameter value line; max limit is 240
 show_thinking = true        # Chain-of-thought visualization, reasoning is display-only it never enters the chat history or the spoken/returned answer.
-max_thinking_tokens = 0     # max tokens of thinking to visualize (0 = unlimited)
+max_thinking_tokens = 200   # max tokens of thinking to visualize (0 = unlimited)
 
 [input] # Interactive chat input (prompt_toolkit). All keys optional.
 history_file_cwd = "input.log"   # prompt_toolkit history (under data_dir_cwd); "." or empty disables persistence
