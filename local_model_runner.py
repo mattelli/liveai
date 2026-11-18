@@ -26,21 +26,21 @@ on several servers.
 
 Examples
 --------
-    python samples/local_model_runner.py                          # interactive menu loop
-    python samples/local_model_runner.py -i --loaded              # one-shot, then the menu loop
-    python samples/local_model_runner.py --loaded                 # loaded on every server (one-shot)
-    python samples/local_model_runner.py ollama --loaded          # only Ollama
-    python samples/local_model_runner.py --list                   # only available models
-    python samples/local_model_runner.py lmstudio --host localhost:1234
-    python samples/local_model_runner.py --load "qwen3.5:0.8b" --loaded
-    python samples/local_model_runner.py --info ollama:llama3.2:3b
-    python samples/local_model_runner.py --unload llama3.2:3b
-    python samples/local_model_runner.py --start lmstudio --list  # start LM Studio's server, then list
-    python samples/local_model_runner.py --start ollama           # start Ollama, then the menu loop
-    python samples/local_model_runner.py --start both             # start both servers, then the menu loop
-    python samples/local_model_runner.py --stop ollama            # stop the Ollama server, then the menu loop
-    python samples/local_model_runner.py --stop both --start both # restart both servers
-    bin\\local.bat                                                # interactive loop via the venv wrapper
+    python local_model_runner.py                          # interactive menu loop
+    python local_model_runner.py -i --loaded              # one-shot, then the menu loop
+    python local_model_runner.py --loaded                 # loaded on every server (one-shot)
+    python local_model_runner.py ollama --loaded          # only Ollama
+    python local_model_runner.py --list                   # only available models
+    python local_model_runner.py lmstudio --host localhost:1234
+    python local_model_runner.py --load "qwen3.5:0.8b" --loaded
+    python local_model_runner.py --info ollama:llama3.2:3b
+    python local_model_runner.py --unload llama3.2:3b
+    python local_model_runner.py --start lmstudio --list  # start LM Studio's server, then list
+    python local_model_runner.py --start ollama           # start Ollama, then the menu loop
+    python local_model_runner.py --start both             # start both servers, then the menu loop
+    python local_model_runner.py --stop ollama            # stop the Ollama server, then the menu loop
+    python local_model_runner.py --stop both --start both # restart both servers
+    bin\\local-servers.bat                                # interactive loop via the venv wrapper
 """
 
 import argparse
