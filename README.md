@@ -363,8 +363,8 @@ stored in the pickle.
 
 Notes:
 
-- Inspect a named corpus with `python samples/inspect_corpus.py --list` and
-  `python samples/inspect_corpus.py --corpus autosar` (filters: `--sources`,
+- Inspect a named corpus with `python playground/inspect_corpus.py --list` and
+  `python playground/inspect_corpus.py --corpus autosar` (filters: `--sources`,
   `--kind image`, `--source`, `--grep`, `--record N`, `--json`).
 - Requires `faiss-cpu`, `pymupdf`, `python-docx` and `openpyxl` (installed into Python environment).
 - Rebuild a corpus whenever a model path, `extensions`, `multimodal` or
@@ -376,7 +376,7 @@ Notes:
 
 `query_document` answers "where in this file is ...?" for a **single document**
 without building a corpus. Mirroring
-`samples/sentence_transformers/in_document_search_crossencoder.py`, the document
+`playground/sentence_transformers/in_document_search_crossencoder.py`, the document
 is read with `src/document_loader.py` (any supported type: text-like, PDF,
 DOCX, XLSX, HTML), split into passages of up to `chunk_size` consecutive
 sentences (PDF passages keep their page number), and every `[query, passage]`
@@ -420,7 +420,7 @@ Notes:
 ## Image search (CLIP)
 
 `image_search` finds the pictures inside a **folder** that best match a text
-query. Mirroring `samples/sentence_transformers/image_search.py`, every image
+query. Mirroring `playground/sentence_transformers/image_search.py`, every image
 under the folder (recursively; `.png .jpg .jpeg .webp .bmp .tif .tiff`) is
 embedded with the CLIP model, the query text is embedded into the same shared
 space, and cosine similarity ranks the images. The tool returns the **top_k
