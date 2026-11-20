@@ -111,6 +111,108 @@ def test_cancel_generation_marks_flag_and_cancels_stream():
     assert agent._active_stream is None
 
 
+def test_cancel_token_is_thread_safe_and_idempotent():
+    """The cancel token is a threading.Event: set/clear is idempotent."""
+    import threading
+
+    agent = _BareAgent()
+    assert isinstance(agent._cancel_event, threading.Event)
+    assert agent.cancel_requested is False
+
+    agent.cancel_generation()
+    agent.cancel_generation()  # idempotent: no error, still cancelled
+    assert agent._cancel_event.is_set() is True
+    assert agent.cancel_requested is True
+
+    agent._cancel_requested = False  # compatibility alias clears the event
+    assert agent._cancel_event.is_set() is False
+    assert agent.cancel_requested is False
+
+
+def test_cancel_event_set_from_another_thread_is_visible():
+    """A cancel set by another thread is observed by the streaming loop."""
+    import threading
+
+    agent = _BareAgent()
+    seen = threading.Event()
+
+    def watcher():
+        # Spin until the main thread cancels, then record it.
+        for _ in range(1000):
+            if agent.cancel_requested:
+                seen.set()
+                return
+            threading.Event().wait(0.001)
+
+    thread = threading.Thread(target=watcher)
+    thread.start()
+    agent.cancel_generation()
+    thread.join(timeout=5)
+    assert seen.is_set() is True
+
+
+def test_stream_round_raises_generation_cancelled(monkeypatch):
+    """A stream that yields forever raises GenerationCancelled once cancelled."""
+    import threading
+
+    agent = _BareAgent()
+    agent._show_thinking = False
+    agent._pending_answer = ""
+    agent._last_round_usage = None
+    agent._handle_fragment = lambda text: None
+    agent._flush_pending_answer = lambda: ""
+    agent.enabled_tool_definitions = lambda: []
+    agent._reset_thinking = lambda: None
+
+    class EndlessStream:
+        def __iter__(self):
+            while True:
+                yield live_ai_mod.SimpleNamespace(
+                    choices=[live_ai_mod.SimpleNamespace(
+                        delta=live_ai_mod.SimpleNamespace(
+                            content="x", tool_calls=[]))],
+                    usage=None,
+                )
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(agent, "_stream_completion", lambda tools=None: EndlessStream())
+
+    # Cancel from another thread shortly after the loop starts.
+    timer = threading.Timer(0.05, agent.cancel_generation)
+    timer.start()
+    try:
+        with pytest.raises(live_ai_mod.GenerationCancelled):
+            agent._stream_round([])
+    finally:
+        timer.cancel()
+
+
+def test_interrupt_does_not_close_the_stream():
+    """interrupt() flags the turn but keeps the active stream open."""
+    class FakeStream:
+        def __init__(self):
+            self.close_calls = 0
+
+        def close(self):
+            self.close_calls += 1
+
+    agent = _BareAgent()
+    stream = FakeStream()
+    agent._active_stream = stream
+
+    assert agent.interrupt() == "Interrupt requested"
+    assert agent.cancel_requested is True
+    assert stream.close_calls == 0  # graceful: stream left untouched
+    assert agent._active_stream is stream
+
+
+def test_generation_cancelled_is_an_exception_subclass():
+    """GenerationCancelled stays catchable by generic handlers."""
+    assert issubclass(live_ai_mod.GenerationCancelled, Exception)
+
+
 def test_cancelled_round_does_not_speak(monkeypatch):
     spoken = []
 
@@ -2473,3 +2575,19 @@ def test_act_result_defaults():
     assert result.rounds == 0
     assert result.tool_calls == 0
     assert result.cancelled is False
+
+
+def test_act_propagates_generation_cancelled(monkeypatch):
+    """A cancel raised by a streaming loop escapes act() (not swallowed)."""
+    agent = _make_act_agent(max_rounds=3)
+
+    def cancelled_round(tools):
+        raise live_ai_mod.GenerationCancelled("generation cancelled by user")
+
+    monkeypatch.setattr(agent, "_stream_round", cancelled_round)
+    monkeypatch.setattr(agent, "_prune_history", lambda: 0)
+    monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
+    with pytest.raises(live_ai_mod.GenerationCancelled):
+        agent.act("question")
+    # Cleanup still ran: the active stream handle was dropped.
+    assert agent._active_stream is None

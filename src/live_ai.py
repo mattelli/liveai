@@ -60,6 +60,16 @@ CANCELLED_PLACEHOLDER = _PROMPTS["cancelled_placeholder"]
 _HISTORY_MUTATING_TOOLS = frozenset({"clear_chat", "compact_chat"})
 
 
+class GenerationCancelled(Exception):
+    """Raised by the streaming loops when the user cancels a generation.
+
+    A dedicated type lets the session tell a user cancel (Ctrl+C) apart from a
+    real failure, so it can report ``⏹ generation cancelled`` instead of an
+    error. Subclasses ``Exception`` so existing ``except Exception`` handlers
+    (scheduler, delegation) keep working; the session catches it explicitly.
+    """
+
+
 @dataclass
 class ActResult:
     """Outcome of one ``Agent.act()`` turn (smolagents RunResult pattern).
@@ -744,6 +754,7 @@ class OpenAICore:
                 code_theme=_validated_code_theme(getattr(ui, "code_theme", None)),
                 markdown=_validated_markdown(getattr(ui, "markdown", None)),
             )
+        self._cancel_event = threading.Event()
         self._cancel_requested = False
         self._active_stream = None
         # Session-bound tool modules: their config comes from main.py via
@@ -1567,6 +1578,29 @@ class Brain(OpenAICore):
     ## generation ##
 
     @property
+    def _cancel_requested(self) -> bool:
+        """Compatibility alias for the cancel token.
+
+        The thread-safe ``_cancel_event`` is the single source of truth; this
+        property keeps the historical attribute-style access
+        (``self._cancel_requested = True`` / ``if self._cancel_requested``)
+        working for existing callers and tests.
+        """
+        event = getattr(self, "_cancel_event", None)
+        return bool(event is not None and event.is_set())
+
+    @_cancel_requested.setter
+    def _cancel_requested(self, value: bool) -> None:
+        event = getattr(self, "_cancel_event", None)
+        if event is None:  # agents built without Brain.__init__ (tests)
+            event = threading.Event()
+            self._cancel_event = event
+        if value:
+            event.set()
+        else:
+            event.clear()
+
+    @property
     def cancel_requested(self) -> bool:
         """True while a user cancel (Ctrl+C) is pending for the current turn."""
         return self._cancel_requested
@@ -1814,7 +1848,7 @@ class Brain(OpenAICore):
         try:
             for chunk in stream:
                 if self._cancel_requested:
-                    break
+                    raise GenerationCancelled("generation cancelled by user")
                 delta = self._stream_delta(chunk)
                 if delta is None:
                     continue
@@ -1852,11 +1886,12 @@ class Brain(OpenAICore):
         """
         Stop the in-flight model response as soon as possible (best effort).
         Not exposed to the LLM; invoked by the session's Ctrl+C handling.
-        Closes the active HTTP stream for both streamed responses and ``act()``
-        rounds; the pending flag covers a cancel raised while a tool is
-        running (between rounds). Partial output is kept in the chat history.
+        Sets the thread-safe cancel token and closes the active HTTP stream for
+        both streamed responses and ``act()`` rounds; the token covers a cancel
+        raised while a tool is running (between rounds). Idempotent and never
+        raises, so it is safe to call from a signal handler or any thread.
         """
-        self._cancel_requested = True
+        self._cancel_requested = True  # sets the cancel event
         stream, self._active_stream = self._active_stream, None
         if stream is not None:
             try:
@@ -1874,7 +1909,7 @@ class Brain(OpenAICore):
         stops before the next round, and queued tools are not executed
         (see ``_execute_tool``). Not exposed to the LLM.
         """
-        self._cancel_requested = True
+        self._cancel_requested = True  # sets the cancel event
         return "Interrupt requested"
 
     def _context_usage(self) -> tuple[float, int]:
@@ -2387,7 +2422,7 @@ class Agent(Brain):
         try:
             for chunk in stream:
                 if self._cancel_requested:
-                    break
+                    raise GenerationCancelled("generation cancelled by user")
                 usage = getattr(chunk, "usage", None)
                 if usage is not None and getattr(usage, "total_tokens", None):
                     self._last_round_usage = (
@@ -2577,7 +2612,8 @@ class Agent(Brain):
             try:
                 for chunk in stream:
                     if self._cancel_requested:
-                        break
+                        raise GenerationCancelled(
+                            "generation cancelled by user")
                     delta = self._stream_delta(chunk)
                     if delta is None:
                         continue
@@ -2592,6 +2628,8 @@ class Agent(Brain):
             finally:
                 self._active_stream = None
             return "".join(parts).strip()
+        except GenerationCancelled:
+            raise  # a user cancel is not a failure: let the session report it
         except Exception as exc:
             self.logger.error("Forced final answer failed: %s", exc)
             return ""
@@ -2710,6 +2748,7 @@ class Agent(Brain):
         self._turn_started = time.monotonic()
         self._turn_usage = [0, 0]  # [prompt_tokens, completion_tokens]
         self._turn_tool_calls = 0
+        self._turn_final_text = ""  # reset here: a cancel may skip the tail
         self._stream.start_spinner("thinking")
         try:
             for round_index in range(self.MAX_ACT_ROUNDS):
@@ -2760,18 +2799,21 @@ class Agent(Brain):
                 self._turn_final_text = final_text
                 self._messages.append({"role": "assistant", "content": final_text})
         finally:
+            # Cleanup only: no ``return`` here, so a ``GenerationCancelled``
+            # raised by a streaming loop still propagates to the caller (the
+            # session reports it as a cancel, not an error).
             self._stream.stop_spinner()
             self._active_stream = None
-            result = ActResult(
-                text=getattr(self, "_turn_final_text", ""),
-                rounds=round_index + 1,
-                tool_calls=getattr(self, "_turn_tool_calls", 0),
-                duration_s=time.monotonic() - self._turn_started,
-                prompt_tokens=self._turn_usage[0],
-                completion_tokens=self._turn_usage[1],
-                cancelled=self._cancel_requested,
-            )
-            self._turn_final_text = ""
-            return result
+        result = ActResult(
+            text=getattr(self, "_turn_final_text", ""),
+            rounds=round_index + 1,
+            tool_calls=getattr(self, "_turn_tool_calls", 0),
+            duration_s=time.monotonic() - self._turn_started,
+            prompt_tokens=self._turn_usage[0],
+            completion_tokens=self._turn_usage[1],
+            cancelled=self._cancel_requested,
+        )
+        self._turn_final_text = ""
+        return result
 
 
