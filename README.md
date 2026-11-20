@@ -562,13 +562,12 @@ tool execution and while fenced code blocks are buffered for syntax
 highlighting (`writing python code (812 chars)`). It is erased automatically
 before each piece of real output and at the end of the turn.
 
-Stopping a response closes the in-flight HTTP stream (best effort): the
-partial answer stays in the chat history (a minimal placeholder is recorded
-if the model was stopped before generating anything, keeping user/assistant
-role alternation intact for the next request), and any further tool-call
-rounds are skipped. Before each new prompt, the agent also repairs the
-history from older cancelled/failed turns (drops unanswered prompts, pads
-empty assistant turns).
+Stopping a response closes the in-flight HTTP stream (best effort) and
+**discards the partial answer**: a cancelled turn leaves no trace in the chat
+history (no partial text, no placeholder), and any trailing unfinished
+tool-call group is dropped. Before each new prompt, the agent also repairs the
+history from older cancelled/failed turns (drops a trailing unfinished
+tool-call group and unanswered prompts, pads empty assistant turns).
 
 ## Session files (`/session`)
 

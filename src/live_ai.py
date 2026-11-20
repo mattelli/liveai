@@ -1438,20 +1438,27 @@ class Brain(OpenAICore):
         """Keep the chat history template-valid across cancelled/failed turns.
 
         Prompt templates require user/assistant roles to alternate (tool-call
-        /result sequences excepted). Two failure modes break that:
+        /result sequences excepted). Three failure modes break that:
 
-        * a Ctrl+C-cancelled generation can end in an *empty* assistant
-          message; templates drop empty turns, which leaves a tool result
-          directly followed by a user message and fails rendering with
+        * a Ctrl+C-cancelled turn can leave a trailing *tool-call group* (an
+          assistant message carrying ``tool_calls`` plus the tool results that
+          follow it) with no final answer - a completed turn always ends with a
+          plain assistant message, so such a tail is dropped whole, never
+          leaving an orphan tool result;
+        * a cancelled generation can end in an *empty* assistant message;
+          templates drop empty turns, which leaves a tool result directly
+          followed by a user message and fails rendering with
           "conversation roles must alternate ...";
         * a turn that errored or was cancelled before any response leaves the
           user prompt unanswered, so the next prompt would render as two
           consecutive user messages.
 
-        Called before each new prompt: pad the empty assistant turn with a
-        minimal placeholder and drop a trailing unanswered user prompt.
+        Called before each new prompt: drop a trailing unfinished tool-call
+        group, pad an empty assistant turn with a minimal placeholder and drop
+        a trailing unanswered user prompt.
         """
         messages = self._messages
+        self._drop_trailing_tool_group()
         while messages:
             role = messages[-1].get("role")
             if role == "assistant":
@@ -1463,6 +1470,28 @@ class Brain(OpenAICore):
                 messages.pop()  # unanswered prompt from a failed/aborted turn
                 continue
             break
+
+    def _drop_trailing_tool_group(self) -> None:
+        """Drop a trailing (unfinished) tool-call group from the history.
+
+        A completed turn always ends with a plain assistant answer, so a
+        trailing run of ``tool`` messages - and/or a trailing
+        ``assistant(tool_calls)`` message whose results never arrived - can
+        only come from a turn that was cancelled or errored after the tools
+        ran. The whole group is removed so the history stays template-valid
+        (no orphan tool result) and the cancelled turn leaves no trace.
+        """
+        messages = self._messages
+        end = len(messages)
+        start = end
+        while start > 0 and messages[start - 1].get("role") == "tool":
+            start -= 1
+        if start > 0:
+            parent = messages[start - 1]
+            if parent.get("role") == "assistant" and parent.get("tool_calls"):
+                start -= 1
+        if start < end:
+            del messages[start:end]
 
     ## context pruning ([brain] context_trim_ratio) ##
 
@@ -1974,12 +2003,12 @@ class Brain(OpenAICore):
                 yield SimpleNamespace(content=pending)
         finally:
             self._active_stream = None
-            # Keep partial (or cancelled) output in the history.
-            text = "".join(parts)
-            if text:
-                self._messages.append({"role": "assistant", "content": text})
-            elif self._cancel_requested:
-                self._messages.append({"role": "assistant", "content": CANCELLED_PLACEHOLDER})
+            # A cancelled turn is discarded (no partial answer, no placeholder);
+            # a completed turn keeps its output in the history.
+            if not self._cancel_requested:
+                text = "".join(parts)
+                if text:
+                    self._messages.append({"role": "assistant", "content": text})
 
     def print_fragment(self, fragment):
         """
@@ -2886,12 +2915,13 @@ class Agent(Brain):
                                           round_index=round_index)
                     self._handle_round_end(round_index)
                     continue
-                if not text and self._cancel_requested:
-                    text = CANCELLED_PLACEHOLDER
                 self._record_step(round_index, [], [], [],
                                   cancelled=self._cancel_requested)
                 self._turn_final_text = text
-                self._messages.append({"role": "assistant", "content": text})
+                if not self._cancel_requested:
+                    # A cancelled turn is discarded: no partial answer, no
+                    # placeholder (the history repair drops the rest).
+                    self._messages.append({"role": "assistant", "content": text})
                 self._handle_round_end(round_index)
                 break
             else:
@@ -2901,10 +2931,9 @@ class Agent(Brain):
                 self._record_step(round_index, [], [], [],
                                   cancelled=self._cancel_requested)
                 final_text = self._force_final_answer()
-                if not final_text and self._cancel_requested:
-                    final_text = CANCELLED_PLACEHOLDER
                 self._turn_final_text = final_text
-                self._messages.append({"role": "assistant", "content": final_text})
+                if not self._cancel_requested:
+                    self._messages.append({"role": "assistant", "content": final_text})
         finally:
             # Cleanup only: no ``return`` here, so a ``GenerationCancelled``
             # raised by a streaming loop still propagates to the caller (the

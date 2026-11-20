@@ -475,6 +475,115 @@ def test_history_repair_keeps_partial_and_normal_history():
     assert [m["content"] for m in agent._messages] == ["q", "a", "next"]
 
 
+def test_history_repair_drops_trailing_tool_group():
+    """A cancelled turn's trailing tool-call group is dropped whole."""
+    agent = _bare_repair_agent([
+        _msg("user", "ask"),
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "t", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+    ])
+    agent._add_user_prompt("next")
+    # The unfinished group (assistant(tool_calls) + tool result) is gone and
+    # the unanswered user prompt is dropped too: only the new prompt remains.
+    assert [m["content"] for m in agent._messages] == ["next"]
+    assert all(m.get("role") != "tool" for m in agent._messages)
+
+
+def test_history_repair_drops_orphan_trailing_tool_result():
+    """A trailing tool result whose parent is missing is dropped."""
+    agent = _bare_repair_agent([
+        _msg("user", "ask"),
+        _msg("assistant", "answered"),
+        {"role": "tool", "tool_call_id": "c9", "content": "orphan"},
+    ])
+    agent._add_user_prompt("next")
+    assert [m["content"] for m in agent._messages] == [
+        "ask", "answered", "next",
+    ]
+
+
+def test_history_repair_keeps_completed_tool_round():
+    """A *completed* tool round (with a final answer) is never dropped."""
+    agent = _bare_repair_agent([
+        _msg("user", "ask"),
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "t", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+        _msg("assistant", "the answer"),
+    ])
+    agent._add_user_prompt("next")
+    assert [m["role"] for m in agent._messages] == [
+        "user", "assistant", "tool", "assistant", "user",
+    ]
+
+
+def test_history_repair_restores_role_alternation_after_cancel():
+    """After a cancelled turn the next request's roles alternate validly."""
+    agent = _bare_repair_agent([
+        _msg("user", "ask"),
+        {"role": "assistant", "content": None,
+         "tool_calls": [{"id": "c1", "type": "function",
+                         "function": {"name": "t", "arguments": "{}"}}]},
+        {"role": "tool", "tool_call_id": "c1", "content": "result"},
+    ])
+    agent._add_user_prompt("next")
+    roles = [m["role"] for m in agent._messages]
+    # No two consecutive user messages, no orphan tool result, and the
+    # history ends on the new user prompt.
+    assert roles == ["user"]
+    assert roles[-1] == "user"
+
+
+def test_model_fragments_discards_partial_answer_on_cancel():
+    """A cancelled model_fragments turn keeps no partial text in history."""
+    agent = _BareAgent()
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent._show_thinking = False
+    agent._pending_answer = ""
+    agent._reset_thinking = lambda: None
+    agent._stream = SimpleNamespace(start_spinner=lambda *a, **k: None)
+
+    class Stream:
+        def __iter__(self):
+            yield _FakeChunk("partial answer")
+            agent._cancel_requested = True  # Ctrl+C lands mid-stream
+            yield _FakeChunk("more")
+
+        def close(self):
+            pass
+
+    agent._stream_completion = lambda tools=None: Stream()
+    with pytest.raises(live_ai_mod.GenerationCancelled):
+        list(agent.model_fragments("hi"))
+    # The partial answer is discarded: no assistant message, no placeholder.
+    assert [m["role"] for m in agent._messages] == ["system", "user"]
+
+
+def test_model_fragments_keeps_answer_when_not_cancelled():
+    """A completed model_fragments turn keeps its answer in history."""
+    agent = _BareAgent()
+    agent._messages = [{"role": "system", "content": "s"}]
+    agent._show_thinking = False
+    agent._pending_answer = ""
+    agent._reset_thinking = lambda: None
+    agent._stream = SimpleNamespace(start_spinner=lambda *a, **k: None)
+
+    class Stream:
+        def __iter__(self):
+            yield _FakeChunk("the answer")
+
+        def close(self):
+            pass
+
+    agent._stream_completion = lambda tools=None: Stream()
+    fragments = [f.content for f in agent.model_fragments("hi")]
+    assert fragments == ["the answer"]
+    assert agent._messages[-1] == {"role": "assistant", "content": "the answer"}
+
+
 class FakeRoundStream:
     """StreamPrinter stand-in for act() round-loop tests (no console output)."""
 
@@ -542,8 +651,8 @@ def test_act_tool_round_feeds_result_and_continues():
     assert agent._messages[-1]["content"] == "It is 12:00"
 
 
-def test_act_cancelled_empty_round_gets_placeholder():
-    """An empty cancelled round must not append an empty assistant turn."""
+def test_act_cancelled_empty_round_discards_the_turn():
+    """A cancelled round appends nothing; the turn leaves no trace."""
     agent = _bare_act_agent([("", [])])
 
     def cancelled_round(tools):
@@ -552,12 +661,12 @@ def test_act_cancelled_empty_round_gets_placeholder():
 
     agent._stream_round = cancelled_round
     agent.act("anything")
-    # Empty text would be dropped by the model's prompt template, leaving a
-    # user message directly followed by another user message (role alternation
-    # error); the placeholder keeps the history renderable.
-    assert agent._messages[-1] == {
-        "role": "assistant", "content": live_ai_mod.CANCELLED_PLACEHOLDER,
-    }
+    # The partial/cancelled answer is discarded (no placeholder either); only
+    # the user prompt remains, and the history repair drops it on the next turn.
+    assert [m["role"] for m in agent._messages] == ["system", "user"]
+    assert agent._messages[-1]["content"] == "anything"
+    agent._repair_history()
+    assert [m["role"] for m in agent._messages] == ["system"]
 
 
 ## Remote provider (.env / api key resolution) ##
@@ -2701,7 +2810,8 @@ def test_act_result_cancelled_flag(monkeypatch):
     monkeypatch.setattr(live_ai_mod.time, "monotonic", lambda: 0.0)
     result = agent.act("question")
     assert result.cancelled is True
-    assert result.text == live_ai_mod.CANCELLED_PLACEHOLDER
+    # A cancelled turn is discarded: no partial text, no placeholder.
+    assert result.text == ""
 
 
 def test_act_result_defaults():
