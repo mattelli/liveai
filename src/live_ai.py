@@ -59,6 +59,11 @@ CANCELLED_PLACEHOLDER = _PROMPTS["cancelled_placeholder"]
 # Agent._execute_tool_calls).
 _HISTORY_MUTATING_TOOLS = frozenset({"clear_chat", "compact_chat"})
 
+# Guards the lazy creation of a per-agent ``_stream_lock`` (see
+# Brain._stream_lock_handle); module-level so agents built without __init__
+# still share one lock.
+_STREAM_LOCK_INIT = threading.Lock()
+
 
 class GenerationCancelled(Exception):
     """Raised by the streaming loops when the user cancels a generation.
@@ -241,6 +246,24 @@ def _thinking_token_cap(value) -> int:
     except (TypeError, ValueError):
         return 0
     return cap if cap > 0 else 0
+
+
+def _request_timeout(config) -> float | None:
+    """Resolve ``[brain] request_timeout_s`` into an httpx read timeout.
+
+    A backstop against a hung server: without it a stalled stream blocks the
+    turn forever with nothing to interrupt (Ctrl+C can only close a stream
+    that exists). The value bounds the wait *between* stream chunks, so a
+    slow-but-alive generation is not cut off; unset/0/negative keeps the SDK
+    default (``None``). A non-numeric value falls back to the default instead
+    of failing the session.
+    """
+    raw = getattr(getattr(config, "brain", None), "request_timeout_s", 0)
+    try:
+        value = float(raw or 0)
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
 def _default_tools(agent: "Brain") -> list[Callable]:
@@ -719,7 +742,8 @@ class OpenAICore:
         model, base_url, api_key, provider = self._boot_connection()
 
         self.logger.info("🚀 Connecting to remote model '%s' @ %s ...", model, base_url)
-        self._client = OpenAI(base_url=base_url, api_key=api_key)
+        self._request_timeout = _request_timeout(config)
+        self._client = self._build_client(OpenAI, base_url, api_key)
         self._model_name = model
         self._base_url = base_url
         self._provider = provider
@@ -864,6 +888,25 @@ class OpenAICore:
                 f"or run: setx {api_key_env} 'sk-...'")
         return model, base_url, api_key, provider
 
+    def _build_client(self, openai_cls, base_url: str, api_key: str):
+        """Build the OpenAI client with the configured request timeout.
+
+        ``[brain] request_timeout_s`` becomes the httpx read timeout (the
+        wait between stream chunks), so a hung server cannot block a turn
+        forever. Older SDKs without a ``timeout`` kwarg fall back to the
+        default client (the timeout is a backstop, not a requirement).
+        """
+        timeout = getattr(self, "_request_timeout", None)
+        if timeout is None:
+            return openai_cls(base_url=base_url, api_key=api_key)
+        try:
+            return openai_cls(base_url=base_url, api_key=api_key,
+                              timeout=timeout)
+        except TypeError:
+            self.logger.debug(
+                "OpenAI SDK does not accept a timeout kwarg; using default.")
+            return openai_cls(base_url=base_url, api_key=api_key)
+
     def _boot_connection(self) -> tuple[str, str, str, str | None]:
         """Resolve the startup connection: ``(model, base_url, api_key, provider)``.
 
@@ -923,7 +966,7 @@ class OpenAICore:
 
         self.logger.info("🔄 Switching to model '%s' @ %s ...", model, base_url)
         from openai import OpenAI  # installed: __init__ already imported it
-        client = OpenAI(base_url=base_url, api_key=api_key)
+        client = self._build_client(OpenAI, base_url, api_key)
 
         # Validation passed: swap the connection, drop the cached metadata and
         # re-resolve the model-dependent state from the new server.
@@ -1656,6 +1699,76 @@ class Brain(OpenAICore):
                 return self._client.chat.completions.create(**kwargs)
             raise
 
+    def _stream_lock_handle(self) -> threading.Lock:
+        """The per-instance lock guarding ``_active_stream`` publication.
+
+        Double-checked creation so agents built without ``__init__`` (tests)
+        still get one lock shared by the worker and the canceller.
+        """
+        lock = self.__dict__.get("_stream_lock")
+        if lock is None:
+            with _STREAM_LOCK_INIT:
+                lock = self.__dict__.get("_stream_lock")
+                if lock is None:
+                    lock = threading.Lock()
+                    self._stream_lock = lock
+        return lock
+
+    def _close_stream(self, stream) -> None:
+        """Close a completion stream, never raising (best effort)."""
+        if stream is None:
+            return
+        try:
+            stream.close()
+        except Exception as exc:
+            self.logger.debug("Closing prediction stream failed: %s", exc)
+
+    def _open_stream(self, tools: list[dict] | None = None):
+        """Issue the completion request and return its stream, cancel-aware.
+
+        The request runs in a helper thread so the caller stays responsive
+        while the server is still *prefilling* (before the first byte, when
+        ``create()`` itself blocks and there is no stream to close yet). The
+        helper publishes the stream into ``self._active_stream`` the instant
+        it materialises, so ``cancel_generation()`` can abort it from any
+        point; a cancel raised while waiting unwinds immediately with
+        ``GenerationCancelled`` and the late stream (if it ever arrives) is
+        closed and discarded. Errors from ``_stream_completion`` propagate
+        unchanged.
+        """
+        holder: dict = {}
+        done = threading.Event()
+
+        def _worker():
+            try:
+                stream = self._stream_completion(tools)
+            except BaseException as exc:  # noqa: BLE001 - relayed to the caller
+                holder["error"] = exc
+                done.set()
+                return
+            with self._stream_lock_handle():
+                if self._cancel_requested:
+                    discard = True
+                else:
+                    self._active_stream = stream
+                    holder["stream"] = stream
+                    discard = False
+            if discard:
+                self._close_stream(stream)  # cancelled during prefill
+            done.set()
+
+        threading.Thread(target=_worker, daemon=True).start()
+        while not done.wait(0.05):
+            if self._cancel_requested:
+                # Cancel during prefill: unwind now; the worker closes the
+                # stream when/if it arrives (see _worker).
+                raise GenerationCancelled("generation cancelled by user")
+        if "error" in holder:
+            raise holder["error"]
+        if self._cancel_requested:
+            raise GenerationCancelled("generation cancelled by user")
+        return holder["stream"]
+
     ## LLM-backed summarization for history compaction (src.tools.memory) ##
 
     _SUMMARIZER_SYSTEM_PROMPT = _PROMPTS["summarizer_system"]
@@ -1842,8 +1955,7 @@ class Brain(OpenAICore):
         self._cancel_requested = False  # fresh turn
         self._reset_thinking()
         self._stream.start_spinner("thinking")
-        stream = self._stream_completion()
-        self._active_stream = stream
+        stream = self._open_stream()
         parts: list[str] = []
         try:
             for chunk in stream:
@@ -1892,12 +2004,9 @@ class Brain(OpenAICore):
         raises, so it is safe to call from a signal handler or any thread.
         """
         self._cancel_requested = True  # sets the cancel event
-        stream, self._active_stream = self._active_stream, None
-        if stream is not None:
-            try:
-                stream.close()
-            except Exception as exc:
-                self.logger.debug("Closing prediction stream failed: %s", exc)
+        with self._stream_lock_handle():
+            stream, self._active_stream = self._active_stream, None
+        self._close_stream(stream)
         return "Cancel requested"
 
     def interrupt(self) -> str:
@@ -2412,8 +2521,7 @@ class Agent(Brain):
         # would otherwise exhaust the cap in round 1 and show nothing later.
         self._reset_thinking()
         self._last_round_usage: tuple[int, int] | None = None
-        stream = self._stream_completion(self.enabled_tool_definitions())
-        self._active_stream = stream
+        stream = self._open_stream(self.enabled_tool_definitions())
         parts: list[str] = []
         calls: dict[int, dict] = {}
         # Last (name, arguments) fragment seen per tool-call slot, used to
@@ -2606,8 +2714,7 @@ class Agent(Brain):
             "Max act rounds reached (%s); forcing a final answer.",
             self.MAX_ACT_ROUNDS)
         try:
-            stream = self._stream_completion(None)
-            self._active_stream = stream
+            stream = self._open_stream(None)
             parts: list[str] = []
             try:
                 for chunk in stream:

@@ -85,6 +85,13 @@ Several models can be prepared in a JSON file and switched at runtime with the
 `/model` command - see [Model switching (`/model`)](#model-switching-model)
 below.
 
+`[brain] request_timeout_s` (default `600`) is the maximum number of seconds
+the client waits **between stream chunks** before aborting the request. It is a
+backstop against a server that hangs mid-generation: without it a stalled
+stream blocks the turn forever, with nothing for `Ctrl+C` to interrupt. A
+slow-but-alive generation is not cut off (the timer resets on every chunk);
+set it to `0` to keep the SDK default (no timeout).
+
 ### Local models (LM Studio / Ollama servers)
 The same Brain also runs fully local models: both LM Studio and Ollama expose
 an OpenAI-compatible endpoint, so only `base_url` (and a dummy key) change.

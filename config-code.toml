@@ -19,6 +19,7 @@ sessions_dir_cwd = "sessions"      # folder for /session store|list|load chat se
 models_file = "models.json"        # models: first entry boots, /model switches (JSON: name -> {api_key_env, base_url, model})
 max_response_tokens = 0.1          # cap tokens per response as a ratio of the model's context window (0 < ratio < 1)
 temperature = 0.6                  # randomness (0 = deterministic, 1 = random)
+request_timeout_s = 600            # max seconds between stream chunks before the request is aborted (backstop against a hung server; 0 = SDK default)
 max_tool_result_chars = 4000       # cap tool results stored in the history, head+tail kept (0 = uncapped; also caps the compaction summary and the re-seeded recall text)
 context_trim_ratio = 0.7           # prune oldest complete tool rounds when context usage exceeds this ratio (0 = never prune)
 context_keep_messages = 40         # recent messages never pruned (used when context_trim_ratio > 0)

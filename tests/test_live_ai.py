@@ -213,6 +213,141 @@ def test_generation_cancelled_is_an_exception_subclass():
     assert issubclass(live_ai_mod.GenerationCancelled, Exception)
 
 
+# --------------------------------------------- early stream registration (Task 2)
+
+
+def test_open_stream_returns_stream_and_registers_it():
+    """_open_stream publishes the stream as _active_stream before returning."""
+    agent = _BareAgent()
+
+    class FakeStream:
+        def close(self):
+            pass
+
+    stream = FakeStream()
+    agent._stream_completion = lambda tools=None: stream
+    result = agent._open_stream(None)
+    assert result is stream
+    assert agent._active_stream is stream
+
+
+def test_open_stream_cancel_during_prefill_raises_promptly():
+    """A blocking create() (prefill) is abandoned on cancel within bounds."""
+    import threading
+    import time
+
+    agent = _BareAgent()
+    release = threading.Event()
+
+    class FakeStream:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    late_stream = FakeStream()
+
+    def blocking_completion(tools=None):
+        release.wait(5)  # simulate a server still prefilling
+        return late_stream
+
+    agent._stream_completion = blocking_completion
+
+    timer = threading.Timer(0.1, agent.cancel_generation)
+    timer.start()
+    started = time.monotonic()
+    try:
+        with pytest.raises(live_ai_mod.GenerationCancelled):
+            agent._open_stream(None)
+    finally:
+        timer.cancel()
+        release.set()  # let the worker finish and close the late stream
+    elapsed = time.monotonic() - started
+    assert elapsed < 2.0  # unwound without waiting for create() to return
+    # The late stream is closed and never published.
+    deadline = time.monotonic() + 2.0
+    while not late_stream.closed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert late_stream.closed is True
+    assert agent._active_stream is None
+
+
+def test_open_stream_propagates_completion_errors():
+    """An error from _stream_completion surfaces unchanged (not a cancel)."""
+    agent = _BareAgent()
+
+    def broken(tools=None):
+        raise RuntimeError("boom")
+
+    agent._stream_completion = broken
+    with pytest.raises(RuntimeError, match="boom"):
+        agent._open_stream(None)
+
+
+def test_cancel_generation_survives_a_stream_whose_close_raises():
+    """Closing a broken stream during cancel never raises."""
+    agent = _BareAgent()
+
+    class BrokenStream:
+        def close(self):
+            raise RuntimeError("already closed")
+
+    agent._active_stream = BrokenStream()
+    assert agent.cancel_generation() == "Cancel requested"
+    assert agent._active_stream is None
+
+
+def test_request_timeout_resolution():
+    """[brain] request_timeout_s resolves to a positive float or None."""
+    resolve = live_ai_mod._request_timeout
+    assert resolve(SimpleNamespace(brain=SimpleNamespace())) is None
+    assert resolve(SimpleNamespace(brain=SimpleNamespace(request_timeout_s=0))) is None
+    assert resolve(SimpleNamespace(brain=SimpleNamespace(request_timeout_s=-5))) is None
+    assert resolve(SimpleNamespace(brain=SimpleNamespace(request_timeout_s="oops"))) is None
+    assert resolve(SimpleNamespace(brain=SimpleNamespace(request_timeout_s=600))) == 600.0
+    assert resolve(SimpleNamespace(brain=SimpleNamespace(request_timeout_s="12.5"))) == 12.5
+
+
+def test_build_client_passes_the_configured_timeout():
+    """_build_client forwards the timeout; a TypeError falls back gracefully."""
+    agent = _BareAgent()
+    agent._request_timeout = 42.0
+    seen = {}
+
+    class FakeOpenAI:
+        def __init__(self, base_url=None, api_key=None, timeout=None):
+            seen["base_url"] = base_url
+            seen["api_key"] = api_key
+            seen["timeout"] = timeout
+
+    agent._build_client(FakeOpenAI, "https://api.test/v1", "key")
+    assert seen == {"base_url": "https://api.test/v1", "api_key": "key",
+                    "timeout": 42.0}
+
+    # An SDK without a timeout kwarg must not break client construction.
+    class NoTimeoutOpenAI:
+        def __init__(self, base_url=None, api_key=None):
+            seen["fallback"] = (base_url, api_key)
+
+    agent._build_client(NoTimeoutOpenAI, "https://api.test/v1", "key")
+    assert seen["fallback"] == ("https://api.test/v1", "key")
+
+
+def test_build_client_without_timeout_omits_the_kwarg():
+    """No configured timeout -> the client is built exactly as before."""
+    agent = _BareAgent()
+    agent._request_timeout = None
+    seen = {}
+
+    class FakeOpenAI:
+        def __init__(self, base_url=None, api_key=None, **kwargs):
+            seen["kwargs"] = kwargs
+
+    agent._build_client(FakeOpenAI, "https://api.test/v1", "key")
+    assert seen["kwargs"] == {}
+
+
 def test_cancelled_round_does_not_speak(monkeypatch):
     spoken = []
 

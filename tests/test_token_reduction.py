@@ -675,6 +675,7 @@ context_trim_ratio = 0.7
 context_keep_messages = 50
 auto_compaction = true
 compact_keep_messages = 6
+request_timeout_s = 600
 
 [agent]
 tool_doc_chars = 300
@@ -688,6 +689,7 @@ tool_groups = "files, web"
     assert config.brain.context_keep_messages == 50
     assert config.brain.auto_compaction is True
     assert config.brain.compact_keep_messages == 6
+    assert config.brain.request_timeout_s == 600
     assert config.agent.tool_doc_chars == 300
     assert config.agent.tool_groups == "files, web"
 
