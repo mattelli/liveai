@@ -550,12 +550,8 @@ multiline = false                # true -> Enter inserts newline, Esc+Enter acce
 ```
 
 `Ctrl-C` stops the response being generated (the chat session keeps running);
-at the input prompt it clears the line (re-prompt). While speech audio is
-playing, the first `Ctrl-C` stops the audio only: buffered audio is dropped for
-immediate silence, the response continues, and later tool rounds may speak
-again. A **second** `Ctrl-C` then cancels the generation (the speech guard
-hands `Ctrl+C` back to the generation handler after silencing the audio).
-`Ctrl-D` (EOF) exits via the EOF path. If prompt_toolkit is missing or disabled, input falls back to the
+at the input prompt it clears the line (re-prompt). `Ctrl-D` (EOF) exits via
+the EOF path. If prompt_toolkit is missing or disabled, input falls back to the
 builtin `input()` with no line editing or history.
 
 While a response generates, a braille-dots spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) animates whenever nothing
@@ -564,12 +560,38 @@ tool execution and while fenced code blocks are buffered for syntax
 highlighting (`writing python code (812 chars)`). It is erased automatically
 before each piece of real output and at the end of the turn.
 
-Stopping a response closes the in-flight HTTP stream (best effort) and
-**discards the partial answer**: a cancelled turn leaves no trace in the chat
-history (no partial text, no placeholder), and any trailing unfinished
-tool-call group is dropped. Before each new prompt, the agent also repairs the
-history from older cancelled/failed turns (drops a trailing unfinished
-tool-call group and unanswered prompts, pads empty assistant turns).
+### Interrupting a response (`Ctrl+C`)
+
+`Ctrl+C` cancels the current generation and the session stays usable:
+
+- **Immediate, even during prefill** — the completion request is issued from a
+  helper thread, so the in-flight HTTP stream is reachable (and closable) from
+  the very first moment. A cancel lands within ~a few hundred ms, whether the
+  server is still prefilling or already streaming tokens; the spinner stops and
+  the prompt returns.
+- **Reported as a cancel, never an error** — you get `⏹ generation cancelled`
+  (yellow). Aborting the stream can surface as an httpx/OpenAI exception; the
+  pending cancel flag tells the two apart, so no `❌` or traceback is printed.
+- **The partial answer is discarded** — a cancelled turn leaves no trace in the
+  chat history (no partial text, no placeholder), and any trailing unfinished
+  tool-call group is dropped. Before each new prompt the agent also repairs the
+  history from older cancelled/failed turns (drops a trailing unfinished
+  tool-call group and unanswered prompts, pads empty assistant turns).
+- **A running tool is killed** — a long `run_command` / `python_eval` (or the
+  foreground path of `spawn_process`) is terminated instead of running until
+  its own timeout; its result is reported as cancelled. On Windows the whole
+  process tree is killed (`taskkill /F /T`), since the command runs through a
+  shell.
+- **Speech first, generation second** — while speech audio is playing, the
+  first `Ctrl+C` stops the audio only (buffered audio is dropped for immediate
+  silence, the response continues, and later tool rounds may speak again); a
+  **second** `Ctrl+C` then cancels the generation. The speech guard hands
+  `Ctrl+C` back to the generation handler after silencing the audio.
+- **A hung server cannot block forever** — `[brain] request_timeout_s`
+  (default `600`) bounds the wait between stream chunks, so a stalled stream is
+  aborted instead of blocking the turn with nothing to interrupt.
+
+Voice mode / barge-in is out of scope: this applies to chat mode (`--chat`).
 
 ## Session files (`/session`)
 
@@ -929,6 +951,11 @@ player) that must keep running while the conversation continues; inspect or
 stop the process later through `run_command` (e.g. `taskkill /PID 12345` on
 Windows, `kill 12345` on POSIX). Unlike `run_command` (blocking, captures
 output), `spawn_process` returns immediately and discards the child output.
+
+With `background=False` the command runs in the foreground and the call waits
+for it (like `run_command`); a `Ctrl+C` cancel then terminates it (see
+[Interrupting a response](#interrupting-a-response-ctrlc)). Background spawns
+are detached and are **not** affected by a cancel.
 
 
 ## Task scheduler (optional)
