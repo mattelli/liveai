@@ -150,15 +150,28 @@ class ConversationSession:
         Ctrl+C cancels the current generation; the session keeps running. The
         ``SIGINT`` swap gives agents with ``cancel_generation`` a best-effort
         server-side stop before the streaming loop unwinds.
+
+        A cancel is reported as a cancel (``⏹ generation cancelled``), never as
+        an error: the agent raises :class:`GenerationCancelled` for a clean
+        cancel, but closing the in-flight HTTP stream can also surface as an
+        httpx/OpenAI exception - the pending ``cancel_requested`` flag tells
+        the two apart, so no ``❌`` is printed for a user cancel.
         """
+        from src.live_ai import GenerationCancelled
+
         interrupted = False
         try:
             with _generation_sigint_guard(self.agent):
                 step()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, GenerationCancelled):
             interrupted = True
         except Exception as exc:
-            cprint(f"❌ {exc}", "red")
+            if getattr(self.agent, "cancel_requested", False):
+                # The stream abort surfaced as a transport error: it is a
+                # cancel, not a failure (no traceback, no ❌).
+                interrupted = True
+            else:
+                cprint(f"❌ {exc}", "red")
         finally:
             self._flush()
             if interrupted or getattr(self.agent, "cancel_requested", False):

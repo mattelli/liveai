@@ -448,6 +448,101 @@ def test_sigint_during_generation_hits_cancel_handler():
     assert agent.cancel_calls == 1
 
 
+def test_generation_cancelled_reported_as_cancel_not_error(capsys):
+    """A GenerationCancelled from the agent prints the cancel banner, no ❌."""
+    from src.live_ai import GenerationCancelled
+
+    class CancellingAgent(FakeAgent):
+        def __init__(self):
+            super().__init__()
+            self._cancel_requested = False
+
+        @property
+        def cancel_requested(self):
+            return self._cancel_requested
+
+        def cancel_generation(self):
+            self._cancel_requested = True
+
+        def act(self, prompt):
+            self.cancel_generation()
+            raise GenerationCancelled("generation cancelled by user")
+
+    counter = {"n": 0}
+
+    def reader():
+        counter["n"] += 1
+        return "hi" if counter["n"] == 1 else "/quit"
+
+    agent = CancellingAgent()
+    assert ConversationSession(agent, reader).run() == 0
+    out = capsys.readouterr().out
+    assert "generation cancelled" in out.lower()
+    assert "❌" not in out  # a cancel is never reported as an error
+    assert "Bye" in out  # session survived and exited via /quit
+
+
+def test_transport_error_during_cancel_is_not_an_error(capsys):
+    """An httpx-style abort with the cancel flag set prints no ❌."""
+    class AbortingAgent(FakeAgent):
+        def __init__(self):
+            super().__init__()
+            self._cancel_requested = False
+
+        @property
+        def cancel_requested(self):
+            return self._cancel_requested
+
+        def cancel_generation(self):
+            self._cancel_requested = True
+
+        def act(self, prompt):
+            # Closing the stream mid-read surfaces as a transport error.
+            self.cancel_generation()
+            raise RuntimeError("Connection error: stream closed")
+
+    counter = {"n": 0}
+
+    def reader():
+        counter["n"] += 1
+        return "hi" if counter["n"] == 1 else "/quit"
+
+    agent = AbortingAgent()
+    assert ConversationSession(agent, reader).run() == 0
+    out = capsys.readouterr().out
+    assert "generation cancelled" in out.lower()
+    assert "❌" not in out
+    assert "Connection error" not in out  # no error text for a cancel
+    assert "Bye" in out
+
+
+def test_real_error_without_cancel_still_reported(capsys):
+    """A genuine failure (no cancel pending) keeps the ❌ path."""
+    class FailingAgent(FakeAgent):
+        def __init__(self):
+            super().__init__()
+            self._cancel_requested = False
+
+        @property
+        def cancel_requested(self):
+            return self._cancel_requested
+
+        def act(self, prompt):
+            raise RuntimeError("kaboom")
+
+    counter = {"n": 0}
+
+    def reader():
+        counter["n"] += 1
+        return "hi" if counter["n"] == 1 else "/quit"
+
+    agent = FailingAgent()
+    assert ConversationSession(agent, reader).run() == 0
+    out = capsys.readouterr().out
+    assert "❌" in out and "kaboom" in out
+    assert "generation cancelled" not in out.lower()
+
+
 # ------------------------------------------------------------- T12 quit aliases
 
 
