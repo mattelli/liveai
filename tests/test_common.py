@@ -659,3 +659,112 @@ def test_truncate_text_cuts_are_clean_at_marker():
     head, _, tail = result.partition(marker_line)
     assert head.endswith("A")          # head cut stripped to clean payload
     assert tail.startswith("Z")        # tail cut stripped to clean payload
+
+
+# ------------------------------------------------- process registry (Task 6)
+
+
+def test_process_registry_terminates_registered_processes():
+    """terminate_all() kills every registered process and clears the registry."""
+    import src.common as common
+
+    class FakeProcess:
+        def __init__(self):
+            self.killed = 0
+
+        def kill(self):
+            self.killed += 1
+
+    first, second = FakeProcess(), FakeProcess()
+    common.register_process(first)
+    common.register_process(second)
+    assert common.terminate_all() == 2
+    assert first.killed == 1 and second.killed == 1
+    assert common.terminate_all() == 0  # registry cleared
+
+
+def test_process_registry_unregister_removes_process():
+    """A finished process is no longer terminated."""
+    import src.common as common
+
+    class FakeProcess:
+        def __init__(self):
+            self.killed = 0
+
+        def kill(self):
+            self.killed += 1
+
+    process = FakeProcess()
+    common.register_process(process)
+    common.unregister_process(process)
+    assert common.terminate_all() == 0
+    assert process.killed == 0
+
+
+def test_process_registry_marks_terminated_processes():
+    """A killed process is flagged so its tool can report a cancel."""
+    import src.common as common
+
+    class FakeProcess:
+        def kill(self):
+            pass
+
+    process = FakeProcess()
+    assert common.process_terminated(process) is False
+    common.register_process(process)
+    common.terminate_all()
+    assert common.process_terminated(process) is True
+
+
+def test_process_registry_terminate_all_never_raises():
+    """A process that cannot be killed is skipped, not fatal."""
+    import src.common as common
+
+    class BrokenProcess:
+        pid = None  # no pid -> plain kill() path
+
+        def kill(self):
+            raise RuntimeError("already gone")
+
+    common.register_process(BrokenProcess())
+    assert common.terminate_all() == 0  # counted as not killed, no raise
+
+
+def test_terminate_all_kills_the_process_tree_on_windows(monkeypatch):
+    """On Windows the whole tree is killed (taskkill /F /T), not just the shell."""
+    import src.common as common
+
+    calls = []
+
+    class FakeProcess:
+        pid = 4321
+
+        def kill(self):
+            calls.append("kill")
+
+    monkeypatch.setattr(common.sys, "platform", "win32")
+    monkeypatch.setattr(
+        common.subprocess, "run",
+        lambda argv, **kw: calls.append(("taskkill", argv)))
+    common.register_process(FakeProcess())
+    assert common.terminate_all() == 1
+    assert calls == [("taskkill", ["taskkill", "/F", "/T", "/PID", "4321"])]
+    assert "kill" not in calls  # the tree kill replaces the plain kill
+
+
+def test_terminate_all_falls_back_to_kill_without_pid(monkeypatch):
+    """A process without a pid is killed directly (non-Windows path)."""
+    import src.common as common
+
+    calls = []
+
+    class FakeProcess:
+        pid = None
+
+        def kill(self):
+            calls.append("kill")
+
+    monkeypatch.setattr(common.sys, "platform", "linux")
+    common.register_process(FakeProcess())
+    assert common.terminate_all() == 1
+    assert calls == ["kill"]

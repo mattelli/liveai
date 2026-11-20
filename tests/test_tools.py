@@ -434,6 +434,83 @@ def test_run_command_honours_cwd(tmp_path):
     assert str(tmp_path) in out
 
 
+def test_run_command_killed_by_cancel_reports_cancelled(monkeypatch):
+    """A run_command killed by terminate_all() returns a cancelled result."""
+    import src.common as common
+
+    class FakeProcess:
+        returncode = None
+
+        def __init__(self):
+            self.killed = 0
+
+        def communicate(self, timeout=None):
+            # Simulate the cancel landing while the command runs: the process
+            # is killed from another thread, then communicate() returns.
+            common.terminate_all()
+            return "", ""
+
+        def kill(self):
+            self.killed += 1
+
+    process = FakeProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: process)
+    out = tools.run_command("sleep 100", timeout_s=5)
+    assert "cancelled" in out.lower()
+    assert process.killed == 1
+    # The process is no longer registered after the call.
+    assert common.terminate_all() == 0
+
+
+def test_run_command_registers_and_unregisters(monkeypatch):
+    """A normal run leaves nothing registered (no leak)."""
+    import src.common as common
+
+    class FakeProcess:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return "ok", ""
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: FakeProcess())
+    assert tools.run_command("echo ok") == "ok"
+    assert common.terminate_all() == 0  # nothing left registered
+
+
+def test_run_command_cancel_kills_the_real_process_tree():
+    """End-to-end: a real long command is killed promptly on cancel.
+
+    Regression: with shell=True, killing only the shell left the real command
+    running, so the tool blocked until its own timeout instead of returning a
+    cancelled result.
+    """
+    import threading
+    import time
+
+    import src.common as common
+
+    def cancel_later():
+        time.sleep(0.5)
+        common.terminate_all()
+
+    thread = threading.Thread(target=cancel_later)
+    thread.start()
+    try:
+        started = time.monotonic()
+        out = tools.run_command(
+            f'"{sys.executable}" -c "import time; time.sleep(30)"',
+            timeout_s=25)
+        elapsed = time.monotonic() - started
+    finally:
+        thread.join()
+        common.terminate_all()
+    assert "cancelled" in out.lower()
+    assert elapsed < 10  # killed promptly, not the 25s timeout
+
+
 # ------------------------------------------------------------- spawn_process
 
 

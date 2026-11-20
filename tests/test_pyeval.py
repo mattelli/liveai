@@ -85,3 +85,40 @@ def test_python_eval_falls_back_to_system_temp(monkeypatch):
     monkeypatch.setattr(common, "_tmp_dir", None)
     result = pyeval_mod.python_eval("print('ok')")
     assert "ok" in result and "[exit 0]" in result
+
+
+def test_python_eval_killed_by_cancel_reports_cancelled(monkeypatch):
+    """A python_eval subprocess killed by terminate_all() reports cancelled."""
+    import subprocess
+
+    import src.common as common
+
+    class FakeProcess:
+        args = ["python", "-I", "-c", "code"]
+        returncode = None
+
+        def __init__(self):
+            self.killed = 0
+
+        def communicate(self, timeout=None):
+            common.terminate_all()  # cancel lands while the snippet runs
+            return "", ""
+
+        def kill(self):
+            self.killed += 1
+
+    process = FakeProcess()
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: process)
+    result = pyeval_mod.python_eval("while True: pass", timeout_s=5)
+    assert "cancelled" in result.lower()
+    assert process.killed == 1
+    assert common.terminate_all() == 0  # nothing left registered
+
+
+def test_python_eval_registers_and_unregisters(monkeypatch):
+    """A normal snippet leaves nothing registered (no leak)."""
+    import src.common as common
+
+    result = pyeval_mod.python_eval("print('ok')")
+    assert "[exit 0]" in result
+    assert common.terminate_all() == 0

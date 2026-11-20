@@ -18,7 +18,9 @@ import sys
 import tempfile
 from logging import getLogger
 
-from src.common import configured_tmp_dir
+from src.common import (
+    configured_tmp_dir, process_terminated, register_process, unregister_process,
+)
 
 __all__ = ["python_eval"]
 
@@ -60,16 +62,29 @@ def python_eval(code: str, timeout_s: float = _DEFAULT_TIMEOUT_S) -> str:
         parent = configured_tmp_dir()
         with tempfile.TemporaryDirectory(
                 dir=str(parent) if parent is not None else None) as tmp_dir:
-            completed = subprocess.run(
+            process = subprocess.Popen(
                 [sys.executable, "-I", "-c", code],
                 cwd=tmp_dir,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=timeout_s,
                 # A minimal environment: no inherited shell variables.
                 env={"SYSTEMROOT": __import__("os").environ.get(
                     "SYSTEMROOT", "")},
             )
+            register_process(process)
+            try:
+                stdout, stderr = process.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                return f"Error: execution timed out after {timeout_s:g}s [timeout]"
+            finally:
+                unregister_process(process)
+            if process_terminated(process):
+                return "Error: execution cancelled by user [cancelled]"
+            completed = subprocess.CompletedProcess(
+                process.args, process.returncode, stdout, stderr)
     except subprocess.TimeoutExpired:
         return f"Error: execution timed out after {timeout_s:g}s [timeout]"
     except Exception as exc:

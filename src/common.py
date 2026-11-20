@@ -5,6 +5,7 @@ import json
 import hashlib
 import inspect
 import re
+import subprocess
 import sys
 from functools import wraps
 from pathlib import Path
@@ -77,6 +78,73 @@ def reset_quit() -> None:
     """Clear the quit flag (used by tests and session startup)."""
     global _quit_requested
     _quit_requested = False
+
+
+# Registry of running foreground subprocesses (run_command, spawn_process
+# foreground, python_eval). A user cancel (Ctrl+C) kills them so a long
+# command does not keep running until its own timeout; the tools then report
+# a cancelled result. Keyed by id() so the registry works with any Popen-like
+# object (tests inject fakes).
+_running_processes: dict[int, object] = {}
+_process_lock = threading.Lock()
+
+
+def register_process(process):
+    """Track a running subprocess so :func:`terminate_all` can kill it."""
+    with _process_lock:
+        _running_processes[id(process)] = process
+    return process
+
+
+def unregister_process(process) -> None:
+    """Stop tracking a subprocess (called when it has finished)."""
+    with _process_lock:
+        _running_processes.pop(id(process), None)
+
+
+def terminate_all() -> int:
+    """Kill every registered subprocess (best effort); return how many.
+
+    Marks each process with ``_liveai_terminated`` before killing it, so the
+    owning tool can tell a user cancel from a normal exit and report a
+    cancelled result. On Windows the whole process *tree* is killed
+    (``taskkill /F /T``): ``run_command``/``spawn_process`` run through
+    ``shell=True``/PowerShell, so killing only the shell would leave the real
+    command running and the tool would block until its own timeout. Never
+    raises: a process that already exited (or cannot be killed) is skipped.
+    """
+    with _process_lock:
+        processes = list(_running_processes.values())
+        _running_processes.clear()
+    killed = 0
+    for process in processes:
+        process._liveai_terminated = True
+        if _kill_process_tree(process):
+            killed += 1
+    return killed
+
+
+def _kill_process_tree(process) -> bool:
+    """Kill ``process`` and its children (best effort); True when killed."""
+    pid = getattr(process, "pid", None)
+    if sys.platform == "win32" and pid:
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True, check=False)
+            return True
+        except Exception:
+            pass  # fall through to the plain kill below
+    try:
+        process.kill()
+        return True
+    except Exception:
+        return False
+
+
+def process_terminated(process) -> bool:
+    """True when :func:`terminate_all` killed ``process`` (user cancel)."""
+    return bool(getattr(process, "_liveai_terminated", False))
 
 def cprint(text: str, color: Colors = "reset", bold: bool = False, end: str = "\n", flush: bool = False) -> None:
     """

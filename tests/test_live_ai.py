@@ -298,6 +298,27 @@ def test_cancel_generation_survives_a_stream_whose_close_raises():
     assert agent._active_stream is None
 
 
+def test_cancel_generation_terminates_running_processes():
+    """cancel_generation() kills registered subprocesses (running tools)."""
+    import src.common as common
+
+    class FakeProcess:
+        def __init__(self):
+            self.killed = 0
+
+        def kill(self):
+            self.killed += 1
+
+    agent = _BareAgent()
+    process = FakeProcess()
+    common.register_process(process)
+    try:
+        agent.cancel_generation()
+    finally:
+        common.terminate_all()  # safety net if the assertion fails
+    assert process.killed == 1
+
+
 def test_request_timeout_resolution():
     """[brain] request_timeout_s resolves to a positive float or None."""
     resolve = live_ai_mod._request_timeout

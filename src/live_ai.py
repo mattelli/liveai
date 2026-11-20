@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 from src.common import (
     SimpleNamespace, dump_func_call, cprint, crule, StreamPrinter, truncate_text,
+    terminate_all,
 )
 from src.tools import (
     exit_gracefully, system_info, current_date_time, get_working_directory,
@@ -2027,15 +2028,18 @@ class Brain(OpenAICore):
         """
         Stop the in-flight model response as soon as possible (best effort).
         Not exposed to the LLM; invoked by the session's Ctrl+C handling.
-        Sets the thread-safe cancel token and closes the active HTTP stream for
-        both streamed responses and ``act()`` rounds; the token covers a cancel
-        raised while a tool is running (between rounds). Idempotent and never
-        raises, so it is safe to call from a signal handler or any thread.
+        Sets the thread-safe cancel token, closes the active HTTP stream for
+        both streamed responses and ``act()`` rounds, and kills any running
+        subprocess (a long ``run_command``/``python_eval`` must not keep
+        running until its own timeout); the token covers a cancel raised while
+        a tool is running (between rounds). Idempotent and never raises, so it
+        is safe to call from a signal handler or any thread.
         """
         self._cancel_requested = True  # sets the cancel event
         with self._stream_lock_handle():
             stream, self._active_stream = self._active_stream, None
         self._close_stream(stream)
+        terminate_all()  # kill running foreground subprocesses (best effort)
         return "Cancel requested"
 
     def interrupt(self) -> str:

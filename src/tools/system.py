@@ -7,7 +7,9 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.common import dump_func_call
+from src.common import (
+    dump_func_call, process_terminated, register_process, unregister_process,
+)
 
 __all__ = [
     "current_date_time", "exit_gracefully", "get_working_directory",
@@ -87,12 +89,17 @@ def run_command(cmd: str, timeout_s: float = 30.0, cwd: str | None = None) -> st
         )
     except Exception as exc:
         return f"Error starting command: {exc}"
+    register_process(process)
     try:
         stdout, stderr = process.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
         process.kill()
         stdout, stderr = process.communicate()
         return f"Command timed out after {timeout_s}s: {stderr}"
+    finally:
+        unregister_process(process)
+    if process_terminated(process):
+        return "Command cancelled by user."
     if process.returncode != 0:
         return f"Return code [{process.returncode}]: {stderr}"
     return stdout
@@ -153,12 +160,17 @@ def _spawn_posix(cmd: str, workdir: Path, background: bool, timeout_s: float) ->
             )
         except Exception as exc:
             return f"Error starting command: {exc}"
+        register_process(process)
         try:
             stdout, stderr = process.communicate(timeout=timeout_s)
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate()
             return f"Command timed out after {timeout_s}s: {stderr}"
+        finally:
+            unregister_process(process)
+        if process_terminated(process):
+            return "Command cancelled by user."
         if process.returncode != 0:
             return f"Return code [{process.returncode}]: {stderr}"
         return stdout
@@ -287,12 +299,17 @@ def _spawn_windows(cmd: str, workdir: Path, background: bool, timeout_s: float) 
         )
     except Exception as exc:
         return f"Error starting command: {exc}"
+    register_process(process)
     try:
         stdout, stderr = process.communicate(timeout=timeout_s)
     except subprocess.TimeoutExpired:
         process.kill()
         stdout, stderr = process.communicate()
         return f"Command timed out after {timeout_s}s: {stderr}"
+    finally:
+        unregister_process(process)
+    if process_terminated(process):
+        return "Command cancelled by user."
     if process.returncode != 0:
         return f"Return code [{process.returncode}]: {stderr}"
     return stdout
