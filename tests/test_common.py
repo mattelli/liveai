@@ -449,6 +449,28 @@ def test_spinner_reports_buffered_code():
     assert "writing python code" in sp.console.file.getvalue()
 
 
+def test_spinner_resumes_after_thinking_truncation():
+    """A truncation marker ends the line, so the roller may draw again.
+
+    While thinking streams, ``feed_thinking`` keeps the line dirty and the
+    spinner stays suppressed; the truncation marker (ending in a newline)
+    must clear that so the roller resumes and the still-running model is
+    visible.
+    """
+    sp = _capture_printer()
+    sp._spin_active = True
+    sp.feed_thinking("reasoning")
+    assert sp._dirty_line is True  # thinking streams: roller suppressed
+    sp.feed_thinking(" … (thinking truncated)\n")
+    assert sp._dirty_line is False  # marker ended the line
+    sp.note("thinking")
+    with sp._spin_lock:
+        sp._draw_spinner_locked()
+    drawn = sp.console.file.getvalue()
+    assert any(frame in drawn for frame in _SPIN_FRAMES)
+    assert "thinking" in drawn
+
+
 def test_spinner_stop_erases_and_clears_hook():
     sp = _capture_printer()
     sp._spin_active = True

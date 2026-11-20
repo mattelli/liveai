@@ -1935,6 +1935,11 @@ class Brain(OpenAICore):
         once and further thinking chunks of the round are dropped silently -
         the model itself keeps thinking. The display state resets per round
         (see ``_stream_round``), so every round gets a fresh budget.
+
+        The marker ends with a newline and the spinner caption is reset to
+        ``thinking``: the line becomes clean again, so the activity roller
+        resumes below the marker and shows that the model is *still* thinking
+        (otherwise the frozen truncated line would look like a stall).
         """
         if not text:
             return
@@ -1948,7 +1953,11 @@ class Brain(OpenAICore):
             overflow = self._thinking_chars - self._max_thinking_tokens * 4
             shown = text[: len(text) - overflow] if overflow < len(text) else ""
             self._thinking_truncated = True
-            self._stream.feed_thinking(shown + " … (thinking truncated)")
+            # Trailing newline: ends the marker line so the roller may draw
+            # again (a dirty line suppresses it) and the model still thinking
+            # stays visible.
+            self._stream.feed_thinking(shown + " … (thinking truncated)\n")
+            self._stream.note("thinking")
             return
         self._stream.feed_thinking(text)
 

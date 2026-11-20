@@ -1602,6 +1602,7 @@ class _ThinkingRecorder:
     def __init__(self):
         self.thinking: list[str] = []
         self.answer: list[str] = []
+        self.notes: list[str] = []
 
     def feed_thinking(self, text):
         self.thinking.append(text)
@@ -1613,7 +1614,7 @@ class _ThinkingRecorder:
         pass
 
     def note(self, text):
-        pass
+        self.notes.append(text)
 
     def start_spinner(self, note="working"):
         pass
@@ -1785,6 +1786,49 @@ def test_truncation_marker_printed_once(monkeypatch):
     shown = "".join(agent._stream.thinking)
     assert shown.count("… (thinking truncated)") == 1
     assert shown.count("💭") == 1
+
+
+def test_truncation_starts_the_thinking_roller(monkeypatch):
+    """Truncation ends the marker line and captions the roller 'thinking'.
+
+    Without this the frozen truncated line kept the terminal line dirty, so
+    the activity spinner never resumed and the still-running model looked
+    stalled.
+    """
+    agent = _thinking_agent(monkeypatch, [
+        _delta(reasoning_content="x" * 1000),
+        _delta(reasoning_content="more"),  # dropped after the cap
+        _delta(delta_content="answer"),
+    ], show_thinking=True, max_thinking_tokens=10)
+    assert _fragments(agent) == ["answer"]
+    marker = [t for t in agent._stream.thinking
+              if "… (thinking truncated)" in t]
+    assert len(marker) == 1
+    assert marker[0].endswith("\n")  # line ended -> roller may draw again
+    assert agent._stream.notes == ["thinking"]  # caption set exactly once
+
+
+def test_no_roller_caption_without_truncation(monkeypatch):
+    """A short (untruncated) reasoning burst never touches the caption."""
+    agent = _thinking_agent(monkeypatch, [
+        _delta(reasoning_content="short"),
+        _delta(delta_content="answer"),
+    ], show_thinking=True, max_thinking_tokens=100)
+    assert _fragments(agent) == ["answer"]
+    assert "… (thinking truncated)" not in "".join(agent._stream.thinking)
+    assert agent._stream.notes == []
+
+
+def test_truncation_roller_resumes_per_round(monkeypatch):
+    """Each round that truncates re-captions the roller (fresh budget)."""
+    agent = _thinking_act_agent(monkeypatch, [
+        [_delta(reasoning_content="x" * 1000), _tool_call_delta()],
+        [_delta(reasoning_content="y" * 1000), _tool_call_delta()],
+        [_delta(delta_content="done")],
+    ], show_thinking=True, max_thinking_tokens=10)
+    agent.act("hi")
+    # One 'thinking' caption per truncated round (round-end sets 'working').
+    assert agent._stream.notes.count("thinking") == 2
 
 
 def test_thinking_budget_resets_per_round(monkeypatch):

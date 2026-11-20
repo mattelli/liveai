@@ -685,6 +685,12 @@ the thought chain is streamed live in dim text behind a `💭` marker, capped by
 `[ui] max_thinking_tokens` (0 = unlimited). Thinking is display-only: it never
 enters the chat history, the spoken reply or the returned answers.
 
+When the cap is reached a `… (thinking truncated)` marker is shown once and
+further reasoning is dropped from the display (the model keeps thinking). The
+marker ends the line and the activity roller (`⠋ thinking`) resumes below it, so
+a long truncated reasoning phase is visibly still running instead of looking
+stalled.
+
 Notes:
 
 - The JSON file also accepts a list of entries (each carrying a `name`) and a
