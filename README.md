@@ -551,9 +551,11 @@ multiline = false                # true -> Enter inserts newline, Esc+Enter acce
 
 `Ctrl-C` stops the response being generated (the chat session keeps running);
 at the input prompt it clears the line (re-prompt). While speech audio is
-playing, `Ctrl-C` stops the audio only: buffered audio is dropped for
+playing, the first `Ctrl-C` stops the audio only: buffered audio is dropped for
 immediate silence, the response continues, and later tool rounds may speak
-again. `Ctrl-D` (EOF) exits via the EOF path. If prompt_toolkit is missing or disabled, input falls back to the
+again. A **second** `Ctrl-C` then cancels the generation (the speech guard
+hands `Ctrl+C` back to the generation handler after silencing the audio).
+`Ctrl-D` (EOF) exits via the EOF path. If prompt_toolkit is missing or disabled, input falls back to the
 builtin `input()` with no line editing or history.
 
 While a response generates, a braille-dots spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) animates whenever nothing

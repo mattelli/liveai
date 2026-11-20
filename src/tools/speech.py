@@ -6,9 +6,10 @@ application config via :func:`configure` (``[speech_gen]``), the heavy
 and cached at module level, and tests override the ``_SPEECH_FACTORY`` seam.
 
 While audio plays, Ctrl+C stops the speech only (never the agent turn): a
-temporary SIGINT handler routes the interrupt to :func:`stop_speech`, and the
-previous handler - the session's generation cancel or the default - is
-restored afterwards.
+temporary SIGINT handler routes the interrupt to :func:`stop_speech` and then
+re-installs the previous handler - the session's generation cancel - so a
+*second* Ctrl+C cancels the generation. The previous handler is restored on
+exit.
 """
 
 from __future__ import annotations
@@ -96,8 +97,9 @@ def speak_if_enabled(text: str) -> None:
     Speak ``text`` through the session speech generator, when enabled.
 
     While the audio plays, Ctrl+C is routed to :func:`stop_speech` - dropping
-    buffered audio for immediate silence - instead of the agent's generation
-    cancel; the previous SIGINT handler is restored afterwards.
+    buffered audio for immediate silence - and the previous SIGINT handler (the
+    generation cancel) is re-installed, so a second Ctrl+C cancels the
+    generation. The previous handler is restored when playback ends.
     """
     global _speech_stopped
     if _speech_generator is None:
@@ -116,10 +118,13 @@ def _speech_sigint_guard():
     Route Ctrl+C to :func:`stop_speech` while speech audio is playing.
 
     Nested over the session's generation guard (``_generation_sigint_guard``):
-    during playback the handler installed here wins, and on exit the previous
-    handler - the generation cancel or the default - is restored. When
-    installation is not possible (e.g. not the main thread), speech plays
-    uninterruptible, as before this feature.
+    during playback the handler installed here wins. The first Ctrl+C stops the
+    audio *and* re-installs the previous handler (the generation cancel), so a
+    second Ctrl+C reaches ``cancel_generation()`` instead of being swallowed by
+    the speech guard - the audio is silenced first, the generation second. On
+    exit the previous handler is restored. When installation is not possible
+    (e.g. not the main thread), speech plays uninterruptible, as before this
+    feature.
     """
     previous = signal.getsignal(signal.SIGINT)
 
@@ -127,6 +132,12 @@ def _speech_sigint_guard():
         global _speech_stopped
         _speech_stopped = True
         stop_speech()
+        # Chain: hand Ctrl+C back to the generation guard so the *next* press
+        # cancels the generation (the audio is already stopping).
+        try:
+            signal.signal(signal.SIGINT, previous)
+        except (ValueError, OSError):
+            pass
 
     try:
         signal.signal(signal.SIGINT, _on_sigint)

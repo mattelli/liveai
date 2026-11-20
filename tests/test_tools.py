@@ -2849,6 +2849,77 @@ def test_speak_if_enabled_routes_sigint_to_stop_speech(speech_seam, capsys):
     assert "speech stopped" in capsys.readouterr().out.lower()
 
 
+def test_sigint_chains_audio_then_generation(speech_seam, capsys):
+    """1st Ctrl+C silences the audio and restores the generation handler;
+    the 2nd Ctrl+C reaches cancel_generation()."""
+    import signal
+
+    cancelled = []
+    seen = {}
+
+    class Recorder:
+        def speak(self, text):
+            handler = signal.getsignal(signal.SIGINT)
+            handler(signal.SIGINT, None)  # 1st Ctrl+C: stop the audio
+            seen["stopped"] = True
+            # The speech handler must have re-installed the generation handler.
+            restored = signal.getsignal(signal.SIGINT)
+            seen["restored"] = restored is generation_handler
+            restored(signal.SIGINT, None)  # 2nd Ctrl+C: cancel the generation
+
+        def request_stop(self):
+            pass
+
+        def close(self):
+            pass
+
+    def generation_handler(signum, frame):
+        cancelled.append(True)
+
+    previous = signal.getsignal(signal.SIGINT)
+    try:
+        # Simulate the session's generation guard being installed.
+        signal.signal(signal.SIGINT, generation_handler)
+        speech_seam._speech_generator = Recorder()
+        speech_seam.speak_if_enabled("hello")  # must not raise
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+    assert seen["stopped"] is True
+    assert seen["restored"] is True  # generation handler back after 1st press
+    assert cancelled == [True]  # 2nd press cancelled the generation
+    assert "speech stopped" in capsys.readouterr().out.lower()
+
+
+def test_sigint_chain_restores_previous_handler_after_playback(speech_seam):
+    """After playback the generation handler is the active one again."""
+    import signal
+
+    def generation_handler(signum, frame):
+        pass
+
+    previous = signal.getsignal(signal.SIGINT)
+    try:
+        signal.signal(signal.SIGINT, generation_handler)
+
+        class Recorder:
+            def speak(self, text):
+                handler = signal.getsignal(signal.SIGINT)
+                handler(signal.SIGINT, None)  # 1st Ctrl+C during playback
+
+            def request_stop(self):
+                pass
+
+            def close(self):
+                pass
+
+        speech_seam._speech_generator = Recorder()
+        speech_seam.speak_if_enabled("hello")
+        assert signal.getsignal(signal.SIGINT) is generation_handler
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
 def test_ctrl_c_during_playback_stops_audio_only(speech_seam, tmp_path, capsys):
     """End-to-end: real SpeechGenerator, Ctrl+C mid-playback drops the audio."""
     pytest.importorskip("piper", reason="requires piper")
