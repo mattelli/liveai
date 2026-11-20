@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import numpy as np
 
-import samples.inspect_corpus as inspect_corpus
+import playground.inspect_corpus as inspect_corpus
 
 
 def make_payload():
