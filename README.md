@@ -115,11 +115,45 @@ Streaming, tool calling and vision work as with cloud providers, depending on
 the model's capabilities.
 
 ## Piper
+
 Piper is a local neural text-to-speech engine, see [Piper](https://github.com/OHF-Voice/piper1-gpl/tree/main)
 
 ```
 python3 -m piper.download_voices en_US-hfc_female-medium
 ```
+
+### Natural pauses
+
+`SpeechGenerator` (`src/audio_generator.py`) does not read the reply as one flat
+run-on line: it splits the text into clause / sentence / paragraph segments and
+writes a real silence after each one, so commas, full stops and line breaks are
+audible. The same logic is used by live playback (`speak`) and by WAV export
+(`to_wav`), so an exported file matches what you hear.
+
+The pauses are configured under `[speech_gen]` in `config.toml` and are
+**scaled by `speech_speed`** (a faster voice gets proportionally shorter
+pauses):
+
+```toml
+[speech_gen]
+pause_comma_ms = 150        # after , ; : —
+pause_sentence_ms = 350     # after . ! ? …
+pause_paragraph_ms = 600    # at a paragraph / blank-line boundary
+non_prose_content = false   # true = also read code blocks / tables aloud
+omitted_placeholder = "content omitted"  # spoken instead of code/tables ("" = silent)
+```
+
+How the text is handled:
+
+- **Bullets and headings** become separate sentences (the `-`/`1.`/`#` marker
+  itself is not spoken).
+- **Non-prose content** (fenced and indented code blocks, markdown tables) is
+  not read aloud by default: it is replaced by `omitted_placeholder` (set it to
+  `""` to stay silent). Set `non_prose_content = true` to have it read aloud
+  too, with the fence/table markers stripped.
+- **Inline code** is read as plain text and **URLs** are read as the word
+  `"link"` instead of being spelled out.
+- A spaced dash (`one - two`) is treated as a clause break, not read as "dash".
 
 
 ## Image generation (Stable Diffusion)
