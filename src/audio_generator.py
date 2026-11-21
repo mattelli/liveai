@@ -9,6 +9,35 @@ from piper import PiperVoice, SynthesisConfig
 __all__ = ["SpeechGenerator"]
 
 
+# --- Text segmentation patterns (see SpeechGenerator.segment_for_speech) -----
+
+# Boundary kinds used as the ``pause_after`` tag of a segment.
+_PAUSE_NONE = "none"
+_PAUSE_COMMA = "comma"
+_PAUSE_SENTENCE = "sentence"
+_PAUSE_PARAGRAPH = "paragraph"
+
+# Code fence (``` or ~~~), possibly indented.
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})")
+# Markdown table row / separator row (``|---|:--:|``).
+_TABLE_ROW_RE = re.compile(r"^\s*\|")
+_TABLE_SEP_RE = re.compile(r"^\s*\|?[\s:|-]+\|[\s:|-]*$")
+# Heading (``# Title``) and list marker (``- item``, ``1. item``).
+_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+")
+_LIST_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+# Indented code block: 4 spaces or a tab.
+_INDENT_RE = re.compile(r"^(?: {4}|\t)")
+
+# A sentence ends on a run of terminators followed by whitespace or the end.
+_SENTENCE_BOUNDARY_RE = re.compile(r"[.!?…]+(?=\s|$)")
+# A clause ends on a comma/semicolon/colon before whitespace, or on a spaced
+# dash (the dash and its trailing spaces are consumed so they are not spoken).
+_CLAUSE_BOUNDARY_RE = re.compile(r"[,;:](?=\s)|(?<=\s)[—–-]\s+")
+# URLs are not spelled out; they are read as a short word.
+_URL_RE = re.compile(r"https?://[^\s]*[^\s.,;:!?)\]]")
+_URL_WORD = "link"
+
+
 class SpeechGenerator:
     def __init__(
         self,
@@ -188,18 +217,158 @@ class SpeechGenerator:
         return path
 
     @staticmethod
-    def clean_for_speech(text: str) -> str:
-        """Remove formatting characters and emoji so they are not read aloud."""
+    def _strip_formatting(text: str) -> str:
+        """Remove markdown formatting characters and emoji (no whitespace pass)."""
         # Remove markdown formatting characters: **, __, *, _, #, `, >, ~, [ ] ( )
         text = re.sub(r"[*_#`>~\[\]()]", "", text)
         # Remove emoji and other pictographic symbols
-        text = re.sub(
+        return re.sub(
             r"[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0001F1E6-\U0001F1FF\uFE0F\u200D\u2190-\u21FF\u2B00-\u2BFF]",
             "",
             text,
         )
+
+    @staticmethod
+    def clean_for_speech(text: str) -> str:
+        """Remove formatting characters and emoji so they are not read aloud."""
         # Collapse leftover whitespace
-        return re.sub(r"\s+", " ", text).strip()
+        return re.sub(r"\s+", " ", SpeechGenerator._strip_formatting(text)).strip()
+
+    @staticmethod
+    def _blocks(text: str) -> list[tuple[list[str], bool, str]]:
+        """Split ``text`` into ``(lines, is_paragraph, kind)`` triples.
+
+        ``kind`` is ``"text"``, ``"fence"``, ``"table"`` or ``"indent"`` (the
+        last three are non-prose). A blank line starts a new paragraph: the
+        block *before* it gets ``is_paragraph`` True (so the paragraph pause
+        lands at the end of the paragraph). A single newline, a heading or a
+        list marker starts a new sentence (False). Fenced code blocks are kept
+        together as one block, so their inner newlines never split them.
+        """
+        blocks: list[list] = []
+        current: list[str] = []
+        current_kind = "text"
+        fence_char: str | None = None
+
+        def flush():
+            nonlocal current, current_kind
+            if current:
+                blocks.append([list(current), False, current_kind])
+            current = []
+            current_kind = "text"
+
+        for line in text.splitlines():
+            fence_match = _FENCE_RE.match(line)
+            if fence_char is not None:
+                # Inside a fenced block: keep the line verbatim until the
+                # closing fence (which must use the same character).
+                current.append(line.strip())
+                if fence_match and fence_match.group(1)[0] == fence_char:
+                    fence_char = None
+                    flush()  # the code block is its own block
+                continue
+            if fence_match:
+                flush()
+                fence_char = fence_match.group(1)[0]
+                current_kind = "fence"
+                current.append(line.strip())
+                continue
+            if not line.strip():
+                flush()
+                if blocks:
+                    blocks[-1][1] = True  # the block before the blank line
+                continue
+            if _HEADING_RE.match(line) or _LIST_RE.match(line):
+                # A heading or a list item is its own sentence; the marker
+                # itself is not spoken.
+                flush()
+                marker = _HEADING_RE.match(line) or _LIST_RE.match(line)
+                current.append(line[marker.end():].strip())
+                flush()
+                continue
+            kind = ("table" if _TABLE_ROW_RE.match(line)
+                    else "indent" if _INDENT_RE.match(line) else "text")
+            if kind != current_kind:
+                flush()
+                current_kind = kind
+            current.append(line.strip())
+        flush()
+        return blocks
+
+    @staticmethod
+    def _split_keep(text: str, pattern: re.Pattern) -> list[str]:
+        """Split on ``pattern`` keeping each delimiter attached to its part."""
+        parts: list[str] = []
+        last = 0
+        for match in pattern.finditer(text):
+            parts.append(text[last:match.end()])
+            last = match.end()
+        parts.append(text[last:])
+        return [re.sub(r"\s+", " ", p).strip() for p in parts if p.strip()]
+
+    @staticmethod
+    def _sentences(block: str) -> list[str]:
+        """Split a block into sentences, keeping each terminator attached."""
+        return SpeechGenerator._split_keep(block, _SENTENCE_BOUNDARY_RE)
+
+    @staticmethod
+    def _clauses(sentence: str) -> list[str]:
+        """Split a sentence into clauses, keeping each terminator attached."""
+        # A spaced dash is a clause boundary too; turn it into a comma so it is
+        # not read aloud as "dash".
+        sentence = re.sub(r"\s+[—–-]\s+", ", ", sentence)
+        return SpeechGenerator._split_keep(sentence, _CLAUSE_BOUNDARY_RE)
+
+    @staticmethod
+    def segment_for_speech(
+        text: str,
+        non_prose_content: bool = False,
+        omitted_placeholder: str = "content omitted",
+    ) -> list[tuple[str, str]]:
+        """Split ``text`` into ``(segment_text, pause_after)`` pairs.
+
+        ``pause_after`` is one of ``"none"``, ``"comma"``, ``"sentence"`` or
+        ``"paragraph"``. Each segment keeps its punctuation terminator so the
+        synthesizer still applies its natural intonation; the pause is added
+        *after* the segment by the caller.
+
+        Non-prose blocks (fenced/indented code, markdown tables) are replaced
+        by ``omitted_placeholder`` when ``non_prose_content`` is False (the
+        default), or read aloud when True. Inline code is read as plain text
+        and URLs are read as the word ``"link"``. Pure function: no audio, no
+        I/O.
+        """
+        segments: list[tuple[str, str]] = []
+        for lines, is_paragraph, kind in SpeechGenerator._blocks(text):
+            if kind == "text":
+                block = " ".join(lines)
+            else:
+                if not non_prose_content:
+                    if omitted_placeholder:
+                        segments.append((omitted_placeholder, _PAUSE_SENTENCE))
+                    continue
+                block = SpeechGenerator._strip_code_markers(lines)
+            block = _URL_RE.sub(_URL_WORD, SpeechGenerator._strip_formatting(block))
+            for sentence in SpeechGenerator._sentences(block):
+                clauses = SpeechGenerator._clauses(sentence)
+                for i, clause in enumerate(clauses):
+                    pause = _PAUSE_COMMA if i < len(clauses) - 1 else _PAUSE_SENTENCE
+                    segments.append((clause, pause))
+            if is_paragraph and segments:
+                segments[-1] = (segments[-1][0], _PAUSE_PARAGRAPH)
+        if segments:
+            segments[-1] = (segments[-1][0], _PAUSE_NONE)
+        return segments
+
+    @staticmethod
+    def _strip_code_markers(lines: list[str]) -> str:
+        """Drop fence/table markers so a non-prose block can be read aloud."""
+        kept = []
+        for line in lines:
+            if _FENCE_RE.match(line) or _TABLE_SEP_RE.match(line):
+                continue
+            kept.append(line.replace("|", " ").strip())
+        return " ".join(kept).strip()
 
     def speak(self, text: str, strip_formatting: bool = True) -> int:
         """

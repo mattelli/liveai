@@ -373,3 +373,93 @@ def test_negative_pause_duration_raises(tmp_path):
 def test_zero_pause_duration_is_allowed(tmp_path):
     gen = make_generator(tmp_path, pause_comma_ms=0)
     assert gen._pause_ms["comma"] == 0
+
+
+# ------------------------------------------------------- G10b segmentation
+
+
+FENCE = "```"
+
+
+def seg(text, **kw):
+    return ag.SpeechGenerator.segment_for_speech(text, **kw)
+
+
+def test_segment_splits_on_sentence_and_paragraph():
+    assert seg("A. B\n\nC") == [
+        ("A.", "sentence"), ("B", "paragraph"), ("C", "none"),
+    ]
+
+
+def test_segment_keeps_terminator_attached():
+    assert seg("hello, world.") == [("hello,", "comma"), ("world.", "none")]
+
+
+def test_segment_bullets_and_headings_are_separate_sentences():
+    assert seg("- a\n- b") == [("a", "sentence"), ("b", "none")]
+    assert seg("# H\nx") == [("H", "sentence"), ("x", "none")]
+
+
+def test_segment_strips_list_markers():
+    assert seg("1. one\n2. two") == [("one", "sentence"), ("two", "none")]
+
+
+def test_segment_drops_fenced_code_block():
+    text = f"text\n\n{FENCE}\ncode line\nmore\n{FENCE}\nafter"
+    assert seg(text) == [
+        ("text", "paragraph"), ("content omitted", "sentence"), ("after", "none"),
+    ]
+
+
+def test_segment_drops_table():
+    text = "| a | b |\n|---|---|\n| 1 | 2 |\nend"
+    assert seg(text) == [("content omitted", "sentence"), ("end", "none")]
+
+
+def test_segment_drops_indented_code_block():
+    text = "    indented code\nmore code\nafter"
+    assert seg(text) == [("content omitted", "sentence"), ("more code after", "none")]
+
+
+def test_segment_empty_placeholder_is_silent():
+    text = f"code\n\n{FENCE}\nx\n{FENCE}"
+    assert seg(text, omitted_placeholder="") == [("code", "none")]
+
+
+def test_segment_custom_placeholder_is_used():
+    text = f"code\n\n{FENCE}\nx\n{FENCE}"
+    assert seg(text, omitted_placeholder="see the code") == [
+        ("code", "paragraph"), ("see the code", "none"),
+    ]
+
+
+def test_segment_non_prose_content_true_speaks_code():
+    text = f"code\n\n{FENCE}\nprint(1)\n{FENCE}"
+    assert seg(text, non_prose_content=True) == [
+        ("code", "paragraph"), ("print1", "none"),
+    ]
+
+
+def test_segment_non_prose_content_true_speaks_table():
+    text = "| a | b |\n|---|---|\n| 1 | 2 |"
+    assert seg(text, non_prose_content=True) == [("a b 1 2", "none")]
+
+
+def test_segment_keeps_inline_code_text():
+    assert seg("see `x` now") == [("see x now", "none")]
+
+
+def test_segment_replaces_url_with_word():
+    assert seg("go to http://example.com/page.") == [("go to link.", "none")]
+
+
+def test_segment_collapses_whitespace_inside_segment():
+    assert seg("a    b\tc") == [("a b c", "none")]
+
+
+def test_segment_spaced_dash_becomes_clause_boundary():
+    assert seg("one - two") == [("one,", "comma"), ("two", "none")]
+
+
+def test_segment_empty_text_returns_nothing():
+    assert seg("") == [] and seg("   ") == []
