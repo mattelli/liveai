@@ -1017,6 +1017,15 @@ Scheduled prompts run on a **dedicated isolated agent** (quiet, own tool
 state), never on the main session agent, so the live conversation is never
 disturbed. Tasks persist to a JSON file and survive restarts.
 
+By default that agent is built from the main `[brain]`/`[agent]` config. Set
+`agent` to run scheduled prompts on a named `[delegation.agents.<name>]`
+sub-agent instead — it then uses that entry's `model`, `tool_groups`,
+`system_prompt` and `max_act_rounds`, exactly like a `delegate_task` child
+(same isolation and flat topology). An unknown name logs a warning at startup
+and falls back to the main agent, so scheduled tasks always keep running; the
+run is monitored and its answer delivered to the main agent as usual (under
+the agent's name in `agent_activity`).
+
 The feature ships off by default; enable it in `config.toml`:
 
 ```
@@ -1025,6 +1034,8 @@ enabled = true                       # false/missing -> tools are no-ops
 persist_file_cwd = "schedule.json"   # task persistence (survives restarts; under [cwd] data_dir_cwd)
 on_missed = "skip"                   # missed one-shots after a restart:
                                      # "run" executes them, "skip" drops them
+agent = ""                           # run scheduled prompts on this [delegation.agents.<name>]
+                                     # entry (unset/empty = the main agent's model and tool groups)
 ```
 
 ## Completion notifications (`[delegation.notify]`)

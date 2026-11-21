@@ -45,6 +45,7 @@ monitor_buffer = 200                             # in-memory events kept for the
 enabled = false                      # false (or missing section) -> tools are no-ops
 persist_file_cwd = "schedule.json"   # task persistence (survives restarts; under data_dir_cwd)
 on_missed = "skip"                   # one-shot tasks missed while the app was off: "run" -> execute immediately, "skip" -> drop
+agent = ""                           # run scheduled prompts on this [delegation.agents.<name>] entry (unset/empty = the main agent's model and tool groups)
 
 [delegation.notify] # terminal hint when a background task completes (all keys optional)
 terminal = false    # print "🔔 task completed" when a scheduled task or sub-agent finishes (missing section = off)
