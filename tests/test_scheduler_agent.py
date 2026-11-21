@@ -360,3 +360,64 @@ def test_scheduled_events_visible_in_agent_activity(agent_env):
         assert "glm" in report
     finally:
         live_ai.bind_monitor(None)
+
+
+# ------------------------------------- [delegation.scheduler] agent key (T1)
+
+
+@pytest.fixture
+def registry_env(monkeypatch):
+    """Isolate the [delegation.agents] registry; yields the live dict."""
+    from src.agent_registry import AgentSpec, agent_registry_state
+
+    state = agent_registry_state()
+    saved = dict(state)
+    state.clear()
+    yield state
+    state.clear()
+    state.update(saved)
+
+
+def _config_with_scheduler(agent_name=None):
+    """Minimal config namespace carrying [delegation.scheduler] (+ agent)."""
+    from types import SimpleNamespace
+
+    scheduler = SimpleNamespace(enabled=True, persist_file_cwd=None,
+                                on_missed="skip")
+    if agent_name is not None:
+        scheduler.agent = agent_name
+    return SimpleNamespace(delegation=SimpleNamespace(scheduler=scheduler))
+
+
+def test_configure_reads_agent_key(registry_env):
+    """configure() stores the name and resolves the spec from the registry."""
+    from src.agent_registry import AgentSpec
+
+    registry_env["researcher"] = AgentSpec(name="researcher", model="m1")
+    config = _config_with_scheduler("researcher")
+    scheduler_module.configure(config)
+    assert scheduler_module._CONFIG["agent"] == "researcher"
+    assert scheduler_module._CONFIG["agent_spec"] is registry_env["researcher"]
+
+
+def test_configure_without_agent_key_has_no_spec(registry_env):
+    """A missing key leaves agent == '' and agent_spec is None."""
+    from src.agent_registry import AgentSpec
+
+    registry_env["researcher"] = AgentSpec(name="researcher")
+    scheduler_module.configure(_config_with_scheduler())
+    assert scheduler_module._CONFIG["agent"] == ""
+    assert scheduler_module._CONFIG["agent_spec"] is None
+
+
+def test_configure_unknown_agent_warns_and_falls_back(registry_env, caplog):
+    """An unknown name logs a warning and resolves to None (main agent)."""
+    from src.agent_registry import AgentSpec
+
+    registry_env["researcher"] = AgentSpec(name="researcher")
+    config = _config_with_scheduler("typo")
+    with caplog.at_level(logging.WARNING, logger="src.tools.scheduler"):
+        scheduler_module.configure(config)
+    assert scheduler_module._CONFIG["agent"] == "typo"
+    assert scheduler_module._CONFIG["agent_spec"] is None
+    assert "typo" in caplog.text and "researcher" in caplog.text

@@ -16,6 +16,9 @@ instance so the historical call API and test seams keep working.
     persist_file_cwd = ".liveai/schedule.json"  # resolved relative to the launch dir
     on_missed = "skip"            # one-shot tasks missed while the app was off:
                                   # "run" -> execute immediately, "skip" -> drop
+    agent = "researcher"          # run scheduled prompts on this
+                                  # [delegation.agents.<name>] entry; unset/empty
+                                  # -> the main agent's model and tool groups
 
 ``Scheduler`` is the core engine: a daemon thread sleeping on a
 ``threading.Event`` until the next job is due (no busy polling), a ``heapq``
@@ -76,15 +79,44 @@ def configure(config) -> None:
     full config
     for the execution-agent factory); a missing section keeps the scheduler
     disabled (tools return the disabled-error string).
+
+    ``[delegation.scheduler] agent`` names a ``[delegation.agents.<name>]``
+    entry the scheduled prompts run on; it is resolved once here (unknown
+    names warn and fall back to the main agent) and re-resolved lazily on the
+    first executor build if the registry was still empty (see
+    ``_default_agent_factory``).
     """
     global _CONFIG
     section = getattr(getattr(config, "delegation", None), "scheduler", None)
+    agent_name = str(getattr(section, "agent", "") or "").strip()
     _CONFIG = {
         "enabled": bool(getattr(section, "enabled", False)),
         "persist_file": getattr(section, "persist_file_cwd", None),
         "on_missed": getattr(section, "on_missed", "skip"),
         "config": config,  # full config: the execution agent needs [brain]
+        "agent": agent_name,  # [delegation.agents.<name>] entry ("" = main agent)
+        "agent_spec": _resolve_agent_spec(config, agent_name),  # resolved once
     }
+
+
+def _resolve_agent_spec(config, name: str):
+    """The AgentSpec named by ``[delegation.scheduler] agent`` (None if unset).
+
+    Logs a warning and returns None for an unknown name: a typo must not stop
+    scheduled tasks from running (they fall back to the main-config agent).
+    """
+    name = (name or "").strip()
+    if not name:
+        return None
+    from src.agent_registry import agent_registry
+    specs = agent_registry()
+    spec = specs.get(name) or specs.get(name.lower())
+    if spec is None:
+        logger.warning(
+            "[delegation.scheduler] agent %r is not a configured "
+            "[delegation.agents] entry (configured: %s); using the main agent",
+            name, ", ".join(sorted(specs)) or "none")
+    return spec
 
 
 def _enabled() -> bool:
