@@ -2852,6 +2852,50 @@ def test_allow_speech_without_optional_keys(speech_seam):
     assert seen["normalize_audio"] is False
 
 
+def test_speech_kwargs_forwards_pause_config(speech_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def close(self):
+            pass
+
+    speech_seam._SPEECH_FACTORY = Recorder
+    speech_seam.configure(SimpleNamespace(speech_gen=SimpleNamespace(
+        model_path="m", samplerate=22050, volume=0.5, speech_speed=1.0,
+        pause_comma_ms=11, pause_sentence_ms=22, pause_paragraph_ms=33,
+        non_prose_content=True, omitted_placeholder="see the code")))
+    speech_seam.allow_speech(True)
+    assert seen["pause_comma_ms"] == 11
+    assert seen["pause_sentence_ms"] == 22
+    assert seen["pause_paragraph_ms"] == 33
+    assert seen["non_prose_content"] is True
+    assert seen["omitted_placeholder"] == "see the code"
+
+
+def test_speech_kwargs_pause_defaults_when_absent(speech_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def close(self):
+            pass
+
+    speech_seam._SPEECH_FACTORY = Recorder
+    speech_seam.configure(SimpleNamespace(speech_gen=SimpleNamespace(
+        model_path="m", samplerate=22050, volume=0.5, speech_speed=1.0)))
+    speech_seam.allow_speech(True)
+    assert seen["pause_comma_ms"] == 150
+    assert seen["pause_sentence_ms"] == 350
+    assert seen["pause_paragraph_ms"] == 600
+    assert seen["non_prose_content"] is False
+    assert seen["omitted_placeholder"] == "content omitted"
+
+
 def test_speak_if_enabled_only_speaks_when_enabled(speech_seam):
     spoken = []
 

@@ -342,3 +342,34 @@ def test_end_to_end_speak_and_export(tmp_path):
 
 def test_module_exports_speech_generator():
     assert ag.__all__ == ["SpeechGenerator"]
+
+
+# ---------------------------------------------------------------- G10 pauses
+
+
+def test_pause_defaults_and_storage(tmp_path):
+    gen = make_generator(tmp_path)
+    assert gen._pause_ms == {"comma": 150, "sentence": 350, "paragraph": 600}
+    assert gen.non_prose_content is False
+    assert gen.omitted_placeholder == "content omitted"
+
+
+def test_pause_values_are_stored(tmp_path):
+    gen = make_generator(
+        tmp_path, pause_comma_ms=10, pause_sentence_ms=20,
+        pause_paragraph_ms=30, non_prose_content=True,
+        omitted_placeholder="see the code",
+    )
+    assert gen._pause_ms == {"comma": 10, "sentence": 20, "paragraph": 30}
+    assert gen.non_prose_content is True
+    assert gen.omitted_placeholder == "see the code"
+
+
+def test_negative_pause_duration_raises(tmp_path):
+    with pytest.raises(ValueError):
+        make_generator(tmp_path, pause_comma_ms=-1)
+
+
+def test_zero_pause_duration_is_allowed(tmp_path):
+    gen = make_generator(tmp_path, pause_comma_ms=0)
+    assert gen._pause_ms["comma"] == 0

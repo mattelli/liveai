@@ -50,6 +50,11 @@ def _speech_kwargs(cfg) -> dict:
         noise_scale=getattr(cfg, "noise_scale", 1.0),
         noise_w_scale=getattr(cfg, "noise_w_scale", 1.0),
         normalize_audio=getattr(cfg, "normalize_audio", False),
+        pause_comma_ms=getattr(cfg, "pause_comma_ms", 150),
+        pause_sentence_ms=getattr(cfg, "pause_sentence_ms", 350),
+        pause_paragraph_ms=getattr(cfg, "pause_paragraph_ms", 600),
+        non_prose_content=getattr(cfg, "non_prose_content", False),
+        omitted_placeholder=getattr(cfg, "omitted_placeholder", "content omitted"),
     )
 
 

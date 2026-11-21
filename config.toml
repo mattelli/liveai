@@ -106,6 +106,11 @@ speech_speed = 1.0
 noise_scale = 1.0
 noise_w_scale = 1.0
 normalize_audio = false
+pause_comma_ms = 150        # pause after , ; : — (scaled by speech_speed)
+pause_sentence_ms = 350     # pause after . ! ? …
+pause_paragraph_ms = 600    # pause at paragraph / blank-line boundaries
+non_prose_content = false   # true = also read code blocks / tables aloud
+omitted_placeholder = "content omitted"  # spoken instead of code blocks / tables when non_prose_content = false ("" = silent)
 
 [summarization] # extractive text summarization (LexRank + sentence embeddings)
 model_path = ".res/embedding/all-MiniLM-L6-v2"  # resolved relative to this config file

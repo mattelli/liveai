@@ -22,6 +22,11 @@ class SpeechGenerator:
         noise_scale: float = 1.0,
         noise_w_scale: float = 1.0,
         normalize_audio: bool = False,
+        pause_comma_ms: float = 150,
+        pause_sentence_ms: float = 350,
+        pause_paragraph_ms: float = 600,
+        non_prose_content: bool = False,
+        omitted_placeholder: str = "content omitted",
         voice=None,
         stream=None,
         stream_factory=sd.RawOutputStream,
@@ -31,7 +36,12 @@ class SpeechGenerator:
 
         The Piper voice is loaded lazily on first use (``_ensure_voice``).
         Raises FileNotFoundError for a missing model and ValueError for an
-        invalid ``speech_speed`` or ``volume``.
+        invalid ``speech_speed``, ``volume`` or negative pause duration.
+
+        ``pause_*_ms`` are the base silences inserted after a clause, a
+        sentence and a paragraph (scaled by ``speech_speed`` at playback).
+        ``non_prose_content`` False (default) replaces code blocks and tables
+        with ``omitted_placeholder`` instead of reading them aloud.
         """
         model_path = Path(model_path)
         if not model_path.exists():
@@ -40,6 +50,8 @@ class SpeechGenerator:
             raise ValueError("speech_speed must be greater than 0")
         if not 0.0 <= volume <= 1.0:
             raise ValueError("volume must be between 0.0 and 1.0")
+        if min(pause_comma_ms, pause_sentence_ms, pause_paragraph_ms) < 0:
+            raise ValueError("pause durations must not be negative")
 
         self.logger = getLogger(self.__class__.__name__)
         self.model_path = model_path
@@ -48,6 +60,18 @@ class SpeechGenerator:
         self.channels = channels
         self.datatype = datatype
         self._closed = False
+        self.speech_speed = speech_speed
+        # Base pause per boundary kind, in milliseconds; scaled by speech_speed
+        # when the silences are written (see _pause_ms_for).
+        self._pause_ms = {
+            "comma": pause_comma_ms,
+            "sentence": pause_sentence_ms,
+            "paragraph": pause_paragraph_ms,
+        }
+        # Non-prose blocks (code, tables): False -> replaced by the placeholder
+        # sentence, True -> read aloud as well.
+        self.non_prose_content = non_prose_content
+        self.omitted_placeholder = omitted_placeholder
         self.syn_config = SynthesisConfig(
             speaker_id=speaker_id,
             volume=volume,
