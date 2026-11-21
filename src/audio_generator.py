@@ -324,6 +324,7 @@ class SpeechGenerator:
         text: str,
         non_prose_content: bool = False,
         omitted_placeholder: str = "content omitted",
+        strip_formatting: bool = True,
     ) -> list[tuple[str, str]]:
         """Split ``text`` into ``(segment_text, pause_after)`` pairs.
 
@@ -335,8 +336,9 @@ class SpeechGenerator:
         Non-prose blocks (fenced/indented code, markdown tables) are replaced
         by ``omitted_placeholder`` when ``non_prose_content`` is False (the
         default), or read aloud when True. Inline code is read as plain text
-        and URLs are read as the word ``"link"``. Pure function: no audio, no
-        I/O.
+        and URLs are read as the word ``"link"``. ``strip_formatting`` False
+        keeps the raw text (markdown and URLs untouched). Pure function: no
+        audio, no I/O.
         """
         segments: list[tuple[str, str]] = []
         for lines, is_paragraph, kind in SpeechGenerator._blocks(text):
@@ -348,7 +350,8 @@ class SpeechGenerator:
                         segments.append((omitted_placeholder, _PAUSE_SENTENCE))
                     continue
                 block = SpeechGenerator._strip_code_markers(lines)
-            block = _URL_RE.sub(_URL_WORD, SpeechGenerator._strip_formatting(block))
+            if strip_formatting:
+                block = _URL_RE.sub(_URL_WORD, SpeechGenerator._strip_formatting(block))
             for sentence in SpeechGenerator._sentences(block):
                 clauses = SpeechGenerator._clauses(sentence)
                 for i, clause in enumerate(clauses):
@@ -370,6 +373,18 @@ class SpeechGenerator:
             kept.append(line.replace("|", " ").strip())
         return " ".join(kept).strip()
 
+    def _pause_ms_for(self, pause_after: str) -> float:
+        """Silence in milliseconds for a boundary kind, scaled by speech speed."""
+        base = self._pause_ms.get(pause_after, 0)
+        return base / self.speech_speed
+
+    def _silence_bytes(self, ms: float) -> bytes:
+        """``ms`` milliseconds of silence as raw PCM bytes (no frames if <= 0)."""
+        frames = int(self.samplerate * (ms / 1000.0))
+        if frames <= 0:
+            return b""
+        return b"\x00" * (frames * self.channels * self._SAMPLE_SIZES.get(self.datatype, 2))
+
     def speak(self, text: str, strip_formatting: bool = True) -> int:
         """
         Synthesize text and stream it to the output device.
@@ -377,16 +392,24 @@ class SpeechGenerator:
         Returns the number of audio bytes written. Empty (or fully stripped)
         text is a no-op: the stream is neither started nor stopped.
 
+        The text is split into clause/sentence/paragraph segments
+        (``segment_for_speech``) and a silence - scaled by ``speech_speed`` -
+        is written after each one, so punctuation and line breaks are audible
+        as natural pauses.
+
         A stop request (Ctrl+C or ``request_stop``) breaks the loop between
         write slices (about 50 ms of audio each) and aborts the stream,
         dropping still-buffered audio so the silence is immediate; the written
         count reflects only the played audio. A later speak() call plays
         normally again.
         """
-        if strip_formatting:
-            self.logger.debug("Removing formatted syntax...")
-            text = self.clean_for_speech(text)
-        if not text:
+        segments = self.segment_for_speech(
+            text,
+            non_prose_content=self.non_prose_content,
+            omitted_placeholder=self.omitted_placeholder,
+            strip_formatting=strip_formatting,
+        )
+        if not segments:
             self.logger.debug("Nothing to speak after cleaning; skipping.")
             return 0
 
@@ -396,13 +419,21 @@ class SpeechGenerator:
         written = 0
         self.stream.start()
         try:
-            for chunk in voice.synthesize(text, syn_config=self.syn_config):
+            for segment, pause_after in segments:
                 if self._stop_event.is_set():
-                    self.logger.info("🔇 Speech playback stopped by request.")
                     break
-                written += self._write_chunk(chunk.audio_int16_bytes)
+                for chunk in voice.synthesize(segment, syn_config=self.syn_config):
+                    if self._stop_event.is_set():
+                        break
+                    written += self._write_chunk(chunk.audio_int16_bytes)
+                if self._stop_event.is_set():
+                    break
+                silence = self._silence_bytes(self._pause_ms_for(pause_after))
+                if silence:
+                    written += self._write_chunk(silence)
         finally:
             if self._stop_event.is_set():
+                self.logger.info("🔇 Speech playback stopped by request.")
                 self._abort_stream()
                 self._stop_event.clear()
             else:

@@ -463,3 +463,109 @@ def test_segment_spaced_dash_becomes_clause_boundary():
 
 def test_segment_empty_text_returns_nothing():
     assert seg("") == [] and seg("   ") == []
+
+
+# ------------------------------------------------------- G10c speak pauses
+
+
+def test_silence_bytes_length_and_zero():
+    gen = ag.SpeechGenerator.__new__(ag.SpeechGenerator)
+    gen.samplerate, gen.channels, gen.datatype = 22050, 1, "int16"
+    # 350 ms at 22050 Hz -> 7717 frames -> 15434 bytes
+    assert len(gen._silence_bytes(350)) == 7717 * 2
+    assert gen._silence_bytes(0) == b""
+    assert gen._silence_bytes(-5) == b""
+
+
+def test_pause_ms_for_scales_with_speech_speed():
+    gen = ag.SpeechGenerator.__new__(ag.SpeechGenerator)
+    gen._pause_ms = {"comma": 150, "sentence": 350, "paragraph": 600}
+    gen.speech_speed = 2.0
+    assert gen._pause_ms_for("sentence") == 175
+    assert gen._pause_ms_for("paragraph") == 300
+    assert gen._pause_ms_for("none") == 0
+
+
+def silence_total(stream):
+    """Total silence bytes written (all-zero buffers)."""
+    return sum(len(buf) for buf in stream.written if buf and not any(buf))
+
+
+def test_speak_inserts_silence_between_segments(tmp_path):
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)
+    # "a. b" -> two segments ("a.", "b"), sentence pause after the first.
+    written = gen.speak("a. b", strip_formatting=False)
+    assert silence_total(stream) == int(22050 * 0.350) * 2
+    assert written == 4 + int(22050 * 0.350) * 2 + 4
+    # the audio of the second segment comes after the silence
+    audio = [i for i, buf in enumerate(stream.written) if buf == b"\x01\x02"]
+    silence = [i for i, buf in enumerate(stream.written) if buf and not any(buf)]
+    assert max(silence) < max(audio) and min(audio) < min(silence)
+
+
+def test_speak_comma_pause_is_shorter(tmp_path):
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)
+    gen.speak("a, b", strip_formatting=False)
+    assert silence_total(stream) == int(22050 * 0.150) * 2
+
+
+def test_paragraph_pause_is_longer_than_sentence(tmp_path):
+    sentence = FakeOutputStream()
+    make_generator(tmp_path, stream=sentence).speak("a. b", strip_formatting=False)
+    paragraph = FakeOutputStream()
+    make_generator(tmp_path, stream=paragraph).speak("a.\n\nb", strip_formatting=False)
+    assert silence_total(paragraph) == int(22050 * 0.600) * 2
+    assert silence_total(paragraph) > silence_total(sentence)
+
+
+def test_pause_durations_scale_with_speech_speed(tmp_path):
+    fast = FakeOutputStream()
+    make_generator(tmp_path, stream=fast, speech_speed=2.0).speak(
+        "a. b", strip_formatting=False)
+    slow = FakeOutputStream()
+    make_generator(tmp_path, stream=slow, speech_speed=1.0).speak(
+        "a. b", strip_formatting=False)
+    assert abs(silence_total(fast) - silence_total(slow) // 2) <= 2
+
+
+def test_no_trailing_pause_after_last_segment(tmp_path):
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)
+    gen.speak("a. b", strip_formatting=False)
+    # last written buffer is audio, not silence
+    assert stream.written[-1] == b"\x01\x02"
+
+
+def test_single_segment_has_no_silence(tmp_path):
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream)
+    gen.speak("hello", strip_formatting=False)
+    assert stream.written == [b"\x01\x02", b"\x01\x02"]
+
+
+def test_zero_pause_writes_no_silence(tmp_path):
+    stream = FakeOutputStream()
+    gen = make_generator(tmp_path, stream=stream, pause_sentence_ms=0)
+    gen.speak("a. b", strip_formatting=False)
+    assert silence_total(stream) == 0
+    assert stream.written == [b"\x01\x02"] * 4  # two segments, no silence
+
+
+def test_stop_request_during_pause_aborts_playback(tmp_path):
+    """A stop arriving while the first pause is written stops the playback."""
+    gen = make_generator(tmp_path, stream=FakeOutputStream())
+
+    class StopOnSilenceStream(FakeOutputStream):
+        def write(self, data):
+            super().write(data)
+            if data and not any(data):
+                gen.request_stop()  # Ctrl+C during the pause
+
+    gen.stream = StopOnSilenceStream()
+    gen.speak("a. b", strip_formatting=False)
+    played = gen.stream.written
+    assert played[:2] == [b"\x01\x02", b"\x01\x02"]  # first segment played
+    assert b"\x01\x02" not in played[2:]  # second segment never played
+    assert gen.stream.aborted == 1 and gen.stream.stopped == 0
