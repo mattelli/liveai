@@ -324,6 +324,51 @@ def test_to_wav_cleans_text_by_default(tmp_path):
     assert voice.wav_calls == 1
 
 
+# ------------------------------------------------------- G10d to_wav pauses
+
+
+def test_to_wav_inserts_silence_frames(tmp_path):
+    gen = make_generator(tmp_path)
+    out = gen.to_wav("a. b", tmp_path / "p.wav", strip_formatting=False)
+    with wave.open(str(out), "rb") as wav_file:
+        frames = wav_file.getnframes()
+        assert wav_file.getframerate() == 22050
+        assert wav_file.getsampwidth() == 2
+        assert wav_file.getnchannels() == 1
+    # two segments x 2 audio frames + one 350 ms sentence pause
+    assert frames == 4 + int(22050 * 0.350)
+
+
+def test_to_wav_single_segment_has_no_silence(tmp_path):
+    gen = make_generator(tmp_path)
+    out = gen.to_wav("hello", tmp_path / "s.wav", strip_formatting=False)
+    with wave.open(str(out), "rb") as wav_file:
+        assert wav_file.getnframes() == 2  # FakePiperVoice writes two frames
+
+
+def test_to_wav_pause_scales_with_speech_speed(tmp_path):
+    slow = make_generator(tmp_path, speech_speed=1.0)
+    fast = make_generator(tmp_path, speech_speed=2.0)
+    a = slow.to_wav("a. b", tmp_path / "slow.wav", strip_formatting=False)
+    b = fast.to_wav("a. b", tmp_path / "fast.wav", strip_formatting=False)
+    with wave.open(str(a), "rb") as wa, wave.open(str(b), "rb") as wb:
+        assert abs((wa.getnframes() - 4) - 2 * (wb.getnframes() - 4)) <= 1
+
+
+def test_to_wav_synthesizes_one_call_per_segment(tmp_path):
+    voice = FakePiperVoice()
+    gen = make_generator(tmp_path, voice=voice)
+    gen.to_wav("a. b", tmp_path / "n.wav", strip_formatting=False)
+    assert voice.wav_calls == 2  # one per segment
+
+
+def test_to_wav_zero_pause_writes_no_silence(tmp_path):
+    gen = make_generator(tmp_path, pause_sentence_ms=0)
+    out = gen.to_wav("a. b", tmp_path / "z.wav", strip_formatting=False)
+    with wave.open(str(out), "rb") as wav_file:
+        assert wav_file.getnframes() == 4  # two segments, no silence
+
+
 # ---------------------------------------------------------------- G9 acceptance
 
 

@@ -200,19 +200,37 @@ class SpeechGenerator:
         """
         Synthesize text to a WAV file and return its Path.
 
-        Applies ``clean_for_speech`` when ``strip_formatting`` is True and
-        creates missing parent directories. Raises ValueError for empty (or
-        fully stripped) text.
+        The text is split into the same clause/sentence/paragraph segments as
+        :meth:`speak`, and the same speed-scaled silences are written between
+        them, so an exported file matches live playback. Creates missing
+        parent directories. Raises ValueError for empty (or fully stripped)
+        text.
         """
-        if strip_formatting:
-            text = self.clean_for_speech(text)
-        if not text:
+        segments = self.segment_for_speech(
+            text,
+            non_prose_content=self.non_prose_content,
+            omitted_placeholder=self.omitted_placeholder,
+            strip_formatting=strip_formatting,
+        )
+        if not segments:
             raise ValueError("Cannot synthesize WAV: empty text")
         path = Path(file_path)
         path.parent.mkdir(parents=True, exist_ok=True)
         voice = self._ensure_voice()
         with wave.open(str(path), "wb") as wav_file:
-            voice.synthesize_wav(text, wav_file, syn_config=self.syn_config)
+            # The format is set here (not by the first chunk) so silence can be
+            # written even for a segment that produces no audio.
+            wav_file.setframerate(self.samplerate)
+            wav_file.setsampwidth(2)
+            wav_file.setnchannels(self.channels)
+            for segment, pause_after in segments:
+                voice.synthesize_wav(
+                    segment, wav_file, syn_config=self.syn_config,
+                    set_wav_format=False,
+                )
+                silence = self._silence_bytes(self._pause_ms_for(pause_after))
+                if silence:
+                    wav_file.writeframes(silence)
         self.logger.info(f"💾 Audio saved to {path.name}")
         return path
 

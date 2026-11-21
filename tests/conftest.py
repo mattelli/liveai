@@ -109,10 +109,11 @@ class FakePiperVoice:
                 raise RuntimeError("synth failed")
             yield FakeAudioChunk(data)
 
-    def synthesize_wav(self, text, wav_file, syn_config=None):
+    def synthesize_wav(self, text, wav_file, syn_config=None, set_wav_format=True):
         self.wav_calls += 1
         self.last_text = text
-        wav_file.setparams((1, 2, self.sample_rate, 0, "NONE", "not compressed"))
+        if set_wav_format:
+            wav_file.setparams((1, 2, self.sample_rate, 0, "NONE", "not compressed"))
         wav_file.writeframes(self._wav_bytes * 2)
 
 
