@@ -421,3 +421,149 @@ def test_configure_unknown_agent_warns_and_falls_back(registry_env, caplog):
     assert scheduler_module._CONFIG["agent"] == "typo"
     assert scheduler_module._CONFIG["agent_spec"] is None
     assert "typo" in caplog.text and "researcher" in caplog.text
+
+
+# --------------------------- executor built from the spec + label (T2)
+
+
+def test_default_agent_factory_uses_spec(monkeypatch):
+    """With a spec set, the factory builds via build_sub_agent(config, spec)."""
+    from src.agent_registry import AgentSpec
+    import src.sub_agents as sub_agents
+
+    spec = AgentSpec(name="researcher", model="m1")
+    calls = []
+    sentinel = object()
+
+    def fake_build(config, got_spec):
+        calls.append((config, got_spec))
+        return sentinel
+
+    monkeypatch.setattr(sub_agents, "build_sub_agent", fake_build)
+    config = object()
+    monkeypatch.setattr(scheduler_module, "_CONFIG",
+                        {"enabled": True, "config": config,
+                         "agent": "researcher", "agent_spec": spec})
+    agent = scheduler_module._default_agent_factory()
+    assert agent is sentinel
+    assert calls == [(config, spec)]
+
+
+def test_default_agent_factory_spec_build_error_falls_back(monkeypatch, caplog):
+    """build_sub_agent raising SubAgentBuildError -> warning + main-config Agent."""
+    from src.agent_registry import AgentSpec
+    import src.sub_agents as sub_agents
+
+    spec = AgentSpec(name="researcher", model="broken")
+    captured = {}
+
+    def boom(config, got_spec):
+        raise sub_agents.SubAgentBuildError("bad model entry")
+
+    class _FakeAgent:
+        def __init__(self, config, isolated_tools=False, quiet=False):
+            captured["config"] = config
+            captured["isolated_tools"] = isolated_tools
+            captured["quiet"] = quiet
+
+    import types
+    import sys
+    monkeypatch.setattr(sub_agents, "build_sub_agent", boom)
+    monkeypatch.setitem(sys.modules, "src.live_ai",
+                        types.SimpleNamespace(Agent=_FakeAgent))
+    config = object()
+    monkeypatch.setattr(scheduler_module, "_CONFIG",
+                        {"enabled": True, "config": config,
+                         "agent": "researcher", "agent_spec": spec})
+    with caplog.at_level(logging.WARNING, logger="src.tools.scheduler"):
+        agent = scheduler_module._default_agent_factory()
+    assert isinstance(agent, _FakeAgent)
+    assert captured == {"config": config, "isolated_tools": True, "quiet": True}
+    assert "researcher" in caplog.text
+
+
+def test_default_agent_factory_late_resolves_spec(monkeypatch, registry_env):
+    """A spec missing at configure() time is resolved on the first build."""
+    from src.agent_registry import AgentSpec
+    import src.sub_agents as sub_agents
+
+    spec = AgentSpec(name="researcher")
+    registry_env["researcher"] = spec
+    calls = []
+
+    def fake_build(config, got_spec):
+        calls.append(got_spec)
+        return object()
+
+    monkeypatch.setattr(sub_agents, "build_sub_agent", fake_build)
+    config = object()
+    monkeypatch.setattr(scheduler_module, "_CONFIG",
+                        {"enabled": True, "config": config,
+                         "agent": "researcher", "agent_spec": None})
+    scheduler_module._default_agent_factory()
+    assert calls == [spec]
+    assert scheduler_module._CONFIG["agent_spec"] is spec
+
+
+def test_executor_uses_configured_agent_name_as_label(agent_env, tmp_path_factory):
+    """A scheduled run on a configured agent is monitored under its name."""
+    import src.live_ai as live_ai
+    from src.agent_registry import AgentSpec
+    from src.live_ai import AgentMonitor
+
+    spec = AgentSpec(name="researcher")
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(scheduler_module, "_CONFIG",
+                       {"enabled": True, "agent": "researcher",
+                        "agent_spec": spec})
+        monitor = AgentMonitor(maxlen=10)
+        live_ai.bind_monitor(monitor)
+        s = _scheduler(tmp_path_factory.mktemp("sched5"),
+                       execute=scheduler_module._agent_executor)
+        soon = (datetime.now() + timedelta(milliseconds=150)).isoformat()
+        s.add("research X", soon)
+        s.start()
+        try:
+            import time
+            deadline = datetime.now() + timedelta(seconds=5)
+            while datetime.now() < deadline and len(monitor) < 2:
+                time.sleep(0.02)
+            events = monitor.snapshot()
+            assert [(e["agent"], e["event"]) for e in events] == [
+                ("researcher", "start"), ("researcher", "answer")]
+        finally:
+            s.stop()
+    finally:
+        live_ai.bind_monitor(None)
+        monkey.undo()
+
+
+def test_executor_label_is_scheduler_without_agent(agent_env, tmp_path_factory):
+    """No configured agent -> the historical 'scheduler' label is kept."""
+    import src.live_ai as live_ai
+    from src.live_ai import AgentMonitor
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr(scheduler_module, "_CONFIG",
+                       {"enabled": True, "agent": "", "agent_spec": None})
+        monitor = AgentMonitor(maxlen=10)
+        live_ai.bind_monitor(monitor)
+        s = _scheduler(tmp_path_factory.mktemp("sched6"),
+                       execute=scheduler_module._agent_executor)
+        soon = (datetime.now() + timedelta(milliseconds=150)).isoformat()
+        s.add("plain task", soon)
+        s.start()
+        try:
+            import time
+            deadline = datetime.now() + timedelta(seconds=5)
+            while datetime.now() < deadline and len(monitor) < 2:
+                time.sleep(0.02)
+            events = monitor.snapshot()
+            assert [e["agent"] for e in events] == ["scheduler", "scheduler"]
+        finally:
+            s.stop()
+    finally:
+        live_ai.bind_monitor(None)
+        monkey.undo()

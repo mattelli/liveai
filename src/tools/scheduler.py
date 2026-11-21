@@ -490,18 +490,46 @@ def _default_agent_factory():
     """Build the dedicated isolated execution agent.
 
     Quiet, tool-isolated, built from the app config kept by ``configure()``.
-    Returns ``None`` when the config is missing or agent construction fails
-    (the executor then only logs).
+    When ``[delegation.scheduler] agent`` names a ``[delegation.agents]``
+    entry, the agent is built from that spec via ``build_sub_agent`` (its
+    model, tool groups, system prompt and round budget — same isolation as a
+    ``delegate_task`` child); an unknown name or a build failure warns and
+    falls back to the main-config agent. Returns ``None`` when the config is
+    missing or agent construction fails (the executor then only logs).
     """
     config = _CONFIG.get("config")
     if config is None:
         return None
+    spec = _CONFIG.get("agent_spec")
+    if spec is None and _CONFIG.get("agent"):
+        # Late resolution: configure() may have run before the registry was
+        # loaded (tests, or a future startup reorder).
+        spec = _resolve_agent_spec(config, _CONFIG["agent"])
+        _CONFIG["agent_spec"] = spec
+    if spec is not None:
+        from src.sub_agents import SubAgentBuildError, build_sub_agent
+        try:
+            return build_sub_agent(config, spec)  # isolated + quiet + overrides
+        except SubAgentBuildError as exc:
+            logger.warning("Cannot build the scheduled agent %r: %s; "
+                           "falling back to the main agent", spec.name, exc)
+            # fall through to the main-config path below
     try:
         from src.live_ai import Agent
         return Agent(config, isolated_tools=True, quiet=True)
     except Exception as exc:
         logger.warning("Cannot build the scheduler execution agent: %s", exc)
         return None
+
+
+def _executor_label() -> str:
+    """Monitor/thread-local name for scheduled runs.
+
+    The configured ``[delegation.scheduler] agent`` name when one is set, else
+    the historical ``"scheduler"`` label (existing monitoring tests rely on it).
+    """
+    spec = _CONFIG.get("agent_spec")
+    return spec.name if spec is not None else "scheduler"
 
 
 def _monitor_or_none():
@@ -556,11 +584,12 @@ def _agent_executor(task: ScheduledTask) -> None:
             return
         _EXECUTOR_AGENT = agent
     logger.info("Scheduled task %s -> execution agent", task.id)
+    label = _executor_label()
     monitor = _monitor_or_none()
     if monitor is not None:
-        monitor.record("scheduler", "start", prompt=str(task.prompt)[:200])
+        monitor.record(label, "start", prompt=str(task.prompt)[:200])
     set_subagent_dump(False)
-    _set_executor_name("scheduler")
+    _set_executor_name(label)
     try:
         agent.act(task.prompt)
     except Exception as exc:
@@ -577,7 +606,7 @@ def _agent_executor(task: ScheduledTask) -> None:
     if answer:
         logger.info("Scheduled task %s completed: %s", task.id, answer)
         if monitor is not None:
-            monitor.record("scheduler", "answer", answer=answer[:200])
+            monitor.record(label, "answer", answer=answer[:200])
         # Queue the result so the main agent becomes aware of it on its next
         # turn (drain_scheduled_results); direct history writes from this
         # thread could corrupt an in-flight tool-call round.
