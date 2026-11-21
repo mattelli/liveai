@@ -108,8 +108,16 @@ def _resolve_agent_spec(config, name: str):
     name = (name or "").strip()
     if not name:
         return None
-    from src.agent_registry import agent_registry
+    from src.agent_registry import agent_registry, load_agent_registry
     specs = agent_registry()
+    if not specs:
+        # configure() runs before the main Agent.__init__ populates the
+        # registry (main.py: configure_tools() -> Agent()). Parse it now: it
+        # is a pure, idempotent function of the config (the main agent reloads
+        # it later anyway), so the name resolves at startup instead of only on
+        # the first scheduled run.
+        load_agent_registry(config)
+        specs = agent_registry()
     spec = specs.get(name) or specs.get(name.lower())
     if spec is None:
         logger.warning(

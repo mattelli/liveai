@@ -410,6 +410,30 @@ def test_configure_without_agent_key_has_no_spec(registry_env):
     assert scheduler_module._CONFIG["agent_spec"] is None
 
 
+def test_configure_resolves_spec_with_empty_registry(registry_env):
+    """Regression: configure() runs before the registry is loaded (main.py).
+
+    configure_tools(config) -> scheduler.configure() happens before the main
+    Agent.__init__ parses [delegation.agents]; the spec must still resolve at
+    startup (no spurious 'not a configured entry' warning).
+    """
+    from types import SimpleNamespace
+
+    # registry_env is empty here: simulate the real startup ordering.
+    config = SimpleNamespace(
+        delegation=SimpleNamespace(
+            scheduler=SimpleNamespace(enabled=True, persist_file_cwd=None,
+                                      on_missed="skip", agent="viewer"),
+            agents={"viewer": {"tool_groups": "images, files",
+                               "model": "qwen/qwen3.5-0.8b"}},
+        ))
+    scheduler_module.configure(config)
+    spec = scheduler_module._CONFIG["agent_spec"]
+    assert spec is not None and spec.name == "viewer"
+    assert spec.tool_groups == "images, files"
+    assert spec.model == "qwen/qwen3.5-0.8b"
+
+
 def test_configure_unknown_agent_warns_and_falls_back(registry_env, caplog):
     """An unknown name logs a warning and resolves to None (main agent)."""
     from src.agent_registry import AgentSpec

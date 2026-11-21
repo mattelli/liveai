@@ -93,12 +93,14 @@ def _resolve_agent_spec(config, name: str):
 
 Note on ordering: the registry is populated by `load_agent_registry(config)`
 inside the **main** `Agent.__init__` (`src/live_ai.py:2248-2250`), which runs
-before `main._setup_scheduler(config)` (main.py:51-53). So resolving the spec
-inside `configure()` is safe at startup. To be robust anyway, `configure()`
-will resolve **lazily-tolerant**: resolve at `configure()` time, and if the
-registry is empty at that moment, re-resolve on first executor build (see
-3.2). This keeps the scheduler correct even if `configure()` is ever called
-before the registry is loaded (e.g. tests, or a future startup reorder).
+*after* `configure_tools(config)` (main.py:35) and therefore after
+`scheduler.configure()`. So the registry is normally **empty** when
+`configure()` runs. `_resolve_agent_spec()` therefore parses the registry
+itself (`load_agent_registry(config)`) when it finds it empty — a pure,
+idempotent function of the config that the main agent reloads anyway — so a
+configured name resolves at startup instead of only on the first scheduled
+run. `configure()` also re-resolves lazily on the first executor build (see
+3.2) as a second safety net.
 
 ### 3.2 Build the executor from the spec (T2)
 
