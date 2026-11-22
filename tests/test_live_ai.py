@@ -2002,6 +2002,29 @@ def test_tool_topics_unknown_tools_land_in_other_last():
     assert grouped[-1][1] == [mystery_tool]
 
 
+def test_tool_topics_audio_tools_grouped_under_audio():
+    """allow_speech and transcribe_audio form their own "audio" topic."""
+    tools = [live_ai_mod.allow_speech, live_ai_mod.transcribe_audio]
+    grouped = dict(live_ai_mod.tool_topics(tools))
+    assert "audio" in grouped
+    assert [t.__name__ for t in grouped["audio"]] == [
+        "allow_speech", "transcribe_audio"]
+    # they no longer fall into the "other" catch-all
+    assert "other" not in grouped
+
+
+def test_tool_topics_audio_listed_just_before_other():
+    """The "audio" topic sits immediately before the "other" catch-all."""
+
+    def mystery_tool():
+        """Unknown."""
+
+    tools = [mystery_tool, live_ai_mod.allow_speech,
+             live_ai_mod.transcribe_audio]
+    topics = [topic for topic, _ in live_ai_mod.tool_topics(tools)]
+    assert topics == ["audio", "other"]
+
+
 def test_tool_topics_flattened_is_deterministic():
     """Grouping reorders by topic, but the flattened order is deterministic
     (same input -> same display order), which is what /tools numbering uses."""

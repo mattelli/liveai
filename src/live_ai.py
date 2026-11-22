@@ -358,6 +358,9 @@ _TOOL_TOPICS: dict[str, tuple[str, ...]] = {
     "system": ("system_info", "current_date_time", "get_working_directory",
                "spawn_process", "exit_gracefully"),
     "mcp": ("mcp_list_tools", "mcp_call_tool"),
+    # Audio tools (TTS toggle + speech-to-text). Last named topic, so it is
+    # listed just before the "other" catch-all.
+    "audio": ("allow_speech", "transcribe_audio"),
 }
 
 
