@@ -11,7 +11,7 @@ behaviour_dir_cwd = "behaviour"      # markdown instruction files (under data_di
 # Legacy, models-file-less setup (used only when models_file is unset):
 # base_url = "https://openrouter.ai/api/v1"
 # api_key_env = "OPENROUTER_API_KEY"
-# model = "z-ai/glm-5.3-flash"
+# model = "deepseek/deepseek-v4.1-flash"
 
 system_prompt = "You are a helpful coding agent, answer the user's questions concisely and accurately, if you don't know the answer, say 'I don't know.'"
 memory_path_cwd = "memory.log"     # personal memory (under [cwd] data_dir_cwd)
@@ -34,7 +34,7 @@ auto_compaction = false            # run compact_chat (summary) instead of plain
 bootstrap_prompt = "Read AGENT.md in the CWD or in {behaviour_dir} and follow its instructions. If no AGENT.md is found, proceed by announcing 'No agent instructions found.'"
 max_act_rounds = 200       # max tool-loop rounds per agent turn (default 100)
 tool_doc_chars = 300       # cap tool descriptions in the JSON schemas sent with every request (0 = full docstrings)
-tool_groups = "model, memory, files, web, system"  # keep only these tool topics (default "all")
+tool_groups = "model, memory, files, web, system, audio"  # keep only these tool topics (default "all")
 monitor = "log"                                  # scheduled-task monitoring flags: "calls" (labeled [CALL] blocks), "log" (JSONL event log), comma-separated; empty = quiet
 monitor_log_file_cwd = "agents.jsonl"            # JSONL event log path (monitor = "log"; under data_dir_cwd)
 monitor_buffer = 200                             # in-memory events kept for the agent_activity tool
