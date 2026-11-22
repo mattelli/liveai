@@ -803,7 +803,7 @@ unset) keep that cost bounded:
 
 [agent]
 # tool_doc_chars = 300                # cap tool descriptions in the JSON schemas (0 = full docstrings)
-# tool_groups = "model, memory, scheduling, files, web, documents, images, system, mcp"  # keep only these tool topics (default "all")
+# tool_groups = "model, memory, scheduling, files, web, documents, images, audio, system, mcp"  # keep only these tool topics (default "all")
 ```
 
 - `max_tool_result_chars` — oversized tool results keep the first 75% and the
@@ -816,6 +816,9 @@ unset) keep that cost bounded:
 - `tool_doc_chars` + no `default` values in schemas — shrinks the fixed
   per-request payload (measured: 21.9k → 19.1k chars for the full 43-tool set);
   `tool_groups` excludes whole topics (finance, archives, ...) for zero tokens.
+  The `audio` topic groups the speech tools (`allow_speech`, `transcribe_audio`)
+  and is listed just before the `other` catch-all (which holds any ungrouped
+  tool, e.g. MCP-injected ones).
 - `context_trim_ratio` / `context_keep_messages` — at the start of each turn,
   when usage passes the ratio, the oldest *complete* tool rounds are dropped
   (never split: no orphan tool results) until usage is back under the ratio;
