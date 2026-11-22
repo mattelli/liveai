@@ -284,6 +284,30 @@ def test_select_tools_unknown_group_ignored_without_crash():
     assert "web_search" not in names
 
 
+def test_select_tools_audio_group_keeps_only_audio_tools():
+    tools = live_ai_mod._default_tools(
+        SimpleNamespace(model_info=live_ai_mod.Brain.model_info))
+    selected = live_ai_mod._select_tools(tools, "audio")
+    names = [t.__name__ for t in selected]
+    assert names == ["allow_speech", "transcribe_audio"]
+
+
+def test_select_tools_audio_plus_other_keeps_catch_all():
+    """'audio, other' keeps the audio tools and the ungrouped catch-all."""
+
+    def mystery_tool():
+        """Ungrouped."""
+
+    tools = live_ai_mod._default_tools(
+        SimpleNamespace(model_info=live_ai_mod.Brain.model_info))
+    tools.append(mystery_tool)
+    selected = live_ai_mod._select_tools(tools, "audio, other")
+    names = [t.__name__ for t in selected]
+    assert "allow_speech" in names and "transcribe_audio" in names
+    assert "mystery_tool" in names  # the "other" catch-all is kept
+    assert "web_search" not in names  # a named topic is still excluded
+
+
 def test_agent_build_tools_honors_tool_groups():
     names = [t.__name__ for t in _bare_build_agent("finance")._build_tools()]
     assert "fetch_financial_data" in names
@@ -773,6 +797,25 @@ def test_toggle_tools_by_topic():
     agent.toggle_tools(["finance"], enabled=True)
     names = [d["function"]["name"] for d in agent.enabled_tool_definitions()]
     assert "fetch_financial_data" in names
+
+
+def test_toggle_tools_by_audio_topic():
+    """Toggling the "audio" topic disables/restores both audio tools."""
+    import types as _types
+    dummy = _types.SimpleNamespace(model_info=live_ai_mod.Brain.model_info)
+    agent = _toggle_agent()
+    agent.tools = live_ai_mod._default_tools(dummy)
+    agent.tool_definitions = [
+        live_ai_mod.Brain._openai_tool_definition(t) for t in agent.tools]
+    agent._tool_impls = {t.__name__: t for t in agent.tools}
+    agent.toggle_tools(["audio"], enabled=False)
+    names = [d["function"]["name"] for d in agent.enabled_tool_definitions()]
+    assert "allow_speech" not in names
+    assert "transcribe_audio" not in names
+    assert "web_search" in names
+    agent.toggle_tools(["audio"], enabled=True)
+    names = [d["function"]["name"] for d in agent.enabled_tool_definitions()]
+    assert "allow_speech" in names and "transcribe_audio" in names
 
 
 def test_stream_round_sends_filtered_definitions():
