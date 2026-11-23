@@ -13,22 +13,22 @@ Chat mode is supported, several native tools are available.
 - [Whisper](#whisper)
 - [LLM backend (OpenAI-compatible API)](#llm-backend-openai-compatible-api)
 - [Piper](#piper)
+- [Interactive chat input](#interactive-chat-input)
+- [Session files (`/session`)](#session-files-session)
+- [Model switching (`/model`)](#model-switching-model)
+- [Task delegation (`[delegation.agents]`)](#task-delegation-delegationagents)
+- [Sub-agent activity monitoring](#sub-agent-activity-monitoring)
+- [Task scheduler (optional)](#task-scheduler-optional)
+- [Completion notifications (`[delegation.notify]`)](#completion-notifications-delegationnotify)
+- [Process spawning (`spawn_process`)](#process-spawning-spawn_process)
 - [Image generation (Stable Diffusion)](#image-generation-stable-diffusion)
 - [Text summarization](#text-summarization)
 - [Semantic search (named corpora + FAISS)](#semantic-search-named-corpora--faiss)
 - [In-document search (CrossEncoder)](#in-document-search-crossencoder)
 - [Image search (CLIP)](#image-search-clip)
 - [Web search and page extraction (DDGS)](#web-search-and-page-extraction-ddgs)
-- [Interactive chat input](#interactive-chat-input)
-- [Session files (`/session`)](#session-files-session)
-- [Model switching (`/model`)](#model-switching-model)
-- [Task delegation (`[delegation.agents]`)](#task-delegation-delegationagents)
-- [Reducing token consumption](#reducing-token-consumption)
-- [Sub-agent activity monitoring](#sub-agent-activity-monitoring)
 - [MCP servers (optional)](#mcp-servers-optional)
-- [Process spawning (`spawn_process`)](#process-spawning-spawn_process)
-- [Task scheduler (optional)](#task-scheduler-optional)
-- [Completion notifications (`[delegation.notify]`)](#completion-notifications-delegationnotify)
+- [Reducing token consumption](#reducing-token-consumption)
 - [Setup (Python 3.12.10)](#setup-python-31210)
 - [Unit tests](#unit-tests)
 - [System Notes](#system-notes)
@@ -182,6 +182,356 @@ How the text is handled:
 - **Inline code** is read as plain text and **URLs** are read as the word
   `"link"` instead of being spelled out.
 - A spaced dash (`one - two`) is treated as a clause break, not read as "dash".
+
+
+## Interactive chat input
+
+`python main.py --chat` uses [prompt_toolkit](https://python-prompt-toolkit.readthedocs.io/)
+as its input layer, so the same behaviour works on Windows and POSIX:
+
+- **Line editing** — arrows, Home/End, word operations, Ctrl-K/U/W, selection.
+- **Persistent history** — Up/Down recalls previous turns, and history survives
+  across sessions. It is stored in `<cwd>/.liveai/input.log` (git-ignored).
+  Delete the file to reset; it has no size cap.
+- **Inline history suggestions** — faint grey text suggests a previous entry;
+  press Right/End to accept.
+- **Multi-line paste** — pasting a block inserts it as one buffer; Enter submits
+  the whole block as a single turn (never split into one turn per line). A paste
+  whose first line looks like `/quit` is sent to the model, not executed.
+- **Completion** — type `/` and press Tab to complete session commands.
+- **Explicit paste fallback** — on terminals that do not send bracketed-paste
+  markers, start a line with `/paste`, type the block, then a line containing
+  only `.` to submit it.
+
+Configure via the `[input]` block in `config.toml` (all keys optional):
+
+```toml
+[input]
+history_file_cwd = "input.log"   # under [cwd] data_dir_cwd; empty/omitted -> in-memory
+prompt_toolkit = true            # false -> builtin input() fallback
+auto_suggest = true
+completion = true
+explicit_paste = true
+multiline = false                # true -> Enter inserts newline, Esc+Enter accepts
+```
+
+`Ctrl-C` stops the response being generated (the chat session keeps running);
+at the input prompt it clears the line (re-prompt). `Ctrl-D` (EOF) exits via
+the EOF path. If prompt_toolkit is missing or disabled, input falls back to the
+builtin `input()` with no line editing or history.
+
+While a response generates, a braille-dots spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) animates whenever nothing
+visible is happening: during prompt processing (`processing prompt 42%`),
+tool execution and while fenced code blocks are buffered for syntax
+highlighting (`writing python code (812 chars)`). It is erased automatically
+before each piece of real output and at the end of the turn.
+
+### Interrupting a response (`Ctrl+C`)
+
+`Ctrl+C` cancels the current generation and the session stays usable:
+
+- **Immediate, even during prefill** — the completion request is issued from a
+  helper thread, so the in-flight HTTP stream is reachable (and closable) from
+  the very first moment. A cancel lands within ~a few hundred ms, whether the
+  server is still prefilling or already streaming tokens; the spinner stops and
+  the prompt returns.
+- **Reported as a cancel, never an error** — you get `⏹ generation cancelled`
+  (yellow). Aborting the stream can surface as an httpx/OpenAI exception; the
+  pending cancel flag tells the two apart, so no `❌` or traceback is printed.
+- **The partial answer is discarded** — a cancelled turn leaves no trace in the
+  chat history (no partial text, no placeholder), and any trailing unfinished
+  tool-call group is dropped. Before each new prompt the agent also repairs the
+  history from older cancelled/failed turns (drops a trailing unfinished
+  tool-call group and unanswered prompts, pads empty assistant turns).
+- **A running tool is killed** — a long `run_command` / `python_eval` (or the
+  foreground path of `spawn_process`) is terminated instead of running until
+  its own timeout; its result is reported as cancelled. On Windows the whole
+  process tree is killed (`taskkill /F /T`), since the command runs through a
+  shell.
+- **Speech first, generation second** — while speech audio is playing, the
+  first `Ctrl+C` stops the audio only (buffered audio is dropped for immediate
+  silence, the response continues, and later tool rounds may speak again); a
+  **second** `Ctrl+C` then cancels the generation. The speech guard hands
+  `Ctrl+C` back to the generation handler after silencing the audio.
+- **A hung server cannot block forever** — `[brain] request_timeout_s`
+  (default `600`) bounds the wait between stream chunks, so a stalled stream is
+  aborted instead of blocking the turn with nothing to interrupt.
+
+Voice mode / barge-in is out of scope: this applies to chat mode (`--chat`).
+
+## Session files (`/session`)
+
+The full chat history can be saved to and restored from JSON files with the
+`/session` command (a plain session command, not an agent tool):
+
+- `/session store [name]` — store the full conversation history (system
+  prompt, user/assistant turns and tool calls) as `<name>.json` in the
+  configured folder; without a name a timestamped
+  `session-YYYYMMDD-HHMMSS.json` file is created. An existing file is never
+  overwritten.
+- `/session list` — list the stored session files (message count, storage
+  time, size).
+- `/session load <name|index>` — replace the current conversation with the
+  stored one; `<name>` is the file name with or without the `.json` suffix,
+  or the 1-based index shown by `/session list`.
+
+The storage folder comes from `[brain] sessions_dir_cwd` in `config.toml`
+(resolved under `[cwd] data_dir_cwd`, created on first store):
+
+```toml
+[brain]
+sessions_dir_cwd = "sessions"   # -> <cwd>/.liveai/sessions
+```
+
+## Model switching (`/model`)
+
+The active model can be changed at runtime with the `/model` command (a plain
+session command, not an agent tool) from a JSON file listing the selectable
+models. Each entry carries the connection details of one model:
+
+- `model` (required) — the model id sent to the server.
+- `api_key_env` (optional) — name of the environment variable holding the API
+  key (resolved from the environment and `.env`, never stored in the JSON).
+- `base_url` (optional) — the OpenAI-compatible endpoint.
+- `provider` (optional) — OpenRouter-style routing hint (e.g. `"wafer/us"`).
+  When set, every completion request is pinned to that provider with
+  fallbacks disabled (`extra_body={"provider": {"only": ["wafer/us"],
+  "allow_fallbacks": false}}`); entries without it send requests unchanged.
+
+Missing `api_key_env`/`base_url` fall back to the values configured under
+`[brain]` in `config.toml`, so entries of one provider can carry only `model`.
+The file location comes from `[brain] models_file` (resolved relative to
+`config.toml`):
+
+```toml
+[brain]
+models_file = "models.json"
+```
+
+The **first entry of the file boots the session**: at startup the assistant
+connects to that entry's model/endpoint/key, so `[brain]` needs no duplicate
+`model`/`base_url`/`api_key_env` (those keys are only used by the legacy
+models-file-less setup). To change the startup model, reorder the entries in
+the JSON file.
+
+```json
+{
+  "glm-flash": {
+    "api_key_env": "OPENROUTER_API_KEY",
+    "base_url": "https://openrouter.ai/api/v1",
+    "model": "z-ai/glm-5.3-flash"
+  },
+  "llama32-local": {
+    "api_key_env": "OLLAMA_API_KEY",
+    "base_url": "http://localhost:11434/v1",
+    "model": "llama3.2:3b"
+  }
+}
+```
+
+Commands:
+
+- `/model` — list the selectable models (name, model id, endpoint) with the
+  currently active one marked `→`, plus the usage hint.
+- `/model <name>` — switch to that entry (name matching is case-insensitive).
+
+Switching rebuilds the OpenAI client for the entry's endpoint and key, keeps
+the conversation history, and re-resolves the model-dependent settings from
+the new server: context window and vision support (server-reported when
+available, `[brain]` overrides otherwise) and the per-generation token cap
+(`max_response_tokens` ratio re-applied to the new window). A failed switch
+(unknown name, missing file, missing API key, ...) never touches the current
+model: the error is reported and the session continues with the previous one.
+
+### Chain-of-thought visualization
+
+Reasoning models expose their thinking while they generate (`reasoning_content`
+or `reasoning` stream fields, or inline istine tags). With `[ui] show_thinking = true`
+the thought chain is streamed live in dim text behind a `💭` marker, capped by
+`[ui] max_thinking_tokens` (0 = unlimited). Thinking is display-only: it never
+enters the chat history, the spoken reply or the returned answers.
+
+When the cap is reached a `… (thinking truncated)` marker is shown once and
+further reasoning is dropped from the display (the model keeps thinking). The
+marker ends the line and the activity roller (`⠋ thinking`) resumes below it, so
+a long truncated reasoning phase is visibly still running instead of looking
+stalled.
+
+Notes:
+
+- The JSON file also accepts a list of entries (each carrying a `name`) and a
+  top-level `"models"` wrapper around either shape; a bare string stands for a
+  model id selectable under its own name.
+- The API key of the target model must be resolvable at switch time (set it in
+  `.env` or the environment); local servers still accept a dummy value.
+- The switch is validated before any state changes: an entry without any
+  `base_url`/`api_key_env` (entry and `[brain]` alike) is rejected.
+- The same validation applies at startup for the first entry: a missing file,
+  invalid JSON or a non-resolvable API key aborts the launch with a clear
+  message.
+
+
+## Task delegation (`[delegation.agents]`)
+
+The main agent can delegate tasks to named sub-agents with the
+**`delegate_task(agent_name, task)`** tool. Sub-agents are declared in
+`config.toml`; with no `[delegation.agents]` entries the tool is not registered
+and the
+feature costs zero tokens.
+
+```toml
+[delegation.agents]
+summarize_results = false            # true -> long child results get an LLM summary before being shown
+# summarize_max_chars = 800          # summarize only results longer than this (0 = always)
+
+[delegation.agents.researcher]
+tool_groups = "web, files"           # tool topics for this child (see [agent] tool_groups)
+model = "fast"                       # models.json entry name; unset = the main model
+system_prompt = "You are a research assistant. Be concise."
+max_act_rounds = 50                  # child round budget
+description = "web research"         # shown to the main agent in its prompt
+```
+
+How it works:
+
+- **Asynchronous (fire-and-forget)** — `delegate_task` returns an
+  acknowledgment with a task id immediately; the parent's tool loop is never
+  blocked. The child runs on a daemon thread as an isolated, quiet agent
+  (fresh per-agent tool instances, like the scheduler executor).
+- **Result delivery** — when the child finishes, its final text is queued and
+  injected into the main chat history before the next turn (like scheduled-task
+  results); the parent agent can then use or mention it. Child failures queue
+  an error text instead of crashing the turn.
+- **Flat topology** — children get no `delegate_task` tool and cannot spawn
+  further agents; the delegation tool is registered for the main session agent
+  only.
+- **Child model/tools** — each child uses its configured `tool_groups` (smaller
+  tool set = cheaper per-request payloads), optional `model` (a `models.json`
+  entry) and optional `system_prompt`.
+- **Result summarization (optional)** — with `summarize_results = true`,
+  results longer than `summarize_max_chars` are condensed by an LLM summary
+  pass (on the child's own model endpoint) before being queued; short results
+  pass through unchanged and a summary failure queues the original text
+  (fail-open, results are never dropped).
+- **Known limitations (v1)** — no mid-run cancellation of a running child, and
+  no hierarchical delegation (flat only). Sub-agent tool calls are visible in
+  the activity monitor and the `agent_activity` tool.
+
+## Sub-agent activity monitoring
+
+Background agents (the scheduler's execution agent) are quiet by default, so
+their work is invisible. The `[agent] monitor` setting makes their activity
+visible through independent, combinable flags
+(comma-separated; unset/empty/`"none"` = fully quiet, as always):
+
+```toml
+[agent]
+monitor = "calls,log"                 # "calls" and/or "log"; empty = quiet
+# monitor_log_file_cwd = "agents.jsonl"  # JSONL event log path (monitor = "log"; under [cwd] data_dir_cwd)
+# monitor_buffer = 100                # in-memory events kept for the agent_activity tool
+```
+
+- `calls` — while a scheduled task runs, its tool executions print the usual
+  `[CALL]` blocks live on the console, each labeled with the agent name
+  (e.g. `[CALL] web_search (scheduler)(...`). The main agent's own
+  `[CALL]` blocks are unchanged.
+- `log` — every agent event is appended as one JSON object per line to
+  `monitor_log_file_cwd` (default `agents.jsonl`, under `[cwd] data_dir_cwd`):
+  run `start`/`answer`
+  (with prompt/answer and duration) and per-tool-call `tool_call`/`tool_result`
+  events. Lines are written atomically under a lock, so worker threads never
+  interleave half-lines; the file is created lazily and a write failure
+  disables the file sink without breaking the agents.
+- Both channels feed a bounded **in-memory ring buffer** (`monitor_buffer`,
+  default 100 events) that is always populated when monitoring is enabled.
+
+The main agent can consult this buffer through the **`agent_activity(last=20)`**
+tool: it returns the recent events as human-readable one-liners (or
+`No sub-agent activity recorded.` when the buffer is empty), so you can simply
+ask *"what did the scheduled tasks do?"*.
+
+In the console you can also type **`/monitor [N|clear]`** to print the last N
+events (default 20), or empty the buffer (the JSONL file is not touched).
+
+## Task scheduler (optional)
+
+The assistant can run prompts at a future time: one-shot reminders or
+recurring jobs. Three tools are exposed to the model:
+
+- `schedule_task(prompt, at, repeat="")` — run `prompt` at `at` (ISO 8601 or
+  `YYYY-MM-DD HH:MM`, local time); `repeat` makes it recurring: `daily`,
+  `hourly`, `every 30m`, or a 5-field cron expression like `0 9 * * MON`.
+- `list_scheduled_tasks()` — pending tasks with ids and next run times.
+- `cancel_scheduled_task(task_id)` — cancel a task by id.
+
+All three belong to the `scheduling` tool topic, together with
+`agent_activity(last=20)` — the tool that reports what the scheduled runs did
+(see [Sub-agent activity monitoring](#sub-agent-activity-monitoring)).
+
+Scheduled prompts run on a **dedicated isolated agent** (quiet, own tool
+state), never on the main session agent, so the live conversation is never
+disturbed. Tasks persist to a JSON file and survive restarts.
+
+By default that agent is built from the main `[brain]`/`[agent]` config. Set
+`agent` to run scheduled prompts on a named `[delegation.agents.<name>]`
+sub-agent instead — it then uses that entry's `model`, `tool_groups`,
+`system_prompt` and `max_act_rounds`, exactly like a `delegate_task` child
+(same isolation and flat topology). An unknown name logs a warning at startup
+and falls back to the main agent, so scheduled tasks always keep running; the
+run is monitored and its answer delivered to the main agent as usual (under
+the agent's name in `agent_activity`).
+
+The feature ships off by default; enable it in `config.toml`:
+
+```
+[delegation.scheduler]
+enabled = true                       # false/missing -> tools are no-ops
+persist_file_cwd = "schedule.json"   # task persistence (survives restarts; under [cwd] data_dir_cwd)
+on_missed = "skip"                   # missed one-shots after a restart:
+                                     # "run" executes them, "skip" drops them
+agent = ""                           # run scheduled prompts on this [delegation.agents.<name>]
+                                     # entry (unset/empty = the main agent's model and tool groups)
+```
+
+## Completion notifications (`[delegation.notify]`)
+
+Scheduled tasks and delegated sub-agents finish in the background: their
+result is injected into the chat history before the next turn. With
+`[delegation.notify]` enabled the user also gets an immediate one-line
+terminal hint the
+moment a task completes — no result text is shown, only the task kind and id
+(so long results are not echoed twice and stay out of the terminal):
+
+```
+🔔 Scheduled task t-1 completed.
+🔔 Sub-agent task researcher (agent-1) completed.
+```
+
+```toml
+[delegation.notify]
+terminal = true  # missing section (or false) -> no hint, results on next turn only
+```
+
+The hint prints from the background thread; in chat mode prompt_toolkit's
+`patch_stdout` renders it above the prompt line, so the input is never
+garbled. Voice mode prints it between prompts.
+
+## Process spawning (`spawn_process`)
+
+The `system` topic includes **`spawn_process(cmd, cwd="")`**: it starts a
+command without waiting for it (stdout/stderr/stdin detached) and returns
+either the spawned **Process ID (PID)** — e.g. `Process started with PID 12345`
+— or an error message (`Error spawning process: ...`) if the process could not
+be started. Useful for long-running programs (a local server, a watcher, a
+player) that must keep running while the conversation continues; inspect or
+stop the process later through `run_command` (e.g. `taskkill /PID 12345` on
+Windows, `kill 12345` on POSIX). Unlike `run_command` (blocking, captures
+output), `spawn_process` returns immediately and discards the child output.
+
+With `background=False` the command runs in the foreground and the call waits
+for it (like `run_command`); a `Ctrl+C` cancel then terminates it (see
+[Interrupting a response](#interrupting-a-response-ctrlc)). Background spawns
+are detached and are **not** affected by a cancel.
 
 
 ## Image generation (Stable Diffusion)
@@ -580,356 +930,6 @@ Notes:
 
 
 
-## Interactive chat input
-
-`python main.py --chat` uses [prompt_toolkit](https://python-prompt-toolkit.readthedocs.io/)
-as its input layer, so the same behaviour works on Windows and POSIX:
-
-- **Line editing** — arrows, Home/End, word operations, Ctrl-K/U/W, selection.
-- **Persistent history** — Up/Down recalls previous turns, and history survives
-  across sessions. It is stored in `<cwd>/.liveai/input.log` (git-ignored).
-  Delete the file to reset; it has no size cap.
-- **Inline history suggestions** — faint grey text suggests a previous entry;
-  press Right/End to accept.
-- **Multi-line paste** — pasting a block inserts it as one buffer; Enter submits
-  the whole block as a single turn (never split into one turn per line). A paste
-  whose first line looks like `/quit` is sent to the model, not executed.
-- **Completion** — type `/` and press Tab to complete session commands.
-- **Explicit paste fallback** — on terminals that do not send bracketed-paste
-  markers, start a line with `/paste`, type the block, then a line containing
-  only `.` to submit it.
-
-Configure via the `[input]` block in `config.toml` (all keys optional):
-
-```toml
-[input]
-history_file_cwd = "input.log"   # under [cwd] data_dir_cwd; empty/omitted -> in-memory
-prompt_toolkit = true            # false -> builtin input() fallback
-auto_suggest = true
-completion = true
-explicit_paste = true
-multiline = false                # true -> Enter inserts newline, Esc+Enter accepts
-```
-
-`Ctrl-C` stops the response being generated (the chat session keeps running);
-at the input prompt it clears the line (re-prompt). `Ctrl-D` (EOF) exits via
-the EOF path. If prompt_toolkit is missing or disabled, input falls back to the
-builtin `input()` with no line editing or history.
-
-While a response generates, a braille-dots spinner (⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏) animates whenever nothing
-visible is happening: during prompt processing (`processing prompt 42%`),
-tool execution and while fenced code blocks are buffered for syntax
-highlighting (`writing python code (812 chars)`). It is erased automatically
-before each piece of real output and at the end of the turn.
-
-### Interrupting a response (`Ctrl+C`)
-
-`Ctrl+C` cancels the current generation and the session stays usable:
-
-- **Immediate, even during prefill** — the completion request is issued from a
-  helper thread, so the in-flight HTTP stream is reachable (and closable) from
-  the very first moment. A cancel lands within ~a few hundred ms, whether the
-  server is still prefilling or already streaming tokens; the spinner stops and
-  the prompt returns.
-- **Reported as a cancel, never an error** — you get `⏹ generation cancelled`
-  (yellow). Aborting the stream can surface as an httpx/OpenAI exception; the
-  pending cancel flag tells the two apart, so no `❌` or traceback is printed.
-- **The partial answer is discarded** — a cancelled turn leaves no trace in the
-  chat history (no partial text, no placeholder), and any trailing unfinished
-  tool-call group is dropped. Before each new prompt the agent also repairs the
-  history from older cancelled/failed turns (drops a trailing unfinished
-  tool-call group and unanswered prompts, pads empty assistant turns).
-- **A running tool is killed** — a long `run_command` / `python_eval` (or the
-  foreground path of `spawn_process`) is terminated instead of running until
-  its own timeout; its result is reported as cancelled. On Windows the whole
-  process tree is killed (`taskkill /F /T`), since the command runs through a
-  shell.
-- **Speech first, generation second** — while speech audio is playing, the
-  first `Ctrl+C` stops the audio only (buffered audio is dropped for immediate
-  silence, the response continues, and later tool rounds may speak again); a
-  **second** `Ctrl+C` then cancels the generation. The speech guard hands
-  `Ctrl+C` back to the generation handler after silencing the audio.
-- **A hung server cannot block forever** — `[brain] request_timeout_s`
-  (default `600`) bounds the wait between stream chunks, so a stalled stream is
-  aborted instead of blocking the turn with nothing to interrupt.
-
-Voice mode / barge-in is out of scope: this applies to chat mode (`--chat`).
-
-## Session files (`/session`)
-
-The full chat history can be saved to and restored from JSON files with the
-`/session` command (a plain session command, not an agent tool):
-
-- `/session store [name]` — store the full conversation history (system
-  prompt, user/assistant turns and tool calls) as `<name>.json` in the
-  configured folder; without a name a timestamped
-  `session-YYYYMMDD-HHMMSS.json` file is created. An existing file is never
-  overwritten.
-- `/session list` — list the stored session files (message count, storage
-  time, size).
-- `/session load <name|index>` — replace the current conversation with the
-  stored one; `<name>` is the file name with or without the `.json` suffix,
-  or the 1-based index shown by `/session list`.
-
-The storage folder comes from `[brain] sessions_dir_cwd` in `config.toml`
-(resolved under `[cwd] data_dir_cwd`, created on first store):
-
-```toml
-[brain]
-sessions_dir_cwd = "sessions"   # -> <cwd>/.liveai/sessions
-```
-
-## Model switching (`/model`)
-
-The active model can be changed at runtime with the `/model` command (a plain
-session command, not an agent tool) from a JSON file listing the selectable
-models. Each entry carries the connection details of one model:
-
-- `model` (required) — the model id sent to the server.
-- `api_key_env` (optional) — name of the environment variable holding the API
-  key (resolved from the environment and `.env`, never stored in the JSON).
-- `base_url` (optional) — the OpenAI-compatible endpoint.
-- `provider` (optional) — OpenRouter-style routing hint (e.g. `"wafer/us"`).
-  When set, every completion request is pinned to that provider with
-  fallbacks disabled (`extra_body={"provider": {"only": ["wafer/us"],
-  "allow_fallbacks": false}}`); entries without it send requests unchanged.
-
-Missing `api_key_env`/`base_url` fall back to the values configured under
-`[brain]` in `config.toml`, so entries of one provider can carry only `model`.
-The file location comes from `[brain] models_file` (resolved relative to
-`config.toml`):
-
-```toml
-[brain]
-models_file = "models.json"
-```
-
-The **first entry of the file boots the session**: at startup the assistant
-connects to that entry's model/endpoint/key, so `[brain]` needs no duplicate
-`model`/`base_url`/`api_key_env` (those keys are only used by the legacy
-models-file-less setup). To change the startup model, reorder the entries in
-the JSON file.
-
-```json
-{
-  "glm-flash": {
-    "api_key_env": "OPENROUTER_API_KEY",
-    "base_url": "https://openrouter.ai/api/v1",
-    "model": "z-ai/glm-5.3-flash"
-  },
-  "llama32-local": {
-    "api_key_env": "OLLAMA_API_KEY",
-    "base_url": "http://localhost:11434/v1",
-    "model": "llama3.2:3b"
-  }
-}
-```
-
-Commands:
-
-- `/model` — list the selectable models (name, model id, endpoint) with the
-  currently active one marked `→`, plus the usage hint.
-- `/model <name>` — switch to that entry (name matching is case-insensitive).
-
-Switching rebuilds the OpenAI client for the entry's endpoint and key, keeps
-the conversation history, and re-resolves the model-dependent settings from
-the new server: context window and vision support (server-reported when
-available, `[brain]` overrides otherwise) and the per-generation token cap
-(`max_response_tokens` ratio re-applied to the new window). A failed switch
-(unknown name, missing file, missing API key, ...) never touches the current
-model: the error is reported and the session continues with the previous one.
-
-### Chain-of-thought visualization
-
-Reasoning models expose their thinking while they generate (`reasoning_content`
-or `reasoning` stream fields, or inline istine tags). With `[ui] show_thinking = true`
-the thought chain is streamed live in dim text behind a `💭` marker, capped by
-`[ui] max_thinking_tokens` (0 = unlimited). Thinking is display-only: it never
-enters the chat history, the spoken reply or the returned answers.
-
-When the cap is reached a `… (thinking truncated)` marker is shown once and
-further reasoning is dropped from the display (the model keeps thinking). The
-marker ends the line and the activity roller (`⠋ thinking`) resumes below it, so
-a long truncated reasoning phase is visibly still running instead of looking
-stalled.
-
-Notes:
-
-- The JSON file also accepts a list of entries (each carrying a `name`) and a
-  top-level `"models"` wrapper around either shape; a bare string stands for a
-  model id selectable under its own name.
-- The API key of the target model must be resolvable at switch time (set it in
-  `.env` or the environment); local servers still accept a dummy value.
-- The switch is validated before any state changes: an entry without any
-  `base_url`/`api_key_env` (entry and `[brain]` alike) is rejected.
-- The same validation applies at startup for the first entry: a missing file,
-  invalid JSON or a non-resolvable API key aborts the launch with a clear
-  message.
-
-
-## Task delegation (`[delegation.agents]`)
-
-The main agent can delegate tasks to named sub-agents with the
-**`delegate_task(agent_name, task)`** tool. Sub-agents are declared in
-`config.toml`; with no `[delegation.agents]` entries the tool is not registered
-and the
-feature costs zero tokens.
-
-```toml
-[delegation.agents]
-summarize_results = false            # true -> long child results get an LLM summary before being shown
-# summarize_max_chars = 800          # summarize only results longer than this (0 = always)
-
-[delegation.agents.researcher]
-tool_groups = "web, files"           # tool topics for this child (see [agent] tool_groups)
-model = "fast"                       # models.json entry name; unset = the main model
-system_prompt = "You are a research assistant. Be concise."
-max_act_rounds = 50                  # child round budget
-description = "web research"         # shown to the main agent in its prompt
-```
-
-How it works:
-
-- **Asynchronous (fire-and-forget)** — `delegate_task` returns an
-  acknowledgment with a task id immediately; the parent's tool loop is never
-  blocked. The child runs on a daemon thread as an isolated, quiet agent
-  (fresh per-agent tool instances, like the scheduler executor).
-- **Result delivery** — when the child finishes, its final text is queued and
-  injected into the main chat history before the next turn (like scheduled-task
-  results); the parent agent can then use or mention it. Child failures queue
-  an error text instead of crashing the turn.
-- **Flat topology** — children get no `delegate_task` tool and cannot spawn
-  further agents; the delegation tool is registered for the main session agent
-  only.
-- **Child model/tools** — each child uses its configured `tool_groups` (smaller
-  tool set = cheaper per-request payloads), optional `model` (a `models.json`
-  entry) and optional `system_prompt`.
-- **Result summarization (optional)** — with `summarize_results = true`,
-  results longer than `summarize_max_chars` are condensed by an LLM summary
-  pass (on the child's own model endpoint) before being queued; short results
-  pass through unchanged and a summary failure queues the original text
-  (fail-open, results are never dropped).
-- **Known limitations (v1)** — no mid-run cancellation of a running child, and
-  no hierarchical delegation (flat only). Sub-agent tool calls are visible in
-  the activity monitor and the `agent_activity` tool.
-
-## Reducing token consumption
-
-Every request re-sends the system prompt, the tool schemas and the whole chat
-history — the agents defined in `src/live_ai.py` register 43 tools (~21k chars
-of JSON schemas ≈ 5.3k tokens) and a single big tool output is re-sent on every
-round of a turn. Four config keys (all default to the historical behavior when
-unset) keep that cost bounded:
-
-```toml
-[brain]
-# max_tool_result_chars = 4000        # cap tool results stored in the history (head+tail kept with a truncation marker; 0 = uncapped)
-# context_trim_ratio = 0.7            # prune the oldest history when context usage exceeds this ratio (0 = never prune)
-# context_keep_messages = 40          # most recent messages never touched by pruning
-# auto_compaction = false             # run compact_chat (summary) instead of plain pruning when context_trim_ratio is exceeded
-# compact_keep_messages = 4           # recent turns kept by auto-compaction (default: context_keep_messages)
-
-[agent]
-# tool_doc_chars = 300                # cap tool descriptions in the JSON schemas (0 = full docstrings)
-# tool_groups = "model, memory, scheduling, files, web, documents, images, audio, system, mcp"  # keep only these tool topics (default "all")
-```
-
-- `max_tool_result_chars` — oversized tool results keep the first 75% and the
-  last 25% (the tail preserves recent entries of append-ordered files like
-  `memory.log`) plus an explicit `[truncated, N chars total]` marker, so the
-  model can re-query with a targeted tool (`search_in_file`, `query_document`,
-  `summarize_doc`) instead of re-reading everything. Truncation is preferred
-  over eager summarization: it is free, deterministic and never distorts what
-  it keeps.
-- `tool_doc_chars` + no `default` values in schemas — shrinks the fixed
-  per-request payload (measured: 21.9k → 19.1k chars for the full 43-tool set);
-  `tool_groups` excludes whole topics (finance, archives, ...) for zero tokens.
-  The `audio` topic groups the speech tools (`allow_speech`, `transcribe_audio`)
-  and is listed just before the `other` catch-all (which holds any ungrouped
-  tool, e.g. MCP-injected ones).
-- `context_trim_ratio` / `context_keep_messages` — at the start of each turn,
-  when usage passes the ratio, the oldest *complete* tool rounds are dropped
-  (never split: no orphan tool results) until usage is back under the ratio;
-  the system prompt and the last `context_keep_messages` messages are always
-  kept, and a `[history pruned: N messages dropped]` marker is appended to the
-  system prompt. This turns an unbounded, quadratic per-turn token cost into a
-  bounded, linear one.
-- `auto_compaction` (default `false`) / `compact_keep_messages` — with
-  `auto_compaction = true`, the same usage checkpoint runs a full compaction
-  instead of the plain drop: the oldest messages are summarized into a single
-  `[Compacted context ...]` message (via the chat model, with a built-in
-  extractive fallback) while the system prompt, the recalled personal data and
-  the last `compact_keep_messages` turns stay verbatim. Legacy pruning still
-  runs afterwards if usage remains above the ratio. You can also compact
-  manually with the `/compact [keep_last]` command or let the model call the
-  `compact_chat` tool. Compaction is safe by construction:
-  - the split is *group-aligned*: a tool round is never cut in half, so the
-    resulting history stays valid for OpenAI-compatible servers (no orphan
-    `tool` result, no dangling `assistant(tool_calls)`);
-  - the re-seeded head (system prompt + recalled personal data) is never
-    summarized, so the personal data is not duplicated into the summary; the
-    summary itself is capped with `max_tool_result_chars` (0 = uncapped) and
-    the re-seeded recall text with the same limit;
-  - the summary is a `[Compacted context ...]` **user** message (mid-history
-    `system` messages are rejected by some servers) but is excluded from
-    personal-memory capture (`store_memory`) and from the `clear_chat` replay;
-  - it is idempotent and never grows the history: a second `/compact` with no
-    new messages, a range that is only a previous summary, or a *model*
-    summary that is not smaller than the range it replaces are all no-ops
-    ("Context is already compact; nothing to do."); the result string reports
-    " (extractive fallback)" when no bound summarizer produced the summary;
-  - isolated (background) agents get their own `MemoryTools` instance *and*
-    their own summarizer binding, and auto-compaction uses that instance;
-  - a round containing `clear_chat`/`compact_chat` always runs sequentially
-    (never in the `max_parallel_tools` pool), and the memory instance is
-    lock-guarded, so a compaction cannot race the session or its own round.
-- The scheduler execution agent inherits the same settings (it copies the
-  config). Recommended
-  starting values: `max_tool_result_chars = 4000`, `tool_doc_chars = 300`,
-  `context_trim_ratio = 0.7`, `context_keep_messages = 40`.
-- Runtime toggling: `/tools off <tool|topic>` drops a tool's schema from every
-  subsequent request for the rest of the session (e.g. `/tools off finance`
-  removes both finance tools; `/tools on finance` restores them), and
-  `/tools` lists the tools with `[off]` markers. Toggles are session-only —
-  `[agent] tool_groups` remains the boot-time default — and survive
-  `/mcp refresh` (which re-reads `mcp.json` and rebuilds the MCP tools).
-
-## Sub-agent activity monitoring
-
-Background agents (the scheduler's execution agent) are quiet by default, so
-their work is invisible. The `[agent] monitor` setting makes their activity
-visible through independent, combinable flags
-(comma-separated; unset/empty/`"none"` = fully quiet, as always):
-
-```toml
-[agent]
-monitor = "calls,log"                 # "calls" and/or "log"; empty = quiet
-# monitor_log_file_cwd = "agents.jsonl"  # JSONL event log path (monitor = "log"; under [cwd] data_dir_cwd)
-# monitor_buffer = 100                # in-memory events kept for the agent_activity tool
-```
-
-- `calls` — while a scheduled task runs, its tool executions print the usual
-  `[CALL]` blocks live on the console, each labeled with the agent name
-  (e.g. `[CALL] web_search (scheduler)(...`). The main agent's own
-  `[CALL]` blocks are unchanged.
-- `log` — every agent event is appended as one JSON object per line to
-  `monitor_log_file_cwd` (default `agents.jsonl`, under `[cwd] data_dir_cwd`):
-  run `start`/`answer`
-  (with prompt/answer and duration) and per-tool-call `tool_call`/`tool_result`
-  events. Lines are written atomically under a lock, so worker threads never
-  interleave half-lines; the file is created lazily and a write failure
-  disables the file sink without breaking the agents.
-- Both channels feed a bounded **in-memory ring buffer** (`monitor_buffer`,
-  default 100 events) that is always populated when monitoring is enabled.
-
-The main agent can consult this buffer through the **`agent_activity(last=20)`**
-tool: it returns the recent events as human-readable one-liners (or
-`No sub-agent activity recorded.` when the buffer is empty), so you can simply
-ask *"what did the scheduled tasks do?"*.
-
-In the console you can also type **`/monitor [N|clear]`** to print the last N
-events (default 20), or empty the buffer (the JSONL file is not touched).
-
 ## MCP servers (optional)
 
 The assistant can use tools exposed by [MCP (Model Context Protocol)](https://modelcontextprotocol.io)
@@ -1028,86 +1028,86 @@ servers you trust — the same class of trust as the built-in `run_command`
 tool.
 
 
-## Process spawning (`spawn_process`)
+## Reducing token consumption
 
-The `system` topic includes **`spawn_process(cmd, cwd="")`**: it starts a
-command without waiting for it (stdout/stderr/stdin detached) and returns
-either the spawned **Process ID (PID)** — e.g. `Process started with PID 12345`
-— or an error message (`Error spawning process: ...`) if the process could not
-be started. Useful for long-running programs (a local server, a watcher, a
-player) that must keep running while the conversation continues; inspect or
-stop the process later through `run_command` (e.g. `taskkill /PID 12345` on
-Windows, `kill 12345` on POSIX). Unlike `run_command` (blocking, captures
-output), `spawn_process` returns immediately and discards the child output.
-
-With `background=False` the command runs in the foreground and the call waits
-for it (like `run_command`); a `Ctrl+C` cancel then terminates it (see
-[Interrupting a response](#interrupting-a-response-ctrlc)). Background spawns
-are detached and are **not** affected by a cancel.
-
-
-## Task scheduler (optional)
-
-The assistant can run prompts at a future time: one-shot reminders or
-recurring jobs. Three tools are exposed to the model:
-
-- `schedule_task(prompt, at, repeat="")` — run `prompt` at `at` (ISO 8601 or
-  `YYYY-MM-DD HH:MM`, local time); `repeat` makes it recurring: `daily`,
-  `hourly`, `every 30m`, or a 5-field cron expression like `0 9 * * MON`.
-- `list_scheduled_tasks()` — pending tasks with ids and next run times.
-- `cancel_scheduled_task(task_id)` — cancel a task by id.
-
-All three belong to the `scheduling` tool topic, together with
-`agent_activity(last=20)` — the tool that reports what the scheduled runs did
-(see [Sub-agent activity monitoring](#sub-agent-activity-monitoring)).
-
-Scheduled prompts run on a **dedicated isolated agent** (quiet, own tool
-state), never on the main session agent, so the live conversation is never
-disturbed. Tasks persist to a JSON file and survive restarts.
-
-By default that agent is built from the main `[brain]`/`[agent]` config. Set
-`agent` to run scheduled prompts on a named `[delegation.agents.<name>]`
-sub-agent instead — it then uses that entry's `model`, `tool_groups`,
-`system_prompt` and `max_act_rounds`, exactly like a `delegate_task` child
-(same isolation and flat topology). An unknown name logs a warning at startup
-and falls back to the main agent, so scheduled tasks always keep running; the
-run is monitored and its answer delivered to the main agent as usual (under
-the agent's name in `agent_activity`).
-
-The feature ships off by default; enable it in `config.toml`:
-
-```
-[delegation.scheduler]
-enabled = true                       # false/missing -> tools are no-ops
-persist_file_cwd = "schedule.json"   # task persistence (survives restarts; under [cwd] data_dir_cwd)
-on_missed = "skip"                   # missed one-shots after a restart:
-                                     # "run" executes them, "skip" drops them
-agent = ""                           # run scheduled prompts on this [delegation.agents.<name>]
-                                     # entry (unset/empty = the main agent's model and tool groups)
-```
-
-## Completion notifications (`[delegation.notify]`)
-
-Scheduled tasks and delegated sub-agents finish in the background: their
-result is injected into the chat history before the next turn. With
-`[delegation.notify]` enabled the user also gets an immediate one-line
-terminal hint the
-moment a task completes — no result text is shown, only the task kind and id
-(so long results are not echoed twice and stay out of the terminal):
-
-```
-🔔 Scheduled task t-1 completed.
-🔔 Sub-agent task researcher (agent-1) completed.
-```
+Every request re-sends the system prompt, the tool schemas and the whole chat
+history — the agents defined in `src/live_ai.py` register 43 tools (~21k chars
+of JSON schemas ≈ 5.3k tokens) and a single big tool output is re-sent on every
+round of a turn. Four config keys (all default to the historical behavior when
+unset) keep that cost bounded:
 
 ```toml
-[delegation.notify]
-terminal = true  # missing section (or false) -> no hint, results on next turn only
+[brain]
+# max_tool_result_chars = 4000        # cap tool results stored in the history (head+tail kept with a truncation marker; 0 = uncapped)
+# context_trim_ratio = 0.7            # prune the oldest history when context usage exceeds this ratio (0 = never prune)
+# context_keep_messages = 40          # most recent messages never touched by pruning
+# auto_compaction = false             # run compact_chat (summary) instead of plain pruning when context_trim_ratio is exceeded
+# compact_keep_messages = 4           # recent turns kept by auto-compaction (default: context_keep_messages)
+
+[agent]
+# tool_doc_chars = 300                # cap tool descriptions in the JSON schemas (0 = full docstrings)
+# tool_groups = "model, memory, scheduling, files, web, documents, images, audio, system, mcp"  # keep only these tool topics (default "all")
 ```
 
-The hint prints from the background thread; in chat mode prompt_toolkit's
-`patch_stdout` renders it above the prompt line, so the input is never
-garbled. Voice mode prints it between prompts.
+- `max_tool_result_chars` — oversized tool results keep the first 75% and the
+  last 25% (the tail preserves recent entries of append-ordered files like
+  `memory.log`) plus an explicit `[truncated, N chars total]` marker, so the
+  model can re-query with a targeted tool (`search_in_file`, `query_document`,
+  `summarize_doc`) instead of re-reading everything. Truncation is preferred
+  over eager summarization: it is free, deterministic and never distorts what
+  it keeps.
+- `tool_doc_chars` + no `default` values in schemas — shrinks the fixed
+  per-request payload (measured: 21.9k → 19.1k chars for the full 43-tool set);
+  `tool_groups` excludes whole topics (finance, archives, ...) for zero tokens.
+  The `audio` topic groups the speech tools (`allow_speech`, `transcribe_audio`)
+  and is listed just before the `other` catch-all (which holds any ungrouped
+  tool, e.g. MCP-injected ones).
+- `context_trim_ratio` / `context_keep_messages` — at the start of each turn,
+  when usage passes the ratio, the oldest *complete* tool rounds are dropped
+  (never split: no orphan tool results) until usage is back under the ratio;
+  the system prompt and the last `context_keep_messages` messages are always
+  kept, and a `[history pruned: N messages dropped]` marker is appended to the
+  system prompt. This turns an unbounded, quadratic per-turn token cost into a
+  bounded, linear one.
+- `auto_compaction` (default `false`) / `compact_keep_messages` — with
+  `auto_compaction = true`, the same usage checkpoint runs a full compaction
+  instead of the plain drop: the oldest messages are summarized into a single
+  `[Compacted context ...]` message (via the chat model, with a built-in
+  extractive fallback) while the system prompt, the recalled personal data and
+  the last `compact_keep_messages` turns stay verbatim. Legacy pruning still
+  runs afterwards if usage remains above the ratio. You can also compact
+  manually with the `/compact [keep_last]` command or let the model call the
+  `compact_chat` tool. Compaction is safe by construction:
+  - the split is *group-aligned*: a tool round is never cut in half, so the
+    resulting history stays valid for OpenAI-compatible servers (no orphan
+    `tool` result, no dangling `assistant(tool_calls)`);
+  - the re-seeded head (system prompt + recalled personal data) is never
+    summarized, so the personal data is not duplicated into the summary; the
+    summary itself is capped with `max_tool_result_chars` (0 = uncapped) and
+    the re-seeded recall text with the same limit;
+  - the summary is a `[Compacted context ...]` **user** message (mid-history
+    `system` messages are rejected by some servers) but is excluded from
+    personal-memory capture (`store_memory`) and from the `clear_chat` replay;
+  - it is idempotent and never grows the history: a second `/compact` with no
+    new messages, a range that is only a previous summary, or a *model*
+    summary that is not smaller than the range it replaces are all no-ops
+    ("Context is already compact; nothing to do."); the result string reports
+    " (extractive fallback)" when no bound summarizer produced the summary;
+  - isolated (background) agents get their own `MemoryTools` instance *and*
+    their own summarizer binding, and auto-compaction uses that instance;
+  - a round containing `clear_chat`/`compact_chat` always runs sequentially
+    (never in the `max_parallel_tools` pool), and the memory instance is
+    lock-guarded, so a compaction cannot race the session or its own round.
+- The scheduler execution agent inherits the same settings (it copies the
+  config). Recommended
+  starting values: `max_tool_result_chars = 4000`, `tool_doc_chars = 300`,
+  `context_trim_ratio = 0.7`, `context_keep_messages = 40`.
+- Runtime toggling: `/tools off <tool|topic>` drops a tool's schema from every
+  subsequent request for the rest of the session (e.g. `/tools off finance`
+  removes both finance tools; `/tools on finance` restores them), and
+  `/tools` lists the tools with `[off]` markers. Toggles are session-only —
+  `[agent] tool_groups` remains the boot-time default — and survive
+  `/mcp refresh` (which re-reads `mcp.json` and rebuilds the MCP tools).
 
 ## Setup (Python 3.12.10)
 
