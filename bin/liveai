@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================
-# Live Assistant - Interactive Chat Launcher
+# LiveAI - Interactive Chat Launcher
 # ============================================
 # Activates the .liveai-cpu virtual environment and runs main.py --chat
 

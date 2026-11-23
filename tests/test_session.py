@@ -1073,7 +1073,7 @@ def test_banner_shows_gradient_logo(capsys):
     it = iter(["/quit"])
     ConversationSession(agent, lambda: next(it)).run()
     out = capsys.readouterr().out
-    assert "Live Assistant" in out
+    assert "LiveAI" in out
     assert "_/\\_" in out or "_____" in out  # a row of the ASCII art
 
 
@@ -1085,7 +1085,7 @@ def test_banner_logo_hidden_when_disabled(capsys):
     it = iter(["/quit"])
     ConversationSession(agent, lambda: next(it)).run()
     out = capsys.readouterr().out
-    assert "Live Assistant" in out          # panel still there
+    assert "LiveAI" in out          # panel still there
     assert "_/\\_" not in out               # but no art row
 
 
@@ -1098,7 +1098,7 @@ def test_banner_plain_line_when_banner_false(capsys):
     ConversationSession(agent, lambda: next(it)).run()
     out = capsys.readouterr().out
     assert "Agent ready." in out
-    assert "Live Assistant" not in out
+    assert "LiveAI" not in out
 
 
 def test_gradient_logo_styles_each_line():

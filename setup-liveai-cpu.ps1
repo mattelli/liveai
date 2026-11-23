@@ -1,5 +1,5 @@
 # ============================================
-# Live Assistant - Windows 11
+# LiveAI - Windows 11
 $target_py_version = "3.12"
 $environment_name = ".liveai-cpu"
 # ============================================

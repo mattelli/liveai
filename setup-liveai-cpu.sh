@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================
-# Live Assistant - Linux / macOS
+# LiveAI - Linux / macOS
 # ============================================
 
 set -euo pipefail

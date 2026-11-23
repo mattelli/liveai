@@ -911,7 +911,7 @@ class ConversationSession:
             Console().print(
                 Panel(
                     body,
-                    title="Live Assistant",
+                    title="LiveAI",
                     border_style="cyan",
                     expand=True,
                     padding=(0, 2),

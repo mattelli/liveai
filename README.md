@@ -1,10 +1,10 @@
-# Live Assistant
+# LiveAI
 
-Simple example to create locally a live AI assistant.
+Highly Configurable Conversational AI harness.
 
 Mic → Whisper (STT) → LLM (OpenAI-compatible API) → Piper (TTS)
 
-Chat mode is supported, several tools are available.
+Chat mode is supported, several native tools are available.
 
 
 ## Runtime data root (`.liveai`)
@@ -168,7 +168,7 @@ image, change it to get a variation:
 
 ```
 generate_image(prompt="a white dog sitting on a pillow")
--> C:/Users/Max/Documents/workspace/live_assistant/.out_images/generated_20261004-124630.png (seed=42)
+-> C:/Users/Max/Documents/workspace/liveai/.out_images/generated_20261004-124630.png (seed=42)
 ```
 
 - Parameters left empty fall back to the `[image_gen]` defaults in `config.toml`
@@ -211,7 +211,7 @@ hf download UnfilteredAI/NSFW-GEN-ANIME --local-dir .res/sd/nsfw-gen-anime
 
 ```toml
 [image_gen]
-t2i_model = "C:/Users/Max/Documents/workspace/live_assistant/.res/sd/nsfw-gen-anime"
+t2i_model = "C:/Users/Max/Documents/workspace/liveai/.res/sd/nsfw-gen-anime"
 ```
 
 Notes:

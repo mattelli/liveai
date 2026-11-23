@@ -1,4 +1,4 @@
-"""Tool collection for the Live Assistant agent, split by topic.
+"""Tool collection for the LiveAI agent, split by topic.
 
 - ``system``    : platform info, date/time, working directory, shell commands,
                   background process spawning
