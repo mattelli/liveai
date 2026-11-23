@@ -55,7 +55,8 @@ from src.common import dump_func_call
 
 __all__ = [
     "Manager", "McpError", "configure", "configured_servers", "get_manager",
-    "mcp_call_tool", "mcp_list_tools", "mcp_tool_bindings", "servers_file",
+    "mcp_call_tool", "mcp_list_tools", "mcp_tool_bindings", "refresh_servers",
+    "servers_file",
 ]
 
 logger = logging.getLogger(__name__)
@@ -304,6 +305,25 @@ def servers_file():
     return _SERVERS_FILE
 
 
+def refresh_servers() -> dict[str, list[str]]:
+    """Re-read the servers file from disk and reconnect (``/mcp refresh``).
+
+    Re-reads ``servers_file_cwd`` (silently ignoring a missing/malformed
+    file), updates the module state and asks the manager to reload its server
+    map, so a server added/removed/edited in ``mcp.json`` takes effect without
+    restarting the session. Returns ``{server: [tool names]}`` of the servers
+    that connected; ``{}`` when no manager is configured.
+    """
+    global _SERVERS
+    if _SERVERS_FILE is None:
+        return {}
+    _SERVERS = _load_servers_file(_SERVERS_FILE)
+    manager = get_manager()
+    if manager is None:
+        return {}
+    return manager.reload(_SERVERS)
+
+
 def get_manager() -> "Manager | None":
     """Process-wide :class:`Manager` singleton (``None`` when unconfigured).
 
@@ -526,6 +546,29 @@ class Manager:
         """Close every client and reconnect from scratch (same shape as
         :meth:`connect_all`)."""
         self._close_clients()
+        return self.connect_all()
+
+    def reload(self, servers: dict[str, dict]) -> dict[str, list[str]]:
+        """Replace the server map and reconnect (same shape as
+        :meth:`connect_all`).
+
+        Used by ``/mcp refresh`` after re-reading ``mcp.json``: clients of
+        servers that disappeared (or whose spec changed) are closed first, so
+        an edited command/url never keeps running with the old connection.
+        """
+        with self._lock:
+            stale = [name for name, spec in self._servers.items()
+                     if servers.get(name) != spec]
+            self._servers = dict(servers)
+        for name in stale:
+            client = self._clients.pop(name, None)
+            self._tool_lists.pop(name, None)
+            self._errors.pop(name, None)
+            if client is not None:
+                try:
+                    self._submit(client.close)
+                except Exception as exc:
+                    self.logger.debug("[mcp] closing %r failed: %s", name, exc)
         return self.connect_all()
 
     def _close_clients(self) -> None:

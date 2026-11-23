@@ -1890,6 +1890,9 @@ def _mcp_manager(monkeypatch, results=None):
 
     manager = FakeMcpManager()
     monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    # refresh_mcp_tools() re-reads mcp.json through refresh_servers(): the
+    # fake manager stands in for it, so the agent sees the same tool set.
+    monkeypatch.setattr(mcp_mod, "refresh_servers", manager.refresh)
     return manager
 
 
@@ -1966,6 +1969,40 @@ def test_refresh_mcp_tools_without_manager(monkeypatch):
     agent = live_ai_mod.Agent(_remote_config())
     message = agent.refresh_mcp_tools()
     assert "not configured" in message
+
+
+def test_refresh_mcp_tools_picks_up_server_added_to_file(monkeypatch):
+    """A server added to mcp.json after startup is injected by /mcp refresh."""
+    import src.tools.mcp as mcp_mod
+
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    manager = _mcp_manager(monkeypatch)
+    agent = live_ai_mod.Agent(_remote_config())
+    assert agent._mcp_tool_names == ["mcp_test_echo"]
+
+    # The file now also defines "extra": refresh_servers() (stubbed) reports
+    # the new server, and the bindings are rebuilt from the manager.
+    manager.tools = list(manager.tools) + [
+        {"name": "ping", "description": "Ping", "inputSchema": {"type": "object"}}]
+    manager.status_value = dict(manager.status_value, extra={
+        "transport": "http", "status": "connected", "tools": ["ping"]})
+
+    def refresh_servers():
+        FakeMcpManager = type(manager)
+        FakeMcpManager.refreshed += 1
+        return {"test": ["echo"], "extra": ["ping"]}
+
+    monkeypatch.setattr(mcp_mod, "refresh_servers", refresh_servers)
+    # mcp_tool_bindings() reads the manager's tool list per server.
+    monkeypatch.setattr(manager, "list_tools", lambda server: list(manager.tools))
+
+    message = agent.refresh_mcp_tools()
+
+    names = [tool.__name__ for tool in agent.tools]
+    assert "mcp_test_ping" in names
+    assert "mcp_extra_ping" in names
+    assert "mcp_test_ping" in message
 
 
 # ------------------------------------------------------- tool topic grouping

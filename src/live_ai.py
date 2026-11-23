@@ -2398,10 +2398,10 @@ class Agent(Brain):
         """Reconnect the MCP servers and rebuild the injected tools in place.
 
         Drops every previously injected MCP tool from ``tools`` /
-        ``tool_definitions`` / ``_tool_impls``, asks the manager to refresh
-        its connections and re-runs the injection. No-op with a log line when
-        no MCP manager is configured. Returns a short human-readable summary
-        (used by ``/mcp refresh``).
+        ``tool_definitions`` / ``_tool_impls``, asks the manager to re-read
+        ``mcp.json`` from disk and refresh its connections, then re-runs the
+        injection. No-op with a log line when no MCP manager is configured.
+        Returns a short human-readable summary (used by ``/mcp refresh``).
         """
         from src.tools import mcp as mcp_tools
         manager = mcp_tools.get_manager()
@@ -2418,7 +2418,7 @@ class Agent(Brain):
             definition for definition in self.tool_definitions
             if definition.get("function", {}).get("name") not in self._mcp_tool_names
         ]
-        results = manager.refresh()
+        results = mcp_tools.refresh_servers()
         extra_defs, extra_impls = mcp_tools.mcp_tool_bindings(
             existing_names=set(self._tool_impls))
         self._mcp_tool_names = list(extra_impls)

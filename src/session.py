@@ -773,7 +773,7 @@ class ConversationSession:
                 cprint("MCP is not configured (no [mcp] servers)", "yellow")
                 return
             try:
-                results = manager.refresh()
+                results = mcp_tools.refresh_servers()
             except Exception as exc:
                 cprint(f"Error refreshing MCP: {exc}", "red")
                 return

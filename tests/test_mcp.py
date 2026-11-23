@@ -1051,3 +1051,88 @@ def test_configure_without_section_clears_servers_file():
 def test_configure_defaults_servers_file_name():
     configure(SimpleNamespace(mcp=SimpleNamespace()))
     assert mcp_mod.servers_file() == "mcp.json"
+
+
+# ------------------------------------- /mcp refresh re-reads mcp.json (Task 3)
+
+
+def test_manager_reload_replaces_servers_and_closes_stale_clients(shutdown_managers):
+    connector = FakeConnector(tools={
+        "a": [{"name": "echo", "description": "", "inputSchema": {}}],
+        "b": [{"name": "ping", "description": "", "inputSchema": {}}],
+    })
+    manager = _make_manager(connector, servers={"a": {"url": "u"}})
+    manager.connect_all()
+    stale_client = manager._clients["a"]
+
+    # "a" is gone, "b" is new: the old client must be closed, "b" connected.
+    assert manager.reload({"b": {"url": "v"}}) == {"b": ["ping"]}
+    assert stale_client.closed == 1
+    assert "a" not in manager._clients and "a" not in manager._servers
+    assert manager._servers == {"b": {"url": "v"}}
+    assert set(manager.status()) == {"b"}
+
+
+def test_manager_reload_keeps_unchanged_server_connection(shutdown_managers):
+    connector = FakeConnector()
+    manager = _make_manager(connector, servers={"srv": {"url": "u"}})
+    manager.connect_all()
+    client = manager._clients["srv"]
+
+    assert manager.reload({"srv": {"url": "u"}}) == {"srv": ["echo"]}
+    assert manager._clients["srv"] is client  # reused, not reconnected
+    assert client.closed == 0
+    assert len(connector.connected) == 1
+
+
+def test_manager_reload_reconnects_changed_spec(shutdown_managers):
+    connector = FakeConnector()
+    manager = _make_manager(connector, servers={"srv": {"url": "u"}})
+    manager.connect_all()
+    client = manager._clients["srv"]
+
+    assert manager.reload({"srv": {"url": "other"}}) == {"srv": ["echo"]}
+    assert client.closed == 1
+    assert manager._clients["srv"] is not client
+    assert len(connector.connected) == 2
+
+
+def test_refresh_servers_rereads_file_and_reloads_manager(
+        reset_singleton, monkeypatch, tmp_path):
+    connector = FakeConnector(tools={
+        "a": [{"name": "echo", "description": "", "inputSchema": {}}],
+        "b": [{"name": "ping", "description": "", "inputSchema": {}}],
+    })
+    monkeypatch.setattr(mcp_mod, "_CONNECTOR_FACTORY", lambda: connector)
+    path = _write_servers_file(tmp_path, {"a": {"url": "u"}})
+    configure(_mcp_config(servers_file_cwd=path))
+    manager = mcp_mod.get_manager()
+    assert manager.connect_all() == {"a": ["echo"]}
+
+    # The file changes on disk: refresh must pick it up without a restart.
+    _write_servers_file(tmp_path, {"b": {"url": "v"}})
+    assert mcp_mod.refresh_servers() == {"b": ["ping"]}
+    assert set(configured_servers()) == {"b"}
+    assert set(manager.status()) == {"b"}
+
+
+def test_refresh_servers_without_manager_returns_empty(reset_singleton, tmp_path):
+    configure(_mcp_config(servers_file_cwd=tmp_path / "absent.json"))
+    assert mcp_mod.refresh_servers() == {}
+
+
+def test_refresh_servers_without_configured_file_returns_empty(reset_singleton):
+    configure(SimpleNamespace(mcp=SimpleNamespace()))
+    assert mcp_mod.refresh_servers() == {}
+
+
+def test_refresh_servers_ignores_malformed_file(reset_singleton, monkeypatch, tmp_path):
+    connector = FakeConnector()
+    monkeypatch.setattr(mcp_mod, "_CONNECTOR_FACTORY", lambda: connector)
+    path = _write_servers_file(tmp_path, {"srv": {"url": "u"}})
+    configure(_mcp_config(servers_file_cwd=path))
+    mcp_mod.get_manager().connect_all()
+
+    _write_servers_file(tmp_path, "{not json")
+    assert mcp_mod.refresh_servers() == {}  # silently no servers
+    assert configured_servers() == {}

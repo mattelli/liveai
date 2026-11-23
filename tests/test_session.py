@@ -851,6 +851,9 @@ def _mcp_manager(monkeypatch, servers=None):
 
     manager = FakeMcpManager()
     monkeypatch.setattr(mcp_mod, "get_manager", lambda: manager)
+    # /mcp refresh re-reads mcp.json via refresh_servers(): the fake manager
+    # stands in for it (the agent-less fallback path).
+    monkeypatch.setattr(mcp_mod, "refresh_servers", manager.refresh)
     return manager
 
 
