@@ -864,7 +864,7 @@ unset) keep that cost bounded:
   removes both finance tools; `/tools on finance` restores them), and
   `/tools` lists the tools with `[off]` markers. Toggles are session-only —
   `[agent] tool_groups` remains the boot-time default — and survive
-  `/mcp refresh`.
+  `/mcp refresh` (which re-reads `mcp.json` and rebuilds the MCP tools).
 
 ## Sub-agent activity monitoring
 
@@ -915,25 +915,31 @@ environment:
 pip install mcp
 ```
 
-Servers are configured in `config.toml` (the block ships commented out, so the
-feature stays off by default):
+Servers are defined in a **JSON file** (`mcp.json` by default) stored under the
+run's data directory (`[cwd] data_dir_cwd`, i.e. `.liveai/mcp.json`); the
+`[mcp]` section of `config.toml` only points at it and holds the timeouts:
 
 ```toml
 [mcp]
-connect_timeout_s = 10.0   # per-server connect + tools/list budget
-call_timeout_s    = 120.0  # per-tool-call budget
+servers_file_cwd  = "mcp.json"  # under [cwd] data_dir_cwd (.liveai/mcp.json)
+connect_timeout_s = 10.0        # per-server connect + tools/list budget
+call_timeout_s    = 120.0       # per-tool-call budget
+```
 
-[mcp.servers.filesystem]      # stdio server: local process
-command = "npx"
-args = ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/Max/data"]
+`mcp.json` is a flat object, one entry per server:
 
-[mcp.servers.deepwiki]        # HTTP server: streamable HTTP endpoint
-url = "https://mcp.deepwiki.com/mcp"
+```json
+{
+  "filesystem": { "command": "npx",
+                  "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/Max/data"] },
+  "deepwiki":   { "url": "https://mcp.deepwiki.com/mcp" }
+}
 ```
 
 A server entry needs `command` (+ optional `args` list) **or** `url`; anything
-else is skipped with a warning. Windows note for stdio servers: if spawning
-`npx` directly fails, use `command = "cmd"`, `args = ["/c", "npx", "-y", ...]`.
+else is skipped with a warning. A missing or malformed `mcp.json` is ignored
+silently (MCP simply stays off). Windows note for stdio servers: if spawning
+`npx` directly fails, use `"command": "cmd"`, `"args": ["/c", "npx", "-y", ...]`.
 
 **Authentication (static tokens).** Per-server keys:
 
@@ -948,29 +954,31 @@ else is skipped with a warning. Windows note for stdio servers: if spawning
   (expanded at load time; unknown variables expand to the empty string).
 
 Secrets are resolved from the environment or the project `.env` file at
-startup and never stored in config.toml. Example Telegram bot server:
+startup and never stored in `mcp.json`. Example Telegram bot server:
 
-```toml
-[mcp.servers.telegram]
-command = "python"
-args = ["-m", "telegram_bot_mcp"]
-env = { TELEGRAM_BOT_TOKEN = "${TELEGRAM_BOT_TOKEN}" }
+```json
+{
+  "telegram": { "command": "python", "args": ["-m", "telegram_bot_mcp"],
+                "env": { "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}" } }
+}
 ```
 
 Example remote server with a bearer token:
 
-```toml
-[mcp.servers.github]
-url = "https://api.githubcopilot.com/mcp"
-token_env = "GITHUB_MCP_TOKEN"
+```json
+{
+  "github": { "url": "https://api.githubcopilot.com/mcp",
+              "token_env": "GITHUB_MCP_TOKEN" }
+}
 ```
 
 Not supported: interactive OAuth flows (the SDK ships the machinery, but the
 browser-based authorization step does not fit the synchronous tool model yet).
 
 - `/mcp` lists the configured servers with transport, connection status and
-  tool count; `/mcp refresh` reconnects all servers and rebuilds the injected
-  tools.
+  tool count; `/mcp refresh` **re-reads `mcp.json` from disk**, reconnects the
+  servers and rebuilds the injected tools — so a server added, removed or
+  edited in the file takes effect without restarting the session.
 - A failing/unreachable server never prevents startup: it degrades to an
   error string (the agent keeps answering) and can be retried with
   `/mcp refresh`.

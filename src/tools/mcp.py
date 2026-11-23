@@ -1,7 +1,7 @@
 """MCP (Model Context Protocol) integration: external servers as agent tools.
 
-Configured MCP servers (``[mcp]`` section of config.toml) expose their tools
-to the agent in two ways:
+Configured MCP servers (``mcp.json``, see below) expose their tools to the
+agent in two ways:
 
 - **dynamic injection**: every server tool becomes a native OpenAI
   function-calling tool (``mcp_<server>_<tool>``), built from the MCP
@@ -16,25 +16,32 @@ connector, so this module imports cleanly without it. All MCP I/O runs on a
 single dedicated event-loop thread owned by :class:`Manager`; the public API
 is synchronous and safe to call from any agent thread.
 
-``[mcp]`` config section (injected by ``main.py`` via :func:`configure`):
+``[mcp]`` config section (injected by ``main.py`` via :func:`configure`): the
+section only carries the timeouts and the path of the JSON file holding the
+server definitions. That file is a ``_cwd`` key, so it resolves under
+``[cwd] data_dir_cwd`` (``<launch>/.liveai/mcp.json`` by default):
 
 .. code-block:: toml
 
     [mcp]
-    connect_timeout_s = 10.0   # per-server connect + tools/list budget
-    call_timeout_s    = 120.0  # per-tool-call budget
+    servers_file_cwd  = "mcp.json"  # under [cwd] data_dir_cwd
+    connect_timeout_s = 10.0        # per-server connect + tools/list budget
+    call_timeout_s    = 120.0       # per-tool-call budget
 
-    [mcp.servers.filesystem]      # stdio server: local process
-    command = "npx"
-    args = ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/Max/data"]
+.. code-block:: json
 
-    [mcp.servers.deepwiki]        # HTTP server: streamable HTTP endpoint
-    url = "https://mcp.deepwiki.com/mcp"
+    {
+      "filesystem": {"command": "npx",
+                     "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/Max/data"]},
+      "deepwiki":   {"url": "https://mcp.deepwiki.com/mcp"}
+    }
 
 A server entry needs ``command`` (+ optional ``args`` list) **or** ``url``;
-anything else is skipped with a warning. Windows note for stdio servers: if
-spawning ``npx`` directly fails, use ``command = "cmd"``,
-``args = ["/c", "npx", "-y", ...]``. Without the section (or with no usable
+anything else is skipped with a warning. A missing or malformed file is
+ignored silently. Windows note for stdio servers: if spawning ``npx``
+directly fails, use ``"command": "cmd"``, ``"args": ["/c", "npx", "-y", ...]``.
+``/mcp refresh`` re-reads the file from disk (:func:`refresh_servers`), so
+edits take effect without restarting. Without the section (or with no usable
 servers) the module is a no-op: no manager, no injected tools, no I/O.
 """
 
