@@ -930,6 +930,7 @@ call_timeout_s    = 120.0       # per-tool-call budget
 
 ```json
 {
+  "finance":    { "command": "uvx", "args": ["yfmcp@latest"] },
   "filesystem": { "command": "npx",
                   "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/Users/Max/data"] },
   "deepwiki":   { "url": "https://mcp.deepwiki.com/mcp" }

@@ -156,29 +156,9 @@ chunk_size = 5             # sentences per indexed passage
 top_k = 5                  # default number of results returned by query_corpus
 
 [mcp] # MCP (Model Context Protocol) servers as agent tools (optional; pip install mcp)
-# Every server tool becomes a native agent tool (mcp_<server>_<tool>); the
-# mcp_list_tools/mcp_call_tool bridge tools always exist for runtime discovery.
-# The servers themselves are NOT defined here: they live in the JSON file named
-# by servers_file_cwd (a _cwd key, so it resolves under [cwd] data_dir_cwd ->
-# .liveai/mcp.json). Edit that file, then run /mcp refresh to reconnect without
-# restarting. A missing or malformed file is ignored silently (MCP stays off).
-# File shape (flat object, one entry per server):
-#   {
-#     "finance":    { "command": "uvx", "args": ["yfmcp@latest"] },
-#     "filesystem": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "./"] },
-#     "deepwiki":   { "url": "https://mcp.deepwiki.com/mcp" },
-#     "telegram":   { "command": "python", "args": ["-m", "telegram_bot_mcp"],
-#                     "env": { "TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}" } },
-#     "github":     { "url": "https://api.githubcopilot.com/mcp", "token_env": "GITHUB_MCP_TOKEN" }
-#   }
-# A server entry needs 'command' (+ optional 'args' list) or 'url'.
-# Windows note: if spawning npx directly fails, use "command": "cmd",
-# "args": ["/c", "npx", "-y", ...]. Inspect with /mcp, reconnect with /mcp refresh.
-# Auth: 'env' passes environment variables to a stdio server process, 'headers'
-# adds HTTP headers to a url server, 'token_env' names an env variable holding
-# a token (bearer header for url servers, env entry for stdio servers). Values
-# may reference other variables with ${VAR} - secrets stay in the env/.env file,
-# never in mcp.json.
+# Servers live in the JSON file below (not here); see the README "MCP servers"
+# section for the file shape, auth keys and examples. /mcp inspects, /mcp refresh
+# re-reads the file. A missing or malformed file is ignored silently.
 servers_file_cwd = "mcp.json"  # MCP server definitions (under [cwd] data_dir_cwd)
 connect_timeout_s = 15.0  # per-server connect + tools/list budget
 call_timeout_s    = 20.0  # per-tool-call budget
