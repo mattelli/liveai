@@ -1,5 +1,6 @@
 """Unit tests for the MCP tool module (offline: no real MCP server, no SDK)."""
 
+import json
 import threading
 import time
 from types import SimpleNamespace
@@ -924,3 +925,102 @@ def test_connector_builds_http_client_with_headers(monkeypatch):
         http_mod.create_mcp_http_client = original_factory
     # The client we pass is ours to close: the stack owns it now.
     assert closed == [1]
+
+
+# ------------------------------------------- mcp.json loader (Task 1: PLAN-MCP-JSON-CONFIG.md)
+
+
+def _write_servers_file(tmp_path, payload, name="mcp.json"):
+    """Write ``payload`` (raw text or object) and return the file path."""
+    path = tmp_path / name
+    if isinstance(payload, str):
+        path.write_text(payload, encoding="utf-8")
+    else:
+        path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_load_servers_file_parses_stdio_and_url_entries(tmp_path):
+    path = _write_servers_file(tmp_path, {
+        "filesystem": {"command": "npx",
+                       "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/data"]},
+        "deepwiki": {"url": "https://mcp.deepwiki.com/mcp"},
+    })
+    servers = mcp_mod._load_servers_file(path)
+    assert set(servers) == {"filesystem", "deepwiki"}
+    assert servers["filesystem"]["command"] == "npx"
+    assert servers["filesystem"]["args"] == [
+        "-y", "@modelcontextprotocol/server-filesystem", "C:/data"]
+    assert servers["deepwiki"]["url"] == "https://mcp.deepwiki.com/mcp"
+    # Auth extras are always normalized to (possibly empty) maps.
+    assert servers["deepwiki"]["env"] == {}
+    assert servers["deepwiki"]["headers"] == {}
+
+
+def test_load_servers_file_missing_file_is_silent(tmp_path):
+    assert mcp_mod._load_servers_file(tmp_path / "absent.json") == {}
+    assert mcp_mod._load_servers_file(None) == {}
+
+
+def test_load_servers_file_malformed_json_is_silent(tmp_path):
+    path = _write_servers_file(tmp_path, "{not json")
+    assert mcp_mod._load_servers_file(path) == {}
+
+
+def test_load_servers_file_non_object_root_is_silent(tmp_path):
+    assert mcp_mod._load_servers_file(_write_servers_file(tmp_path, ["a", "b"])) == {}
+    assert mcp_mod._load_servers_file(_write_servers_file(tmp_path, "42")) == {}
+
+
+def test_load_servers_file_skips_unusable_entries(tmp_path):
+    path = _write_servers_file(tmp_path, {
+        "broken": {"description": "neither command nor url"},
+        "scalar": "not-an-object",
+        "good": {"url": "https://mcp.example/mcp"},
+    })
+    assert mcp_mod._load_servers_file(path) == {
+        "good": {"url": "https://mcp.example/mcp", "env": {}, "headers": {}}}
+
+
+def test_load_servers_file_expands_env_placeholders(tmp_path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
+    path = _write_servers_file(tmp_path, {
+        "telegram": {"command": "python", "args": ["-m", "telegram_bot_mcp"],
+                     "env": {"TELEGRAM_BOT_TOKEN": "${TELEGRAM_BOT_TOKEN}"}},
+    })
+    servers = mcp_mod._load_servers_file(path)
+    assert servers["telegram"]["env"] == {"TELEGRAM_BOT_TOKEN": "123:abc"}
+
+
+def test_load_servers_file_token_env_builds_bearer_header(tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_MCP_TOKEN", "tok-123")
+    path = _write_servers_file(tmp_path, {
+        "github": {"url": "https://api.githubcopilot.com/mcp",
+                   "token_env": "GITHUB_MCP_TOKEN"},
+    })
+    servers = mcp_mod._load_servers_file(path)
+    assert servers["github"]["headers"] == {"Authorization": "Bearer tok-123"}
+
+
+def test_load_servers_file_drops_non_scalar_env_entries(tmp_path):
+    path = _write_servers_file(tmp_path, {
+        "bad": {"command": "python", "args": [], "env": {"NESTED": {"a": 1}}},
+    })
+    assert mcp_mod._load_servers_file(path)["bad"]["env"] == {}
+
+
+def test_configure_records_servers_file_path(tmp_path):
+    path = tmp_path / "custom-mcp.json"
+    configure(SimpleNamespace(mcp=SimpleNamespace(servers_file_cwd=path)))
+    assert mcp_mod.servers_file() == path
+
+
+def test_configure_without_section_clears_servers_file():
+    configure(SimpleNamespace(mcp=SimpleNamespace(servers_file_cwd="x.json")))
+    configure(SimpleNamespace())
+    assert mcp_mod.servers_file() is None
+
+
+def test_configure_defaults_servers_file_name():
+    configure(SimpleNamespace(mcp=SimpleNamespace()))
+    assert mcp_mod.servers_file() == "mcp.json"

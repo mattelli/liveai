@@ -333,6 +333,24 @@ def test_load_config_custom_cwd_section(tmp_path, monkeypatch):
     assert ns.brain.memory_path_cwd == root / "memory.log"
 
 
+def test_load_config_mcp_servers_file_default(tmp_path, monkeypatch):
+    # [mcp] servers_file_cwd is a _cwd key: it always resolves under the data
+    # root, even when the section (or the key) is absent from config.toml.
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text("[brain]\nmodel = 'x'\n")
+    ns = load_config(cfg)
+    assert ns.mcp.servers_file_cwd == (tmp_path / ".liveai" / "mcp.json").resolve()
+
+
+def test_load_config_mcp_servers_file_override(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('[mcp]\nservers_file_cwd = "servers.json"\n')
+    ns = load_config(cfg)
+    assert ns.mcp.servers_file_cwd == (tmp_path / ".liveai" / "servers.json").resolve()
+
+
 def test_ensure_data_dirs_creates_folders(tmp_path, monkeypatch):
     from src.common import ensure_data_dirs
     monkeypatch.chdir(tmp_path)

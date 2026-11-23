@@ -55,7 +55,7 @@ from src.common import dump_func_call
 
 __all__ = [
     "Manager", "McpError", "configure", "configured_servers", "get_manager",
-    "mcp_call_tool", "mcp_list_tools", "mcp_tool_bindings",
+    "mcp_call_tool", "mcp_list_tools", "mcp_tool_bindings", "servers_file",
 ]
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,12 @@ _SERVERS: dict[str, dict] = {}
 _CONNECT_TIMEOUT_S: float = _DEFAULT_CONNECT_TIMEOUT_S
 _CALL_TIMEOUT_S: float = _DEFAULT_CALL_TIMEOUT_S
 _MANAGER: "Manager | None" = None
+
+# ``[mcp] servers_file_cwd``: JSON file holding the server definitions
+# (resolved under ``[cwd] data_dir_cwd`` by ``load_config``). ``None`` when the
+# key is absent, in which case ``_DEFAULT_SERVERS_FILE`` is used.
+_SERVERS_FILE: "os.PathLike[str] | str | None" = None
+_DEFAULT_SERVERS_FILE = "mcp.json"
 
 _NOT_CONFIGURED = "Error: MCP is not configured (no [mcp] servers)"
 
@@ -117,11 +123,10 @@ def _default_connector() -> Connector:
 
 
 def _spec_items(servers) -> list[tuple[str, dict]]:
-    """``(name, spec-dict)`` pairs of the ``[mcp.servers]`` table.
+    """``(name, spec-dict)`` pairs of a server mapping.
 
-    ``load_config`` turns TOML sub-tables into SimpleNamespaces, so both a
-    plain dict and a namespace container are accepted; specs are normalized
-    to plain dicts either way. Non-mapping entries are dropped.
+    Kept for plain-dict inputs (the JSON loader and tests); specs are
+    normalized to plain dicts and non-mapping entries are dropped.
     """
     if isinstance(servers, dict):
         items = list(servers.items())
@@ -134,6 +139,62 @@ def _spec_items(servers) -> list[tuple[str, dict]]:
         if isinstance(spec_dict, dict):
             normalized.append((str(name), dict(spec_dict)))
     return normalized
+
+
+def _normalize_spec(spec: dict) -> dict | None:
+    """Normalize one server spec dict, or ``None`` when it is unusable.
+
+    A usable spec needs ``command`` (stdio) or ``url`` (http); the auth
+    extras (``env`` / ``headers`` / ``token_env``) are resolved here, so
+    secrets referenced as ``${VAR}`` stay in the environment/``.env`` file.
+    """
+    if not isinstance(spec, dict):
+        return None
+    if not (spec.get("command") or spec.get("url")):
+        return None
+    normalized = dict(spec)
+    normalized["env"] = _resolve_placeholders(_string_map(spec.get("env"), "env"))
+    normalized["headers"] = _resolve_placeholders(
+        _string_map(spec.get("headers"), "headers"))
+    _resolve_token_env(normalized)
+    return normalized
+
+
+def _load_servers_file(path) -> dict[str, dict]:
+    """Load the MCP server definitions from a flat JSON file.
+
+    Expected shape (one entry per server, same keys as the old
+    ``[mcp.servers.<name>]`` tables)::
+
+        {
+          "filesystem": {"command": "npx", "args": ["-y", "..."]},
+          "deepwiki":   {"url": "https://mcp.deepwiki.com/mcp"}
+        }
+
+    A missing/unreadable file, invalid JSON, a non-object root or a non-object
+    entry is **ignored silently** (returns ``{}``): the module then stays a
+    no-op instead of failing the session. Entries without ``command``/``url``
+    are skipped with a warning.
+    """
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    servers: dict[str, dict] = {}
+    for name, spec in data.items():
+        normalized = _normalize_spec(spec)
+        if normalized is None:
+            logger.warning(
+                "[mcp] server %r skipped: needs a 'command' (stdio) "
+                "or 'url' (http) key", name)
+            continue
+        servers[str(name)] = normalized
+    return servers
 
 
 def _string_map(value, what: str) -> dict[str, str]:
@@ -220,14 +281,19 @@ def configure(config) -> None:
     happen lazily on first use). A missing/empty section clears the state,
     so the module stays a no-op.
     """
-    global _SERVERS, _CONNECT_TIMEOUT_S, _CALL_TIMEOUT_S, _MANAGER
+    global _SERVERS, _CONNECT_TIMEOUT_S, _CALL_TIMEOUT_S, _MANAGER, _SERVERS_FILE
     _SERVERS = {}
     _MANAGER = None  # a config change invalidates the manager singleton
     _CONNECT_TIMEOUT_S = _DEFAULT_CONNECT_TIMEOUT_S
     _CALL_TIMEOUT_S = _DEFAULT_CALL_TIMEOUT_S
     section = getattr(config, "mcp", None)
     if section is None:
+        _SERVERS_FILE = None
         return
+    # Server definitions live in the JSON file (``servers_file_cwd``, resolved
+    # under the data root by ``load_config``); the timeouts stay in the TOML
+    # section. Task 1 only records the path - the loader is wired in Task 2.
+    _SERVERS_FILE = getattr(section, "servers_file_cwd", None) or _DEFAULT_SERVERS_FILE
     parsed: dict[str, dict] = {}
     for name, spec in _spec_items(getattr(section, "servers", None)):
         if not (spec.get("command") or spec.get("url")):
@@ -256,6 +322,16 @@ def configure(config) -> None:
 def configured_servers() -> dict[str, dict]:
     """Configured server specs (``{name: {command|url, args?}}``), by copy."""
     return dict(_SERVERS)
+
+
+def servers_file():
+    """Path of the JSON file holding the server definitions.
+
+    The ``[mcp] servers_file_cwd`` value (resolved under ``[cwd]
+    data_dir_cwd`` by ``load_config``); ``None`` until :func:`configure` runs
+    with a config carrying the key.
+    """
+    return _SERVERS_FILE
 
 
 def get_manager() -> "Manager | None":

@@ -486,6 +486,11 @@ _DEFAULT_DATA_DIR_CWD = ".liveai"      # per-launch runtime data root
 _DEFAULT_TMP_DIR_CWD = "tmp"           # scratch folder under the data root
 _DEFAULT_BEHAVIOUR_DIR_CWD = "behaviour"  # markdown instruction folder
 
+# ``[mcp] servers_file_cwd``: the MCP server definitions live in a JSON file
+# under the data root (``<launch>/.liveai/mcp.json`` by default), so they can
+# be edited per launch directory without touching config.toml.
+_DEFAULT_MCP_SERVERS_FILE_CWD = "mcp.json"
+
 
 def ensure_data_dirs(config: SimpleNamespace) -> None:
     """Create the ``[cwd]`` folders (data root, tmp, behaviour) if missing.
@@ -574,6 +579,13 @@ def load_config(config_path: Path) -> SimpleNamespace:
     cwd_section.setdefault(_DATA_DIR_KEY, _DEFAULT_DATA_DIR_CWD)
     cwd_section.setdefault("tmp_dir_cwd", _DEFAULT_TMP_DIR_CWD)
     cwd_section.setdefault("behaviour_dir_cwd", _DEFAULT_BEHAVIOUR_DIR_CWD)
+
+    # ``[mcp] servers_file_cwd`` default: the MCP server definitions file is
+    # resolved under the data root (it is a ``_cwd`` key), so it always has a
+    # value even when the section (or the key) is absent.
+    mcp_section = data.setdefault("mcp", {})
+    if isinstance(mcp_section, dict):
+        mcp_section.setdefault("servers_file_cwd", _DEFAULT_MCP_SERVERS_FILE_CWD)
 
     # The data root: data_dir_cwd resolved against the launch directory. Every
     # other _cwd key is then resolved under it.
