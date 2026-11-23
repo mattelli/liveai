@@ -17,13 +17,15 @@ single dedicated event-loop thread owned by :class:`Manager`; the public API
 is synchronous and safe to call from any agent thread.
 
 ``[mcp]`` config section (injected by ``main.py`` via :func:`configure`): the
-section only carries the timeouts and the path of the JSON file holding the
-server definitions. That file is a ``_cwd`` key, so it resolves under
-``[cwd] data_dir_cwd`` (``<launch>/.liveai/mcp.json`` by default):
+section only carries the master switch and the timeouts, plus the path of the
+JSON file holding the server definitions. That file is a ``_cwd`` key, so it
+resolves under ``[cwd] data_dir_cwd`` (``<launch>/.liveai/mcp.json`` by
+default):
 
 .. code-block:: toml
 
     [mcp]
+    mcp_enabled       = true        # false -> MCP off (no servers, no tools)
     servers_file_cwd  = "mcp.json"  # under [cwd] data_dir_cwd
     connect_timeout_s = 10.0        # per-server connect + tools/list budget
     call_timeout_s    = 120.0       # per-tool-call budget
@@ -61,9 +63,9 @@ from typing import Any, Callable, Protocol
 from src.common import dump_func_call
 
 __all__ = [
-    "Manager", "McpError", "configure", "configured_servers", "get_manager",
-    "mcp_call_tool", "mcp_list_tools", "mcp_tool_bindings", "refresh_servers",
-    "servers_file",
+    "Manager", "McpError", "configure", "configured_servers", "enabled",
+    "get_manager", "mcp_call_tool", "mcp_list_tools", "mcp_tool_bindings",
+    "refresh_servers", "servers_file",
 ]
 
 logger = logging.getLogger(__name__)
@@ -84,7 +86,12 @@ _MANAGER: "Manager | None" = None
 _SERVERS_FILE: "os.PathLike[str] | str | None" = None
 _DEFAULT_SERVERS_FILE = "mcp.json"
 
+# ``[mcp] mcp_enabled``: master switch (default true). When false the whole
+# integration is off: no servers parsed, no manager, no injected tools.
+_ENABLED: bool = True
+
 _NOT_CONFIGURED = "Error: MCP is not configured (no [mcp] servers)"
+_NOT_ENABLED = "Error: MCP is disabled ([mcp] mcp_enabled = false)"
 
 
 class McpError(Exception):
@@ -262,22 +269,48 @@ def _timeout(section, attr: str, default: float) -> float:
     return value
 
 
+def _bool_setting(section, attr: str, default: bool) -> bool:
+    """Boolean ``section.attr`` (``default`` when unset/invalid).
+
+    Accepts a real TOML boolean as well as the usual string spellings
+    (``true``/``1``/``yes``/``on`` and their negatives), so a quoted value in
+    the config file behaves as expected.
+    """
+    raw = getattr(section, attr, default)
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return default
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    text = str(raw).strip().lower()
+    if text in ("true", "1", "yes", "on"):
+        return True
+    if text in ("false", "0", "no", "off", ""):
+        return False
+    logger.warning("[mcp] %s=%r is not a boolean; using %s", attr, raw, default)
+    return default
+
+
 def configure(config) -> None:
     """Inject the ``[mcp]`` section (called by ``main.py`` via
     ``src.tools.configure``).
 
     The server definitions are read from the JSON file named by
     ``[mcp] servers_file_cwd`` (resolved under ``[cwd] data_dir_cwd``); the
-    ``[mcp]`` section itself only carries the two timeouts. Only parses and
-    stores state: no server is contacted here (connections happen lazily on
-    first use). A missing/empty section, a missing file or a malformed file
-    clears the state, so the module stays a no-op.
+    ``[mcp]`` section itself only carries the master switch ``mcp_enabled``
+    (default true) and the two timeouts. Only parses and stores state: no
+    server is contacted here (connections happen lazily on first use). A
+    missing/empty section, ``mcp_enabled = false``, a missing file or a
+    malformed file clears the state, so the module stays a no-op.
     """
     global _SERVERS, _CONNECT_TIMEOUT_S, _CALL_TIMEOUT_S, _MANAGER, _SERVERS_FILE
+    global _ENABLED
     _SERVERS = {}
     _MANAGER = None  # a config change invalidates the manager singleton
     _CONNECT_TIMEOUT_S = _DEFAULT_CONNECT_TIMEOUT_S
     _CALL_TIMEOUT_S = _DEFAULT_CALL_TIMEOUT_S
+    _ENABLED = True
     section = getattr(config, "mcp", None)
     if section is None:
         _SERVERS_FILE = None
@@ -286,6 +319,11 @@ def configure(config) -> None:
     # under the data root by ``load_config``); the timeouts stay in the TOML
     # section. ``[mcp.servers.*]`` tables are no longer read.
     _SERVERS_FILE = getattr(section, "servers_file_cwd", None) or _DEFAULT_SERVERS_FILE
+    _ENABLED = _bool_setting(section, "mcp_enabled", True)
+    if not _ENABLED:
+        # Master switch off: no file read, no manager, no injected tools.
+        logger.info("[mcp] disabled ([mcp] mcp_enabled = false); MCP off")
+        return
     _SERVERS = _load_servers_file(_SERVERS_FILE)
     _CONNECT_TIMEOUT_S = _timeout(
         section, "connect_timeout_s", _DEFAULT_CONNECT_TIMEOUT_S)
@@ -295,6 +333,11 @@ def configure(config) -> None:
                     len(_SERVERS), _SERVERS_FILE, ", ".join(_SERVERS))
     else:
         logger.debug("[mcp] no usable server configured; MCP integration off")
+
+
+def enabled() -> bool:
+    """``[mcp] mcp_enabled`` (default ``True``): the integration master switch."""
+    return _ENABLED
 
 
 def configured_servers() -> dict[str, dict]:
@@ -319,10 +362,11 @@ def refresh_servers() -> dict[str, list[str]]:
     file), updates the module state and asks the manager to reload its server
     map, so a server added/removed/edited in ``mcp.json`` takes effect without
     restarting the session. Returns ``{server: [tool names]}`` of the servers
-    that connected; ``{}`` when no manager is configured.
+    that connected; ``{}`` when the integration is disabled or no manager is
+    configured.
     """
     global _SERVERS
-    if _SERVERS_FILE is None:
+    if not _ENABLED or _SERVERS_FILE is None:
         return {}
     _SERVERS = _load_servers_file(_SERVERS_FILE)
     manager = get_manager()
@@ -790,7 +834,7 @@ def mcp_list_tools(server: str = "") -> str:
     """
     manager = get_manager()
     if manager is None:
-        return _NOT_CONFIGURED
+        return _NOT_CONFIGURED if _ENABLED else _NOT_ENABLED
     try:
         manager.connect_all()  # cheap when already connected
     except Exception as exc:  # pragma: no cover - connect_all never raises
@@ -831,7 +875,7 @@ def mcp_call_tool(server: str, tool: str, arguments: dict) -> str:
     """
     manager = get_manager()
     if manager is None:
-        return _NOT_CONFIGURED
+        return _NOT_CONFIGURED if _ENABLED else _NOT_ENABLED
     if isinstance(arguments, str):
         try:
             arguments = json.loads(arguments or "{}")

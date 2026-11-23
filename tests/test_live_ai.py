@@ -1971,8 +1971,27 @@ def test_refresh_mcp_tools_without_manager(monkeypatch):
     assert "not configured" in message
 
 
+def test_agent_with_mcp_disabled_has_no_mcp_tools(monkeypatch):
+    """[mcp] mcp_enabled = false: bridge tools and injected tools are gone."""
+    import src.tools.mcp as mcp_mod
+
+    _fake_openai(monkeypatch)
+    monkeypatch.setenv("TEST_API_KEY", "k")
+    _mcp_manager(monkeypatch)  # a manager exists, but the switch is off
+    monkeypatch.setattr(mcp_mod, "enabled", lambda: False)
+    agent = live_ai_mod.Agent(_remote_config())
+
+    names = [tool.__name__ for tool in agent.tools]
+    assert "mcp_list_tools" not in names
+    assert "mcp_call_tool" not in names
+    assert "mcp_test_echo" not in names
+    assert agent._mcp_tool_names == []
+    # The MCP topic disappears from the grouping too.
+    topics = [topic for topic, _ in live_ai_mod.tool_topics(agent.tools)]
+    assert "mcp" not in topics
+
+
 def test_refresh_mcp_tools_picks_up_server_added_to_file(monkeypatch):
-    """A server added to mcp.json after startup is injected by /mcp refresh."""
     import src.tools.mcp as mcp_mod
 
     _fake_openai(monkeypatch)

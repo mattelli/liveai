@@ -763,6 +763,9 @@ class ConversationSession:
         import src.tools.mcp as mcp_tools
 
         arg = arg.strip().lower()
+        if not mcp_tools.enabled():
+            cprint("MCP is disabled ([mcp] mcp_enabled = false)", "yellow")
+            return
         if arg == "refresh":
             refresh = getattr(self.agent, "refresh_mcp_tools", None)
             if callable(refresh):

@@ -917,14 +917,22 @@ pip install mcp
 
 Servers are defined in a **JSON file** (`mcp.json` by default) stored under the
 run's data directory (`[cwd] data_dir_cwd`, i.e. `.liveai/mcp.json`); the
-`[mcp]` section of `config.toml` only points at it and holds the timeouts:
+`[mcp]` section of `config.toml` only points at it, holds the master switch and
+the timeouts:
 
 ```toml
 [mcp]
+mcp_enabled       = true        # false -> MCP off: no servers, no MCP tools at all
 servers_file_cwd  = "mcp.json"  # under [cwd] data_dir_cwd (.liveai/mcp.json)
 connect_timeout_s = 10.0        # per-server connect + tools/list budget
 call_timeout_s    = 120.0       # per-tool-call budget
 ```
+
+`mcp_enabled = false` switches the whole integration off: no server file is
+read, no server is contacted and **no MCP tool at all** is registered — the two
+bridge tools (`mcp_list_tools`, `mcp_call_tool`) are dropped too, so the `mcp`
+topic disappears from `/tools` and `--tools-list`, and `/mcp` reports the
+integration as disabled. The default is `true`.
 
 `mcp.json` is a flat object, one entry per server:
 

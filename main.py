@@ -208,6 +208,11 @@ def _print_tools_list(config) -> int:
     groups = getattr(getattr(config, "agent", None), "tool_groups", "all")
     enabled_names = {getattr(tool, "__name__", "")
                      for tool in _select_tools(all_tools, groups)}
+    # [mcp] mcp_enabled = false: the two bridge tools are not available at all,
+    # so mark them [off] in the listing (the agent drops them from its tools).
+    from src.tools import mcp as mcp_tools
+    if not mcp_tools.enabled():
+        enabled_names -= {"mcp_list_tools", "mcp_call_tool"}
 
     cprint("Available tools:", "cyan", bold=True)
     for topic, topic_tools in tool_topics(all_tools):

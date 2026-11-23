@@ -159,6 +159,7 @@ top_k = 5                  # default number of results returned by query_corpus
 # Servers live in the JSON file below (not here); see the README "MCP servers"
 # section for the file shape, auth keys and examples. /mcp inspects, /mcp refresh
 # re-reads the file. A missing or malformed file is ignored silently.
+mcp_enabled = true             # false -> MCP off: no servers, no MCP tools at all
 servers_file_cwd = "mcp.json"  # MCP server definitions (under [cwd] data_dir_cwd)
 connect_timeout_s = 15.0  # per-server connect + tools/list budget
 call_timeout_s    = 20.0  # per-tool-call budget

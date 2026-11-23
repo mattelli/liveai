@@ -896,6 +896,24 @@ def test_cmd_mcp_refresh_without_manager(monkeypatch, capsys):
     assert "not configured" in capsys.readouterr().out.lower()
 
 
+def test_cmd_mcp_reports_disabled(monkeypatch, capsys):
+    import src.tools.mcp as mcp_mod
+    monkeypatch.setattr(mcp_mod, "enabled", lambda: False)
+    it = iter(["/mcp", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert "disabled" in capsys.readouterr().out.lower()
+
+
+def test_cmd_mcp_refresh_reports_disabled(monkeypatch, capsys):
+    import src.tools.mcp as mcp_mod
+    monkeypatch.setattr(mcp_mod, "enabled", lambda: False)
+    agent = McpAgent()
+    it = iter(["/mcp refresh", "/quit"])
+    ConversationSession(agent, lambda: next(it)).run()
+    assert "disabled" in capsys.readouterr().out.lower()
+    assert agent.refresh_calls == 0  # never reaches the agent
+
+
 def test_cmd_mcp_without_manager_shows_not_configured(monkeypatch, capsys):
     import src.tools.mcp as mcp_mod
     monkeypatch.setattr(mcp_mod, "get_manager", lambda: None)

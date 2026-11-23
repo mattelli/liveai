@@ -2319,6 +2319,10 @@ class Agent(Brain):
         # simply dropping the tool for isolated agents is not enough — the
         # tool must also vanish when no [delegation.agents] are configured at all.
         self._trim_unavailable_tools()
+        # [mcp] mcp_enabled = false: drop the two bridge tools too, so the MCP
+        # topic disappears completely (no schema, no tokens) and the agent
+        # cannot reach the integration at all.
+        self._trim_disabled_mcp_tools()
         # [agent] tool_doc_chars: cap tool descriptions in the JSON schemas
         # (0/unset/invalid = full docstring, the historical behavior).
         try:
@@ -2333,10 +2337,11 @@ class Agent(Brain):
         self._tool_impls = {tool.__name__: tool for tool in self.tools}
         # MCP server tools (PLAN.md task 5): injected after the built-in tool
         # setup, for the main agent and isolated agents alike (the manager is
-        # process-wide; isolated memory/vision tools are unaffected).
+        # process-wide; isolated memory/vision tools are unaffected). Skipped
+        # entirely when [mcp] mcp_enabled = false.
         from src.tools import mcp as mcp_tools
-        extra_defs, extra_impls = mcp_tools.mcp_tool_bindings(
-            existing_names=set(self._tool_impls))
+        extra_defs, extra_impls = ({}, {}) if not mcp_tools.enabled() else (
+            mcp_tools.mcp_tool_bindings(existing_names=set(self._tool_impls)))
         self._mcp_tool_names: list[str] = []
         if extra_defs:
             self.tools.extend(extra_impls.values())
@@ -2370,6 +2375,25 @@ class Agent(Brain):
             "delegate_task not available (%s): tool removed",
             "isolated agent" if getattr(self, "isolated_tools", False)
             else "no [delegation.agents] entries")
+
+    def _trim_disabled_mcp_tools(self) -> None:
+        """Drop the MCP bridge tools when ``[mcp] mcp_enabled = false``.
+
+        The two bridge tools (``mcp_list_tools`` / ``mcp_call_tool``) are part
+        of the default tool set, so they must be removed explicitly when the
+        integration is switched off; the MCP topic then disappears from
+        ``/tools`` and ``--tools-list`` and costs no tokens.
+        """
+        from src.tools import mcp as mcp_tools
+        if mcp_tools.enabled():
+            return
+        names = {"mcp_list_tools", "mcp_call_tool"}
+        before = len(self.tools)
+        self.tools = [t for t in self.tools
+                      if getattr(t, "__name__", "") not in names]
+        if len(self.tools) != before:
+            self.logger.info(
+                "MCP disabled ([mcp] mcp_enabled = false): bridge tools removed")
 
     def _managed_agents_section(self) -> str:
         """System-prompt block describing the configured sub-agents.

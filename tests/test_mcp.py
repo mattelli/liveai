@@ -1136,3 +1136,44 @@ def test_refresh_servers_ignores_malformed_file(reset_singleton, monkeypatch, tm
     _write_servers_file(tmp_path, "{not json")
     assert mcp_mod.refresh_servers() == {}  # silently no servers
     assert configured_servers() == {}
+
+
+# ------------------------------------------- [mcp] mcp_enabled master switch
+
+
+def test_enabled_defaults_to_true():
+    configure(SimpleNamespace(mcp=SimpleNamespace()))
+    assert mcp_mod.enabled() is True
+    configure(SimpleNamespace())  # no section at all
+    assert mcp_mod.enabled() is True
+
+
+def test_mcp_enabled_false_disables_everything(tmp_path):
+    path = _write_servers_file(tmp_path, {"srv": {"url": "https://mcp.example/mcp"}})
+    configure(_mcp_config(servers_file_cwd=path, mcp_enabled=False))
+    assert mcp_mod.enabled() is False
+    assert configured_servers() == {}          # file not read
+    assert mcp_mod.get_manager() is None       # no manager
+    assert mcp_mod.refresh_servers() == {}     # refresh is a no-op
+
+
+def test_mcp_enabled_accepts_string_spellings(tmp_path):
+    path = _write_servers_file(tmp_path, {"srv": {"url": "u"}})
+    for raw, expected in (("false", False), ("0", False), ("no", False),
+                          ("off", False), ("true", True), ("1", True),
+                          ("yes", True), ("on", True)):
+        configure(_mcp_config(servers_file_cwd=path, mcp_enabled=raw))
+        assert mcp_mod.enabled() is expected, raw
+
+
+def test_mcp_enabled_invalid_value_falls_back_to_default(tmp_path):
+    path = _write_servers_file(tmp_path, {"srv": {"url": "u"}})
+    configure(_mcp_config(servers_file_cwd=path, mcp_enabled="maybe"))
+    assert mcp_mod.enabled() is True
+
+
+def test_bridge_tools_report_disabled_when_off(tmp_path):
+    configure(_mcp_config(servers_file_cwd=tmp_path / "absent.json",
+                          mcp_enabled=False))
+    assert mcp_mod.mcp_list_tools() == mcp_mod._NOT_ENABLED
+    assert mcp_mod.mcp_call_tool("srv", "tool", {}) == mcp_mod._NOT_ENABLED

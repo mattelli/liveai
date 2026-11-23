@@ -48,8 +48,21 @@ def test_print_tools_list_shows_all_tools_and_off_markers(capsys):
     assert match and int(match.group(2)) > int(match.group(1)) > 0
 
 
+def test_print_tools_list_marks_mcp_tools_off_when_disabled(capsys, monkeypatch):
+    """[mcp] mcp_enabled = false: the two bridge tools are listed as [off]."""
+    import re
+    from types import SimpleNamespace
+
+    import src.tools.mcp as mcp_mod
+    monkeypatch.setattr(mcp_mod, "enabled", lambda: False)
+    config = SimpleNamespace(agent=SimpleNamespace(tool_groups="all"))
+    assert main_mod._print_tools_list(config) == 0
+    out = re.sub(r"\x1b\[[0-9;]*m", "", capsys.readouterr().out)
+    assert "  mcp_list_tools [off]" in out
+    assert "  mcp_call_tool [off]" in out
+
+
 def test_print_tools_list_all_groups_enabled(capsys):
-    """tool_groups = 'all': every tool is enabled, no [off] tool markers."""
     import re
     from types import SimpleNamespace
 
