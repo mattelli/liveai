@@ -122,25 +122,6 @@ def _default_connector() -> Connector:
     return McpSdkConnector()
 
 
-def _spec_items(servers) -> list[tuple[str, dict]]:
-    """``(name, spec-dict)`` pairs of a server mapping.
-
-    Kept for plain-dict inputs (the JSON loader and tests); specs are
-    normalized to plain dicts and non-mapping entries are dropped.
-    """
-    if isinstance(servers, dict):
-        items = list(servers.items())
-    else:
-        data = getattr(servers, "__dict__", None)
-        items = list(data.items()) if isinstance(data, dict) else []
-    normalized: list[tuple[str, dict]] = []
-    for name, spec in items:
-        spec_dict = spec if isinstance(spec, dict) else getattr(spec, "__dict__", None)
-        if isinstance(spec_dict, dict):
-            normalized.append((str(name), dict(spec_dict)))
-    return normalized
-
-
 def _normalize_spec(spec: dict) -> dict | None:
     """Normalize one server spec dict, or ``None`` when it is unusable.
 
@@ -277,9 +258,12 @@ def configure(config) -> None:
     """Inject the ``[mcp]`` section (called by ``main.py`` via
     ``src.tools.configure``).
 
-    Only parses and stores state: no server is contacted here (connections
-    happen lazily on first use). A missing/empty section clears the state,
-    so the module stays a no-op.
+    The server definitions are read from the JSON file named by
+    ``[mcp] servers_file_cwd`` (resolved under ``[cwd] data_dir_cwd``); the
+    ``[mcp]`` section itself only carries the two timeouts. Only parses and
+    stores state: no server is contacted here (connections happen lazily on
+    first use). A missing/empty section, a missing file or a malformed file
+    clears the state, so the module stays a no-op.
     """
     global _SERVERS, _CONNECT_TIMEOUT_S, _CALL_TIMEOUT_S, _MANAGER, _SERVERS_FILE
     _SERVERS = {}
@@ -292,29 +276,15 @@ def configure(config) -> None:
         return
     # Server definitions live in the JSON file (``servers_file_cwd``, resolved
     # under the data root by ``load_config``); the timeouts stay in the TOML
-    # section. Task 1 only records the path - the loader is wired in Task 2.
+    # section. ``[mcp.servers.*]`` tables are no longer read.
     _SERVERS_FILE = getattr(section, "servers_file_cwd", None) or _DEFAULT_SERVERS_FILE
-    parsed: dict[str, dict] = {}
-    for name, spec in _spec_items(getattr(section, "servers", None)):
-        if not (spec.get("command") or spec.get("url")):
-            logger.warning(
-                "[mcp] server %r skipped: needs a 'command' (stdio) "
-                "or 'url' (http) key", name)
-            continue
-        # Auth extras (kept out of config.toml: secrets come from the env or
-        # the project .env file, resolved at configure time).
-        spec["env"] = _resolve_placeholders(_string_map(spec.get("env"), "env"))
-        spec["headers"] = _resolve_placeholders(
-            _string_map(spec.get("headers"), "headers"))
-        _resolve_token_env(spec)
-        parsed[name] = spec
-    _SERVERS = parsed
+    _SERVERS = _load_servers_file(_SERVERS_FILE)
     _CONNECT_TIMEOUT_S = _timeout(
         section, "connect_timeout_s", _DEFAULT_CONNECT_TIMEOUT_S)
     _CALL_TIMEOUT_S = _timeout(section, "call_timeout_s", _DEFAULT_CALL_TIMEOUT_S)
-    if parsed:
-        logger.info("[mcp] %d server(s) configured: %s",
-                    len(parsed), ", ".join(parsed))
+    if _SERVERS:
+        logger.info("[mcp] %d server(s) configured from %s: %s",
+                    len(_SERVERS), _SERVERS_FILE, ", ".join(_SERVERS))
     else:
         logger.debug("[mcp] no usable server configured; MCP integration off")
 

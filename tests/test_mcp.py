@@ -11,21 +11,24 @@ import src.tools.mcp as mcp_mod
 from src.tools.mcp import McpError, Manager, configure, configured_servers
 
 
-def _mcp_config(**overrides):
-    """A config object carrying a ``[mcp]`` section (as ``load_config`` builds it)."""
+def _mcp_config(servers=None, **overrides):
+    """A config object carrying a ``[mcp]`` section (as ``load_config`` builds it).
+
+    ``servers`` is the flat ``{name: spec}`` map written to the JSON file
+    named by ``servers_file_cwd`` (``tmp_path``-based, see ``_servers_config``).
+    """
     defaults = dict(
         connect_timeout_s=10.0,
         call_timeout_s=120.0,
-        servers=SimpleNamespace(
-            filesystem=SimpleNamespace(
-                command="npx",
-                args=["-y", "@modelcontextprotocol/server-filesystem", "C:/data"],
-            ),
-            deepwiki=SimpleNamespace(url="https://mcp.deepwiki.com/mcp"),
-        ),
     )
     defaults.update(overrides)
     return SimpleNamespace(mcp=SimpleNamespace(**defaults))
+
+
+def _servers_config(tmp_path, servers, **overrides):
+    """Config whose ``[mcp] servers_file_cwd`` points at a fresh JSON file."""
+    path = _write_servers_file(tmp_path, servers)
+    return _mcp_config(servers_file_cwd=path, **overrides)
 
 
 def _reset_state():
@@ -50,13 +53,28 @@ def test_configure_without_section_is_noop():
     assert mcp_mod._CALL_TIMEOUT_S == 120.0
 
 
-def test_configure_empty_servers_is_noop():
+def test_configure_empty_section_is_noop():
     configure(SimpleNamespace(mcp=SimpleNamespace()))
     assert configured_servers() == {}
 
 
-def test_configure_parses_stdio_and_url_specs():
-    configure(_mcp_config())
+def test_configure_missing_servers_file_is_noop(tmp_path):
+    configure(_mcp_config(servers_file_cwd=tmp_path / "absent.json"))
+    assert configured_servers() == {}
+
+
+def test_configure_malformed_servers_file_is_noop(tmp_path):
+    path = _write_servers_file(tmp_path, "{not json")
+    configure(_mcp_config(servers_file_cwd=path))
+    assert configured_servers() == {}
+
+
+def test_configure_parses_stdio_and_url_specs(tmp_path):
+    configure(_servers_config(tmp_path, {
+        "filesystem": {"command": "npx",
+                       "args": ["-y", "@modelcontextprotocol/server-filesystem", "C:/data"]},
+        "deepwiki": {"url": "https://mcp.deepwiki.com/mcp"},
+    }))
     servers = configured_servers()
     assert set(servers) == {"filesystem", "deepwiki"}
     # Specs are stored verbatim (normalized to plain dicts).
@@ -66,24 +84,33 @@ def test_configure_parses_stdio_and_url_specs():
     assert servers["deepwiki"]["url"] == "https://mcp.deepwiki.com/mcp"
 
 
-def test_configure_skips_invalid_server_spec():
-    configure(_mcp_config(servers=SimpleNamespace(
-        broken=SimpleNamespace(description="neither command nor url"),
-        good=SimpleNamespace(url="https://mcp.example/mcp"),
-    )))
+def test_configure_skips_invalid_server_spec(tmp_path):
+    configure(_servers_config(tmp_path, {
+        "broken": {"description": "neither command nor url"},
+        "good": {"url": "https://mcp.example/mcp"},
+    }))
     assert configured_servers() == {
         "good": {"url": "https://mcp.example/mcp", "env": {}, "headers": {}}}
 
 
-def test_configure_timeout_defaults_and_overrides():
-    configure(SimpleNamespace(mcp=SimpleNamespace(
-        servers=SimpleNamespace(s=SimpleNamespace(url="u")))))
+def test_configure_ignores_toml_servers_table(tmp_path):
+    """[mcp.servers.*] in config.toml is no longer supported."""
+    path = _write_servers_file(tmp_path, {
+        "from_json": {"url": "https://mcp.example/mcp"}})
+    config = _mcp_config(servers_file_cwd=path)
+    config.mcp.servers = SimpleNamespace(
+        from_toml=SimpleNamespace(url="https://toml.example/mcp"))
+    configure(config)
+    assert set(configured_servers()) == {"from_json"}
+
+
+def test_configure_timeout_defaults_and_overrides(tmp_path):
+    configure(_servers_config(tmp_path, {"s": {"url": "u"}}))
     assert mcp_mod._CONNECT_TIMEOUT_S == 10.0
     assert mcp_mod._CALL_TIMEOUT_S == 120.0
 
-    configure(SimpleNamespace(mcp=SimpleNamespace(
-        connect_timeout_s=2.5, call_timeout_s=30,
-        servers=SimpleNamespace(s=SimpleNamespace(url="u")))))
+    configure(_servers_config(tmp_path, {"s": {"url": "u"}},
+                              connect_timeout_s=2.5, call_timeout_s=30))
     assert mcp_mod._CONNECT_TIMEOUT_S == 2.5
     assert mcp_mod._CALL_TIMEOUT_S == 30.0
 
@@ -349,10 +376,13 @@ def test_get_manager_none_without_servers(reset_singleton):
     assert mcp_mod.get_manager() is None
 
 
-def test_get_manager_builds_singleton_with_servers(reset_singleton, monkeypatch):
+def test_get_manager_builds_singleton_with_servers(reset_singleton, monkeypatch, tmp_path):
     connector = FakeConnector()
     monkeypatch.setattr(mcp_mod, "_CONNECTOR_FACTORY", lambda: connector)
-    configure(_mcp_config())
+    configure(_servers_config(tmp_path, {
+        "filesystem": {"command": "npx", "args": ["-y", "srv"]},
+        "deepwiki": {"url": "https://mcp.deepwiki.com/mcp"},
+    }))
     manager = mcp_mod.get_manager()
     assert manager is mcp_mod.get_manager()  # same singleton on repeat calls
     assert isinstance(manager, Manager)
@@ -361,10 +391,10 @@ def test_get_manager_builds_singleton_with_servers(reset_singleton, monkeypatch)
     mcp_mod._MANAGER = None
 
 
-def test_configure_resets_manager_singleton(reset_singleton, monkeypatch):
+def test_configure_resets_manager_singleton(reset_singleton, monkeypatch, tmp_path):
     connector = FakeConnector()
     monkeypatch.setattr(mcp_mod, "_CONNECTOR_FACTORY", lambda: connector)
-    configure(_mcp_config())
+    configure(_servers_config(tmp_path, {"s": {"url": "https://mcp.example/mcp"}}))
     manager = mcp_mod.get_manager()
     configure(SimpleNamespace())  # config change invalidates the singleton
     assert mcp_mod._MANAGER is None
@@ -794,83 +824,80 @@ def test_bindings_wrapper_maps_mcperror_to_error_string(monkeypatch):
 # ------------------------------------------------ auth: env/headers/token_env
 
 
-def test_configure_resolves_env_and_headers_maps(monkeypatch):
-    configure(_mcp_config(servers=SimpleNamespace(
-        stdio=SimpleNamespace(command="python", args=["-m", "srv"],
-                              env=SimpleNamespace(TOKEN="abc")),
-        http=SimpleNamespace(url="https://mcp.example/mcp",
-                             headers=SimpleNamespace(X_API_KEY="k")),
-    )))
+def test_configure_resolves_env_and_headers_maps(tmp_path):
+    configure(_servers_config(tmp_path, {
+        "stdio": {"command": "python", "args": ["-m", "srv"],
+                  "env": {"TOKEN": "abc"}},
+        "http": {"url": "https://mcp.example/mcp",
+                 "headers": {"X_API_KEY": "k"}},
+    }))
     servers = configured_servers()
     assert servers["stdio"]["env"] == {"TOKEN": "abc"}
     assert servers["http"]["headers"] == {"X_API_KEY": "k"}
 
 
-def test_configure_expands_env_placeholders(monkeypatch):
+def test_configure_expands_env_placeholders(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_SECRET_TOKEN", "s3cr3t")
-    configure(_mcp_config(servers=SimpleNamespace(
-        tg=SimpleNamespace(command="python", args=["-m", "tg"],
-                           env=SimpleNamespace(
-                               TELEGRAM_BOT_TOKEN="${MY_SECRET_TOKEN}")),
-    )))
+    configure(_servers_config(tmp_path, {
+        "tg": {"command": "python", "args": ["-m", "tg"],
+               "env": {"TELEGRAM_BOT_TOKEN": "${MY_SECRET_TOKEN}"}},
+    }))
     assert configured_servers()["tg"]["env"]["TELEGRAM_BOT_TOKEN"] == "s3cr3t"
 
 
-def test_configure_unresolvable_placeholder_expands_empty(monkeypatch):
+def test_configure_unresolvable_placeholder_expands_empty(tmp_path, monkeypatch):
     monkeypatch.delenv("MISSING_VAR_XYZ", raising=False)
-    configure(_mcp_config(servers=SimpleNamespace(
-        tg=SimpleNamespace(command="python", args=["-m", "tg"],
-                           env=SimpleNamespace(TOKEN="${MISSING_VAR_XYZ}")),
-    )))
+    configure(_servers_config(tmp_path, {
+        "tg": {"command": "python", "args": ["-m", "tg"],
+               "env": {"TOKEN": "${MISSING_VAR_XYZ}"}},
+    }))
     assert configured_servers()["tg"]["env"]["TOKEN"] == ""
 
 
-def test_configure_token_env_bearer_header_for_http(monkeypatch):
+def test_configure_token_env_bearer_header_for_http(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_API_TOKEN", "tok-123")
-    configure(_mcp_config(servers=SimpleNamespace(
-        remote=SimpleNamespace(url="https://mcp.example/mcp",
-                               token_env="MY_API_TOKEN"),
-    )))
+    configure(_servers_config(tmp_path, {
+        "remote": {"url": "https://mcp.example/mcp",
+                   "token_env": "MY_API_TOKEN"},
+    }))
     spec = configured_servers()["remote"]
     assert spec["headers"]["Authorization"] == "Bearer tok-123"
 
 
-def test_configure_token_env_variable_for_stdio(monkeypatch):
+def test_configure_token_env_variable_for_stdio(tmp_path, monkeypatch):
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "123:abc")
-    configure(_mcp_config(servers=SimpleNamespace(
-        tg=SimpleNamespace(command="python", args=["-m", "tg"],
-                           token_env="TELEGRAM_BOT_TOKEN"),
-    )))
+    configure(_servers_config(tmp_path, {
+        "tg": {"command": "python", "args": ["-m", "tg"],
+               "token_env": "TELEGRAM_BOT_TOKEN"},
+    }))
     spec = configured_servers()["tg"]
     assert spec["env"] == {"TELEGRAM_BOT_TOKEN": "123:abc"}
 
 
-def test_configure_explicit_headers_win_over_token_env(monkeypatch):
+def test_configure_explicit_headers_win_over_token_env(tmp_path, monkeypatch):
     monkeypatch.setenv("MY_API_TOKEN", "tok-123")
-    configure(_mcp_config(servers=SimpleNamespace(
-        remote=SimpleNamespace(url="https://mcp.example/mcp",
-                               token_env="MY_API_TOKEN",
-                               headers=SimpleNamespace(
-                                   Authorization="Bearer explicit")),
-    )))
+    configure(_servers_config(tmp_path, {
+        "remote": {"url": "https://mcp.example/mcp",
+                   "token_env": "MY_API_TOKEN",
+                   "headers": {"Authorization": "Bearer explicit"}},
+    }))
     assert configured_servers()["remote"]["headers"][
         "Authorization"] == "Bearer explicit"
 
 
-def test_configure_token_env_missing_variable_is_empty(monkeypatch):
+def test_configure_token_env_missing_variable_is_empty(tmp_path, monkeypatch):
     monkeypatch.delenv("MISSING_TOKEN_XYZ", raising=False)
-    configure(_mcp_config(servers=SimpleNamespace(
-        tg=SimpleNamespace(command="python", args=["-m", "tg"],
-                           token_env="MISSING_TOKEN_XYZ"),
-    )))
+    configure(_servers_config(tmp_path, {
+        "tg": {"command": "python", "args": ["-m", "tg"],
+               "token_env": "MISSING_TOKEN_XYZ"},
+    }))
     assert configured_servers()["tg"]["env"]["MISSING_TOKEN_XYZ"] == ""
 
 
-def test_configure_drops_non_scalar_env_entries():
-    configure(_mcp_config(servers=SimpleNamespace(
-        bad=SimpleNamespace(command="python", args=[],
-                            env=SimpleNamespace(NESTED=SimpleNamespace(a=1))),
-    )))
+def test_configure_drops_non_scalar_env_entries(tmp_path):
+    configure(_servers_config(tmp_path, {
+        "bad": {"command": "python", "args": [], "env": {"NESTED": {"a": 1}}},
+    }))
     assert configured_servers()["bad"]["env"] == {}
 
 
