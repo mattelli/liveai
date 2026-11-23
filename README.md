@@ -7,6 +7,34 @@ Mic → Whisper (STT) → LLM (OpenAI-compatible API) → Piper (TTS)
 Chat mode is supported, several native tools are available.
 
 
+## Table of Content
+
+- [Runtime data root (`.liveai`)](#runtime-data-root-liveai)
+- [Whisper](#whisper)
+- [LLM backend (OpenAI-compatible API)](#llm-backend-openai-compatible-api)
+- [Piper](#piper)
+- [Image generation (Stable Diffusion)](#image-generation-stable-diffusion)
+- [Text summarization](#text-summarization)
+- [Semantic search (named corpora + FAISS)](#semantic-search-named-corpora--faiss)
+- [In-document search (CrossEncoder)](#in-document-search-crossencoder)
+- [Image search (CLIP)](#image-search-clip)
+- [Web search and page extraction (DDGS)](#web-search-and-page-extraction-ddgs)
+- [Interactive chat input](#interactive-chat-input)
+- [Session files (`/session`)](#session-files-session)
+- [Model switching (`/model`)](#model-switching-model)
+- [Task delegation (`[delegation.agents]`)](#task-delegation-delegationagents)
+- [Reducing token consumption](#reducing-token-consumption)
+- [Sub-agent activity monitoring](#sub-agent-activity-monitoring)
+- [MCP servers (optional)](#mcp-servers-optional)
+- [Process spawning (`spawn_process`)](#process-spawning-spawn_process)
+- [Task scheduler (optional)](#task-scheduler-optional)
+- [Completion notifications (`[delegation.notify]`)](#completion-notifications-delegationnotify)
+- [Setup (Python 3.12.10)](#setup-python-31210)
+- [Unit tests](#unit-tests)
+- [System Notes](#system-notes)
+- [License](#license)
+
+
 ## Runtime data root (`.liveai`)
 
 Every run keeps its own runtime state in a **`.liveai/` folder created in the
