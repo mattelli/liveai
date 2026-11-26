@@ -3,8 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
-pytest.importorskip("piper", reason="audio_generator requires piper to import")
-pytest.importorskip("sounddevice", reason="audio_generator requires sounddevice to import")
+from tests.conftest import require_import
+
+require_import("piper", "sounddevice")
 
 import src.audio_generator as ag  # noqa: E402
 from tests.conftest import (  # noqa: E402

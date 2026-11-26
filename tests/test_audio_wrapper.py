@@ -5,9 +5,16 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-# audio_wrapper imports sounddevice/faster_whisper at module top; these may be absent.
-pytest.importorskip("sounddevice", reason="audio_wrapper requires sounddevice to import")
-pytest.importorskip("faster_whisper", reason="audio_wrapper requires faster_whisper to import")
+from tests.conftest import (  # noqa: E402
+    FakeDevice,
+    FakeStream,
+    FakeWhisperModel,
+    require_import,
+)
+
+# audio_wrapper imports sounddevice/faster_whisper at module top; these may be
+# absent, or present but unusable (no audio server on a headless runner).
+require_import("sounddevice", "faster_whisper")
 
 import soundfile as sf  # noqa: E402
 import src.audio_wrapper as aw  # noqa: E402
@@ -19,11 +26,6 @@ from src.audio_wrapper import (  # noqa: E402
     format_level,
     get_audio_tone,
     rms,
-)
-from tests.conftest import (  # noqa: E402
-    FakeDevice,
-    FakeStream,
-    FakeWhisperModel,
 )
 
 

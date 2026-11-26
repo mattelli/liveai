@@ -9,6 +9,7 @@ import pytest
 
 import src.tools as tools
 from src.common import normalize_extensions, safe_filename
+from tests.conftest import require_import
 
 
 # ------------------------------------------------------------------ T0 lazy imports
@@ -3114,8 +3115,7 @@ def test_sigint_chain_restores_previous_handler_after_playback(speech_seam):
 
 def test_ctrl_c_during_playback_stops_audio_only(speech_seam, tmp_path, capsys):
     """End-to-end: real SpeechGenerator, Ctrl+C mid-playback drops the audio."""
-    pytest.importorskip("piper", reason="requires piper")
-    pytest.importorskip("sounddevice", reason="requires sounddevice")
+    require_import("piper", "sounddevice")
     import signal
 
     import src.audio_generator as ag

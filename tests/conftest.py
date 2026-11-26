@@ -1,7 +1,35 @@
+import importlib
+
 import pytest
 
 import numpy as np
 from types import SimpleNamespace
+
+
+# Prefix of the skip reason used by require_import(). The CI workflow
+# allowlists exactly this prefix, so a legitimate "no audio stack" skip does not
+# fail the "no skipped tests" guard (see .github/workflows/tests.yml).
+AUDIO_SKIP_REASON = "audio stack unavailable"
+
+
+def require_import(*names):
+    """Skip the current test/module when any of ``names`` cannot be imported.
+
+    A tolerant ``pytest.importorskip``. That helper only skips on
+    ``ModuleNotFoundError``, but ``sounddevice`` initializes PortAudio at import
+    time, so on a machine with no audio server (a headless CI runner) it raises
+    ``PortAudioError`` instead - which would surface as a collection error or a
+    test failure rather than a skip. Any import failure means the same thing
+    here: the capability is unavailable, so the test cannot run.
+    """
+    for name in names:
+        try:
+            importlib.import_module(name)
+        except Exception as exc:  # noqa: BLE001 - any import failure means skip
+            pytest.skip(
+                f"{AUDIO_SKIP_REASON}: cannot import {name!r}: {exc}",
+                allow_module_level=True,
+            )
 
 
 @pytest.fixture(autouse=True)

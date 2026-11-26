@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import src.session as session_mod
 from src.session import ConversationSession
-from tests.conftest import FakeAgent
+from tests.conftest import FakeAgent, require_import
 
 
 def make(values, use_tools=True):
@@ -643,8 +643,7 @@ def test_session_without_bootstrap_ok():
 
 def test_ctrl_c_during_speech_stops_audio_only(capsys, monkeypatch, tmp_path):
     """Ctrl+C while the agent speaks: audio stops, turn and session continue."""
-    pytest.importorskip("piper", reason="requires piper")
-    pytest.importorskip("sounddevice", reason="requires sounddevice")
+    require_import("piper", "sounddevice")
     import signal
 
     import src.audio_generator as audio_gen
