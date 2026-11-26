@@ -1,0 +1,73 @@
+name: Unit tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A new push to the same branch cancels the previous run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: pytest (Python 3.12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          # This repo has no requirements file: key the pip cache on the
+          # workflow itself, so editing the dependency list below invalidates it.
+          cache-dependency-path: .github/workflows/tests.yml
+
+      # sounddevice loads PortAudio at import time and soundfile loads
+      # libsndfile. The wheels bundle those libraries only on Windows/macOS, so
+      # on Linux they must come from the system: without them the audio test
+      # modules fail at *collection*, because importorskip only skips on
+      # ModuleNotFoundError and a missing shared library raises OSError instead.
+      - name: Install system audio libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libportaudio2 libsndfile1
+
+      # The suite is offline and CPU-only: every heavy optional dependency
+      # (torch, diffusers, faiss, sentence-transformers, cv2, ...) is imported
+      # lazily and stubbed in the tests, so it is deliberately not installed.
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest numpy scipy rich pandas pillow prompt_toolkit \
+            beautifulsoup4 httpx openai requests nltk matplotlib \
+            sounddevice soundfile piper-tts faster-whisper mcp python-dotenv
+          # faster-whisper uses PyAV APIs incompatible with av>=15 wheels
+          # (14.4+ ships source-only): same pin as setup-liveai-cpu.sh.
+          python -m pip install "av==14.2.0"
+
+      - name: Run unit tests
+        run: |
+          # pipefail: without it the pipeline's status is tee's (always 0), so
+          # a failing pytest run would be reported as success.
+          set -o pipefail
+          python -m pytest tests/ -q -rs | tee pytest.log
+
+      # A skipped test usually means a dependency is missing, so the suite
+      # would be green while silently testing less. Fail loudly instead.
+      - name: Fail on skipped tests
+        run: |
+          if grep -qE '^SKIPPED' pytest.log; then
+            echo "::error::Tests were skipped - see the SKIPPED lines above."
+            grep -E '^SKIPPED' pytest.log
+            exit 1
+          fi
+          echo "No tests were skipped."

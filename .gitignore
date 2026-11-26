@@ -5,6 +5,8 @@ __pycache__/
 *.so
 .Python
 .*/
+# ...but keep the GitHub Actions workflows tracked (.*/ would ignore them).
+!.github/
 
 # Runtime data root (per launch directory): memory.log, sessions/, tmp/,
 # behaviour/, agents.jsonl, input.log, schedule.json
