@@ -6,7 +6,18 @@ from pathlib import Path
 from logging import getLogger
 from piper import PiperVoice, SynthesisConfig
 
-__all__ = ["SpeechGenerator"]
+__all__ = ["AudioOutputError", "SpeechGenerator"]
+
+
+class AudioOutputError(RuntimeError):
+    """Raised when no usable audio output device is available.
+
+    Wraps the underlying PortAudio failure (e.g. MME error 6, "There is no
+    driver installed on your system") with an actionable message, so callers
+    can degrade gracefully instead of aborting the agent turn. It subclasses
+    ``RuntimeError`` so a caller can catch it without importing this heavy
+    module (piper + sounddevice).
+    """
 
 
 # --- Text segmentation patterns (see SpeechGenerator.segment_for_speech) -----
@@ -59,6 +70,7 @@ class SpeechGenerator:
         voice=None,
         stream=None,
         stream_factory=sd.RawOutputStream,
+        device=None,
     ):
         """
         Configure the speech generator.
@@ -71,6 +83,14 @@ class SpeechGenerator:
         sentence and a paragraph (scaled by ``speech_speed`` at playback).
         ``non_prose_content`` False (default) replaces code blocks and tables
         with ``omitted_placeholder`` instead of reading them aloud.
+
+        ``device`` selects the playback device: ``None`` (default) uses the
+        PortAudio default output device, an int is a device index, a string is
+        a name/substring query (see ``sounddevice.query_devices``). The device
+        and the requested format are validated up front, so a missing/dead
+        endpoint raises :class:`AudioOutputError` here instead of an opaque
+        PortAudio error on the first spoken reply. Validation is skipped when
+        an explicit ``stream`` is injected (the test seam).
         """
         model_path = Path(model_path)
         if not model_path.exists():
@@ -109,14 +129,50 @@ class SpeechGenerator:
             noise_w_scale=noise_w_scale,
             normalize_audio=normalize_audio,
         )
-        self.stream = stream if stream is not None else stream_factory(
-            samplerate=samplerate,
-            channels=channels,
-            dtype=datatype,
+        self.stream = stream if stream is not None else self._open_stream(
+            stream_factory, samplerate, channels, datatype, device,
         )
         # Stop request for the running playback (Ctrl+C during speech); an
         # Event is safely settable from a signal handler or any other thread.
         self._stop_event = threading.Event()
+
+    @staticmethod
+    def _open_stream(stream_factory, samplerate, channels, datatype, device):
+        """Validate the output device/format, then open the playback stream.
+
+        A missing or dead endpoint (e.g. MME error 6, "There is no driver
+        installed on your system") and an unsupported samplerate/channel count
+        are reported as :class:`AudioOutputError` with an actionable message,
+        instead of surfacing as an opaque ``PortAudioError`` on the first
+        spoken reply - which would abort the whole agent turn.
+        """
+        try:
+            # Fails fast for a bad index/name or an unsupported format, without
+            # opening a stream (and without touching the hardware).
+            sd.check_output_settings(
+                device=device, samplerate=samplerate, channels=channels,
+                dtype=datatype,
+            )
+        except Exception as exc:
+            raise AudioOutputError(
+                "No usable audio output device: "
+                f"{exc}. Check the Windows playback device / audio driver, "
+                "or set [speech_gen] device in config.toml "
+                "(see sounddevice.query_devices())."
+            ) from exc
+        try:
+            return stream_factory(
+                samplerate=samplerate,
+                channels=channels,
+                dtype=datatype,
+                device=device,
+            )
+        except Exception as exc:
+            raise AudioOutputError(
+                f"Could not open the audio output device: {exc}. Check the "
+                "Windows playback device / audio driver, or set "
+                "[speech_gen] device in config.toml."
+            ) from exc
 
     # Audio written per blocking write call (~50 ms): small enough that a stop
     # request is honored quickly - the SIGINT handler can only run between
@@ -171,7 +227,11 @@ class SpeechGenerator:
         return self.voice
 
     def close(self) -> None:
-        """Stop and close the output stream. Safe to call more than once."""
+        """Stop and close the output stream. Safe to call more than once.
+
+        A device that vanished mid-session (or was never usable) must not make
+        the shutdown path raise: stop/close failures are logged and swallowed.
+        """
         if self._closed:
             return
         self._closed = True
@@ -181,7 +241,10 @@ class SpeechGenerator:
                 self.stream.stop()
             except Exception:  # already stopped / no device
                 pass
-            self.stream.close()
+            try:
+                self.stream.close()
+            except Exception:  # device gone / already closed
+                self.logger.debug("Closing audio stream failed.", exc_info=True)
             self.stream = None
 
     def __enter__(self):
@@ -420,6 +483,10 @@ class SpeechGenerator:
         dropping still-buffered audio so the silence is immediate; the written
         count reflects only the played audio. A later speak() call plays
         normally again.
+
+        A playback failure (the output device disappeared, was taken over
+        exclusively, ...) is raised as :class:`AudioOutputError` so the caller
+        can degrade instead of aborting the agent turn.
         """
         segments = self.segment_for_speech(
             text,
@@ -435,8 +502,8 @@ class SpeechGenerator:
         self._stop_event.clear()  # a stale stop request must not skip playback
         self.logger.info("🔊 Streaming output audio ...")
         written = 0
-        self.stream.start()
         try:
+            self._start_stream()
             for segment, pause_after in segments:
                 if self._stop_event.is_set():
                     break
@@ -449,15 +516,43 @@ class SpeechGenerator:
                 silence = self._silence_bytes(self._pause_ms_for(pause_after))
                 if silence:
                     written += self._write_chunk(silence)
+        except sd.PortAudioError as exc:
+            # The device died / was grabbed exclusively mid-playback. Only
+            # PortAudio failures are relabelled: a synthesis error from piper
+            # propagates unchanged.
+            raise AudioOutputError(
+                f"Audio playback failed: {exc}. Check the Windows playback "
+                "device / audio driver, or set [speech_gen] device in "
+                "config.toml."
+            ) from exc
         finally:
             if self._stop_event.is_set():
                 self.logger.info("🔇 Speech playback stopped by request.")
                 self._abort_stream()
                 self._stop_event.clear()
             else:
-                self.stream.stop()
+                try:
+                    self.stream.stop()
+                except Exception:  # already stopped / device gone
+                    self.logger.debug("Stopping audio stream failed.", exc_info=True)
         self.logger.info("🔊 Finished streaming audio.")
         return written
+
+    def _start_stream(self) -> None:
+        """Start playback, reporting a dead endpoint as AudioOutputError.
+
+        The MME "no driver installed" failure (host error 6) surfaces here, at
+        ``Pa_StartStream``, not when the stream is opened - so it must be
+        wrapped too, or the first spoken reply would abort the agent turn.
+        """
+        try:
+            self.stream.start()
+        except Exception as exc:
+            raise AudioOutputError(
+                f"Could not start audio playback: {exc}. Check the Windows "
+                "playback device / audio driver, or set [speech_gen] device in "
+                "config.toml."
+            ) from exc
 
     def _abort_stream(self) -> None:
         """Stop the output stream immediately, dropping buffered audio."""

@@ -183,6 +183,39 @@ How the text is handled:
   `"link"` instead of being spelled out.
 - A spaced dash (`one - two`) is treated as a clause break, not read as "dash".
 
+### Output device
+
+By default the playback stream uses the PortAudio default output device. On
+Windows that endpoint can be missing or dead — the classic symptom is
+
+```
+Error starting stream: Unanticipated host error [PaErrorCode -9999]:
+'There is no driver installed on your system.' [MME error 6]
+```
+
+which happens when the default playback endpoint is an HDMI/DisplayPort output
+with no attached sink, a disconnected Bluetooth/USB headset, or the Windows
+Audio service is stopped. Set `[speech_gen] device` to pick another endpoint
+(an integer index or a name substring, as listed by
+`sounddevice.query_devices()`):
+
+```toml
+[speech_gen]
+device = "Speakers"   # unset = system default; e.g. 5 or "Realtek"
+```
+
+The device and the requested format are validated when speech is enabled, so an
+unusable endpoint is reported immediately as
+
+```
+Error: speech generation unavailable: No usable audio output device: ...
+```
+
+instead of failing on the first spoken reply. Speech is a best-effort side
+channel: if playback fails mid-session (the device was unplugged or grabbed
+exclusively), the failure is reported once and speech is disabled — the agent
+turn always completes.
+
 
 ## Interactive chat input
 

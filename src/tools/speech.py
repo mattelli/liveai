@@ -46,6 +46,7 @@ def _speech_kwargs(cfg) -> dict:
         samplerate=cfg.samplerate,
         volume=cfg.volume,
         speech_speed=cfg.speech_speed,
+        device=getattr(cfg, "device", None),
         speaker_id=getattr(cfg, "speaker_id", None),
         noise_scale=getattr(cfg, "noise_scale", 1.0),
         noise_w_scale=getattr(cfg, "noise_w_scale", 1.0),
@@ -72,9 +73,10 @@ def allow_speech(enable: bool) -> str:
 
             factory = _SPEECH_FACTORY or SpeechGenerator
             _speech_generator = factory(**_speech_kwargs(_config_cache))
-        except (ImportError, FileNotFoundError) as exc:
-            # Missing piper/sounddevice package or voice model file: degrade
-            # gracefully instead of crashing the agent turn.
+        except (ImportError, FileNotFoundError, RuntimeError) as exc:
+            # Missing piper/sounddevice package, missing voice model file or an
+            # unusable audio output device (AudioOutputError is a RuntimeError):
+            # degrade gracefully instead of crashing the agent turn.
             return f"Error: speech generation unavailable: {exc}"
         return "Speech Generator initialized"
     elif not enable and _speech_generator is not None:
@@ -105,13 +107,24 @@ def speak_if_enabled(text: str) -> None:
     buffered audio for immediate silence - and the previous SIGINT handler (the
     generation cancel) is re-installed, so a second Ctrl+C cancels the
     generation. The previous handler is restored when playback ends.
+
+    A playback failure (e.g. the output device disappeared, or there is no
+    usable audio driver) is reported once and disables speech, so a broken
+    audio stack never aborts the agent turn.
     """
-    global _speech_stopped
+    global _speech_stopped, _speech_generator
     if _speech_generator is None:
         return
     _speech_stopped = False
-    with _speech_sigint_guard():
-        _speech_generator.speak(text)
+    try:
+        with _speech_sigint_guard():
+            _speech_generator.speak(text)
+    except RuntimeError as exc:
+        # AudioOutputError (and any other playback failure): speech is a
+        # best-effort side channel, never a reason to fail the turn.
+        cprint(f"⚠️  Speech disabled: {exc}", "yellow")
+        allow_speech(False)
+        return
     if _speech_stopped:
         _speech_stopped = False  # consume: the message is printed once
         cprint("🔇 Speech stopped", "yellow")

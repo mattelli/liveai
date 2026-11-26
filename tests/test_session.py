@@ -164,6 +164,34 @@ def test_voice_usage(monkeypatch, capsys):
     assert "usage" in capsys.readouterr().out.lower()
 
 
+def test_voice_on_reports_unavailable_speech(monkeypatch, capsys):
+    """/voice on surfaces the error and stays off when TTS is unavailable."""
+    monkeypatch.setattr(
+        session_mod, "allow_speech",
+        lambda enable: "Error: speech generation unavailable: MME error 6",
+    )
+    it = iter(["/voice on", "/quit"])
+    session = ConversationSession(FakeAgent(), lambda: next(it))
+    session.run()
+    out = capsys.readouterr().out.lower()
+    assert "mme error 6" in out
+    assert "voice enabled" not in out
+    assert session._speech_enabled is False
+
+
+def test_voice_on_succeeds_when_speech_available(monkeypatch, capsys):
+    calls = []
+    monkeypatch.setattr(
+        session_mod, "allow_speech",
+        lambda enable: calls.append(enable) or "Speech Generator initialized",
+    )
+    it = iter(["/voice on", "/quit"])
+    ConversationSession(FakeAgent(), lambda: next(it)).run()
+    assert "voice enabled" in capsys.readouterr().out.lower()
+    # shutdown() releases the generator because voice was considered enabled.
+    assert calls == [True, False]
+
+
 # ------------------------------------------------------------------- T7 tools
 
 

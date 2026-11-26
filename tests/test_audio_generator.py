@@ -386,7 +386,7 @@ def test_end_to_end_speak_and_export(tmp_path):
 
 
 def test_module_exports_speech_generator():
-    assert ag.__all__ == ["SpeechGenerator"]
+    assert ag.__all__ == ["AudioOutputError", "SpeechGenerator"]
 
 
 # ---------------------------------------------------------------- G10 pauses
@@ -614,3 +614,126 @@ def test_stop_request_during_pause_aborts_playback(tmp_path):
     assert played[:2] == [b"\x01\x02", b"\x01\x02"]  # first segment played
     assert b"\x01\x02" not in played[2:]  # second segment never played
     assert gen.stream.aborted == 1 and gen.stream.stopped == 0
+
+
+# ------------------------------------------------- G11 output device handling
+
+
+class RecordingStreamFactory:
+    """stream_factory stand-in: records kwargs, returns a FakeOutputStream."""
+
+    def __init__(self, stream=None):
+        self.kw = None
+        self.stream = stream or FakeOutputStream()
+
+    def __call__(self, **kw):
+        self.kw = kw
+        return self.stream
+
+
+def test_device_is_forwarded_to_the_stream_factory(monkeypatch, tmp_path):
+    """[speech_gen] device reaches RawOutputStream as the ``device`` kwarg."""
+    monkeypatch.setattr(ag.sd, "check_output_settings", lambda **kw: None)
+    factory = RecordingStreamFactory()
+    gen = ag.SpeechGenerator(
+        model_path=make_model(tmp_path), device="Speakers",
+        stream_factory=factory,
+    )
+    assert factory.kw["device"] == "Speakers"
+    assert factory.kw["samplerate"] == 22050
+    assert factory.kw["channels"] == 1 and factory.kw["dtype"] == "int16"
+    assert gen.stream is factory.stream
+
+
+def test_device_defaults_to_none(monkeypatch, tmp_path):
+    monkeypatch.setattr(ag.sd, "check_output_settings", lambda **kw: None)
+    factory = RecordingStreamFactory()
+    ag.SpeechGenerator(model_path=make_model(tmp_path), stream_factory=factory)
+    assert factory.kw["device"] is None
+
+
+def test_unusable_output_device_raises_audio_output_error(monkeypatch, tmp_path):
+    """A dead endpoint (MME error 6) is reported as AudioOutputError, not a
+    raw PortAudioError, so the caller can degrade gracefully."""
+    def boom(**kw):
+        raise RuntimeError(
+            "Error starting stream: Unanticipated host error "
+            "[PaErrorCode -9999]: 'There is no driver installed on your "
+            "system.' [MME error 6]"
+        )
+
+    monkeypatch.setattr(ag.sd, "check_output_settings", boom)
+    with pytest.raises(ag.AudioOutputError) as excinfo:
+        ag.SpeechGenerator(
+            model_path=make_model(tmp_path), stream_factory=RecordingStreamFactory(),
+        )
+    assert "No usable audio output device" in str(excinfo.value)
+    assert "MME error 6" in str(excinfo.value)
+    # RuntimeError subclass: catchable without importing this heavy module.
+    assert isinstance(excinfo.value, RuntimeError)
+
+
+def test_stream_open_failure_raises_audio_output_error(monkeypatch, tmp_path):
+    """A failure while opening the stream is also wrapped."""
+    monkeypatch.setattr(ag.sd, "check_output_settings", lambda **kw: None)
+
+    def boom(**kw):
+        raise RuntimeError("Error opening RawOutputStream")
+
+    with pytest.raises(ag.AudioOutputError) as excinfo:
+        ag.SpeechGenerator(model_path=make_model(tmp_path), stream_factory=boom)
+    assert "Could not open the audio output device" in str(excinfo.value)
+
+
+def test_validation_is_skipped_for_an_injected_stream(tmp_path):
+    """The test seam (explicit ``stream=``) must not touch the hardware."""
+    gen = make_generator(tmp_path)  # no monkeypatch: real sd.check_output_settings
+    assert isinstance(gen.stream, FakeOutputStream)
+
+
+def test_speak_wraps_start_failure_as_audio_output_error(tmp_path):
+    """A device that dies at stream.start() surfaces as AudioOutputError."""
+    class FailingStartStream(FakeOutputStream):
+        def start(self):
+            raise RuntimeError("Unanticipated host error [MME error 6]")
+
+    gen = make_generator(tmp_path, stream=FailingStartStream())
+    with pytest.raises(ag.AudioOutputError) as excinfo:
+        gen.speak("hello", strip_formatting=False)
+    assert "Could not start audio playback" in str(excinfo.value)
+
+
+def test_speak_wraps_midplayback_portaudio_failure(tmp_path):
+    """A PortAudioError during playback is relabelled as AudioOutputError."""
+    class DyingStream(FakeOutputStream):
+        def write(self, data):
+            super().write(data)
+            raise ag.sd.PortAudioError("Unanticipated host error [MME error 6]")
+
+    gen = make_generator(tmp_path, stream=DyingStream())
+    with pytest.raises(ag.AudioOutputError) as excinfo:
+        gen.speak("hello", strip_formatting=False)
+    assert "Audio playback failed" in str(excinfo.value)
+
+
+def test_speak_does_not_relabel_synthesis_errors(tmp_path):
+    """A piper synthesis failure must not be reported as an audio failure."""
+    gen = make_generator(tmp_path, voice=FakePiperVoice(fail_after=1))
+    with pytest.raises(RuntimeError) as excinfo:
+        gen.speak("hello", strip_formatting=False)
+    assert not isinstance(excinfo.value, ag.AudioOutputError)
+
+
+def test_close_swallows_a_vanished_device(tmp_path):
+    """close() must not raise when the device is gone (shutdown path)."""
+    class GoneStream(FakeOutputStream):
+        def stop(self):
+            raise RuntimeError("device gone")
+
+        def close(self):
+            raise RuntimeError("device gone")
+
+    gen = make_generator(tmp_path, stream=GoneStream())
+    gen.close()  # must not raise
+    assert gen.stream is None
+
