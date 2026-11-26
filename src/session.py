@@ -325,8 +325,15 @@ class ConversationSession:
     def _cmd_voice(self, arg: str) -> None:
         arg = arg.strip().lower()
         if arg == "on":
+            # allow_speech returns an "Error: ..." string when the TTS stack is
+            # unavailable (missing piper/voice model, no usable output device):
+            # report it instead of claiming voice is enabled.
+            result = allow_speech(True)
+            if isinstance(result, str) and result.startswith("Error:"):
+                self._speech_enabled = False
+                cprint(result, "red")
+                return
             self._speech_enabled = True
-            allow_speech(True)
             cprint("Voice enabled", "green")
         elif arg == "off":
             self._speech_enabled = False

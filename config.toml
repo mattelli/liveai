@@ -103,6 +103,7 @@ model_path = ".res/voices/en_US-hfc_female-medium.onnx"
 samplerate = 22050
 volume = 1.0
 speech_speed = 1.0
+# device = "Speakers"    # playback endpoint: unset = system default; int index or name substring (see sounddevice.query_devices())
 # speaker_id = 0          # Optional synthesis knobs (single-speaker voices can leave speaker_id commented out)
 noise_scale = 1.0
 noise_w_scale = 1.0

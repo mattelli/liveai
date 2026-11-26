@@ -2896,6 +2896,77 @@ def test_speech_kwargs_pause_defaults_when_absent(speech_seam):
     assert seen["omitted_placeholder"] == "content omitted"
 
 
+def test_speech_kwargs_forwards_device(speech_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def close(self):
+            pass
+
+    speech_seam._SPEECH_FACTORY = Recorder
+    speech_seam.configure(SimpleNamespace(speech_gen=SimpleNamespace(
+        model_path="m", samplerate=22050, volume=0.5, speech_speed=1.0,
+        device="Speakers")))
+    speech_seam.allow_speech(True)
+    assert seen["device"] == "Speakers"
+
+
+def test_speech_kwargs_device_defaults_to_none(speech_seam):
+    seen = {}
+
+    class Recorder:
+        def __init__(self, **kw):
+            seen.update(kw)
+
+        def close(self):
+            pass
+
+    speech_seam._SPEECH_FACTORY = Recorder
+    speech_seam.configure(SimpleNamespace(speech_gen=SimpleNamespace(
+        model_path="m", samplerate=22050, volume=0.5, speech_speed=1.0)))
+    speech_seam.allow_speech(True)
+    assert seen["device"] is None
+
+
+def test_allow_speech_unusable_device_returns_error_string(speech_seam):
+    """No usable output device (AudioOutputError = RuntimeError): the enable
+    degrades to an 'Error: ...' string instead of raising."""
+
+    class ExplodingFactory:
+        def __init__(self, **kw):
+            raise RuntimeError("No usable audio output device: MME error 6")
+
+    speech_seam._SPEECH_FACTORY = ExplodingFactory
+    speech_seam.configure(SimpleNamespace(speech_gen=SimpleNamespace(
+        model_path="m", samplerate=22050, volume=0.5, speech_speed=1.0)))
+
+    result = speech_seam.allow_speech(True)
+    assert result.startswith("Error:")
+    assert "MME error 6" in result
+    assert speech_seam._speech_generator is None  # nothing half-initialized
+
+
+def test_speak_if_enabled_disables_speech_on_playback_failure(speech_seam, capsys):
+    """A playback failure must not abort the turn: warn once, disable speech."""
+    closed = []
+
+    class FailingGenerator:
+        def speak(self, text):
+            raise RuntimeError("Audio playback failed: MME error 6")
+
+        def close(self):
+            closed.append(True)
+
+    speech_seam._speech_generator = FailingGenerator()
+    speech_seam.speak_if_enabled("hello")  # must not raise
+    assert speech_seam._speech_generator is None  # speech disabled
+    assert closed == [True]  # generator released
+    assert "speech disabled" in capsys.readouterr().out.lower()
+
+
 def test_speak_if_enabled_only_speaks_when_enabled(speech_seam):
     spoken = []
 
