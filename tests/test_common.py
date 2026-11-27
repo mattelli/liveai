@@ -808,3 +808,51 @@ def test_terminate_all_falls_back_to_kill_without_pid(monkeypatch):
     common.register_process(FakeProcess())
     assert common.terminate_all() == 1
     assert calls == ["kill"]
+
+
+def test_terminate_all_kills_the_process_group_on_posix(monkeypatch):
+    """On POSIX the whole group is killed (killpg), not just the shell."""
+    import src.common as common
+
+    calls = []
+
+    class FakeProcess:
+        pid = 4321
+
+        def kill(self):
+            calls.append("kill")
+
+    monkeypatch.setattr(common.sys, "platform", "linux")
+    monkeypatch.setattr(common.os, "getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(
+        common.os, "killpg",
+        lambda pgid, sig: calls.append(("killpg", pgid, sig)), raising=False)
+    common.register_process(FakeProcess())
+    assert common.terminate_all() == 1
+    # SIGKILL is absent on Windows, where the test still runs the POSIX branch.
+    expected_sig = getattr(common.signal, "SIGKILL", common.signal.SIGTERM)
+    assert calls == [("killpg", 4321, expected_sig)]
+    assert "kill" not in calls  # the group kill replaces the plain kill
+
+
+def test_terminate_all_falls_back_to_kill_when_group_kill_fails(monkeypatch):
+    """If the group cannot be killed, the plain kill() is still attempted."""
+    import src.common as common
+
+    calls = []
+
+    class FakeProcess:
+        pid = 4321
+
+        def kill(self):
+            calls.append("kill")
+
+    def boom(pgid, sig):
+        raise ProcessLookupError("no such process group")
+
+    monkeypatch.setattr(common.sys, "platform", "linux")
+    monkeypatch.setattr(common.os, "getpgid", lambda pid: pid, raising=False)
+    monkeypatch.setattr(common.os, "killpg", boom, raising=False)
+    common.register_process(FakeProcess())
+    assert common.terminate_all() == 1
+    assert calls == ["kill"]

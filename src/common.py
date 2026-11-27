@@ -1,3 +1,5 @@
+import os
+import signal
 import threading
 import time
 import tomllib
@@ -125,7 +127,14 @@ def terminate_all() -> int:
 
 
 def _kill_process_tree(process) -> bool:
-    """Kill ``process`` and its children (best effort); True when killed."""
+    """Kill ``process`` and its children (best effort); True when killed.
+
+    ``run_command``/``spawn_process`` run through ``shell=True``/PowerShell, so
+    killing only the shell would leave the real command running and the tool
+    would block until its own timeout. On Windows the whole tree is killed with
+    ``taskkill /F /T``; on POSIX the process *group* is killed, which requires
+    the child to have been started in its own session (``start_new_session``).
+    """
     pid = getattr(process, "pid", None)
     if sys.platform == "win32" and pid:
         try:
@@ -135,6 +144,12 @@ def _kill_process_tree(process) -> bool:
             return True
         except Exception:
             pass  # fall through to the plain kill below
+    if pid and sys.platform != "win32":
+        try:
+            os.killpg(os.getpgid(pid), getattr(signal, "SIGKILL", signal.SIGTERM))
+            return True
+        except Exception:
+            pass  # no group (or already gone): fall back to the plain kill
     try:
         process.kill()
         return True

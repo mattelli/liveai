@@ -86,6 +86,9 @@ def run_command(cmd: str, timeout_s: float = 30.0, cwd: str | None = None) -> st
             encoding="utf-8",
             errors="replace",
             shell=True,
+            # Own session/process group so a cancel kills the real command,
+            # not just the shell (POSIX; ignored on Windows).
+            start_new_session=True,
         )
     except Exception as exc:
         return f"Error starting command: {exc}"
@@ -157,6 +160,9 @@ def _spawn_posix(cmd: str, workdir: Path, background: bool, timeout_s: float) ->
                 text=True,
                 encoding="utf-8",
                 errors="replace",
+                # Own session/process group so a cancel kills the real command,
+                # not just the shell.
+                start_new_session=True,
             )
         except Exception as exc:
             return f"Error starting command: {exc}"

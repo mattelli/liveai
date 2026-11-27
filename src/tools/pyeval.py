@@ -68,6 +68,9 @@ def python_eval(code: str, timeout_s: float = _DEFAULT_TIMEOUT_S) -> str:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                # Own session/process group so a cancel kills the snippet and
+                # anything it spawned, not just the direct child (POSIX).
+                start_new_session=True,
                 # A minimal environment: no inherited shell variables.
                 env={"SYSTEMROOT": __import__("os").environ.get(
                     "SYSTEMROOT", "")},
