@@ -1,0 +1,6 @@
+# CODEOWNERS — https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# Default owner for everything in the repository. The pattern "*" matches every
+# file, so all pull requests request a review from @mattelli unless a later,
+# more specific rule overrides it.
+*       @mattelli
